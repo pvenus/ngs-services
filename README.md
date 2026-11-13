@@ -1,6 +1,6 @@
-# ProjectBS Services
+# NGS Services
 
-Integrated local backend for NGS requests, execution and canonical data. Frontend: pvenus/ngs-platform. Functional generation workers: pvenus/forge-workers.
+Integrated local backend for NGS requests, execution and canonical data. Frontend: pvenus/ngs-platform. Functional generation workers: pvenus/ngs-workers.
 
 ## Services
 
@@ -19,8 +19,8 @@ Integrated local backend for NGS requests, execution and canonical data. Fronten
 Install Python 3.12. HTTP startup uses the standard library, not a model environment.
 
 ```sh
-git clone https://github.com/pvenus/projectbs-services.git
-cd projectbs-services
+git clone https://github.com/pvenus/ngs-services.git
+cd ngs-services
 python3.12 -B runtime/stack.py --storage-root "$HOME/NGS-data/backend"
 ```
 
