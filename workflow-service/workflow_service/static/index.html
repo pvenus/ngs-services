@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ProjectBS Workflow Console</title>
+  <link rel="stylesheet" href="/static/workflow.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><span class="eyebrow">PROJECTBS OPERATIONS</span><h1>Workflow Console</h1></div>
+    <div class="connection"><span id="liveDot" class="dot"></span><span id="connectionText">연결 중</span></div>
+  </header>
+  <main class="layout">
+    <aside class="runs-panel">
+      <div class="panel-head">
+        <div><h2>실행 목록</h2><p id="runCount">불러오는 중</p></div>
+        <button id="refreshButton" class="icon-button" title="새로고침">↻</button>
+      </div>
+      <div class="filters">
+        <button class="filter active" data-status="">전체</button>
+        <button class="filter" data-status="active">실행 중</button>
+        <button class="filter" data-status="completed">완료</button>
+        <button class="filter" data-status="failed">실패</button>
+      </div>
+      <div id="runList" class="run-list"></div>
+    </aside>
+
+    <section class="detail-panel">
+      <div id="emptyState" class="empty-state"><strong>워크플로를 선택하세요</strong><span>단계별 상태와 실행 메시지를 확인할 수 있습니다.</span></div>
+      <div id="workflowDetail" hidden>
+        <div class="detail-head">
+          <div><div id="workflowType" class="eyebrow"></div><h2 id="workflowGoal"></h2><code id="workflowId"></code></div>
+          <span id="workflowStatus" class="status-pill"></span>
+        </div>
+        <div class="summary-grid">
+          <div><span>진행률</span><strong id="progressValue">0%</strong></div>
+          <div><span>리비전</span><strong id="revisionValue">-</strong></div>
+          <div><span>시작</span><strong id="createdValue">-</strong></div>
+          <div><span>최근 변경</span><strong id="updatedValue">-</strong></div>
+        </div>
+        <div class="progress-track"><i id="progressBar"></i></div>
+        <section class="steps-section"><h3>작업 단계</h3><div id="stepList" class="step-list"></div></section>
+      </div>
+    </section>
+
+    <section class="console-panel">
+      <div class="console-head">
+        <div><h2>Status Console</h2><p id="consoleMeta">실행 기록</p></div>
+        <div class="console-actions">
+          <label class="live-toggle"><input id="liveToggle" type="checkbox" checked><span>LIVE</span></label>
+          <button id="copyConsole">복사</button>
+        </div>
+      </div>
+      <div id="console" class="console"><div class="console-placeholder">워크플로를 선택하면 전체 로그가 표시됩니다.</div></div>
+    </section>
+  </main>
+  <script src="/static/workflow.js"></script>
+</body>
+</html>

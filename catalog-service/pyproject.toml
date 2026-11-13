@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "project-catalog-service"
+version = "0.1.0"
+description = "Service registry, operational knowledge, and Codex artifact templates"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["catalog_service*"]

@@ -1,0 +1,2870 @@
+{
+  "$defs": {
+    "dynamicField": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/field"
+        },
+        {
+          "properties": {
+            "summary": {
+              "additionalProperties": false,
+              "properties": {
+                "keywords": {
+                  "items": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 12,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "schemaVersion": {
+                  "const": "npc-concept-summary.v1"
+                },
+                "sentence": {
+                  "maxLength": 600,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "keywords",
+                "sentence"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "summary"
+          ]
+        }
+      ]
+    },
+    "dynamicSection": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/section"
+        },
+        {
+          "properties": {
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/dynamicField"
+              },
+              "maxItems": 128,
+              "minItems": 1,
+              "type": "array"
+            },
+            "summary": {
+              "additionalProperties": false,
+              "properties": {
+                "keywords": {
+                  "items": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 12,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "schemaVersion": {
+                  "const": "npc-concept-summary.v1"
+                },
+                "sentence": {
+                  "maxLength": 600,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "keywords",
+                "sentence"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "summary"
+          ]
+        }
+      ]
+    },
+    "field": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "source"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sources": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "confirmed",
+                  "source",
+                  "proposal"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        "priority": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 20,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "status": {
+          "enum": [
+            "confirmed",
+            "source",
+            "proposal",
+            "open"
+          ]
+        },
+        "summary": {
+          "oneOf": [
+            {
+              "maxLength": 600,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "keywords": {
+                  "items": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 12,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "schemaVersion": {
+                  "const": "npc-concept-summary.v1"
+                },
+                "sentence": {
+                  "maxLength": 600,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "keywords",
+                "sentence"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "value": {
+          "maxLength": 12000,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "value",
+        "status",
+        "sources",
+        "priority"
+      ],
+      "type": "object"
+    },
+    "section": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "fields": {
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "priority": {
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "summary": {
+          "oneOf": [
+            {
+              "maxLength": 600,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "keywords": {
+                  "items": {
+                    "maxLength": 100,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 12,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
+                },
+                "schemaVersion": {
+                  "const": "npc-concept-summary.v1"
+                },
+                "sentence": {
+                  "maxLength": 600,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "keywords",
+                "sentence"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "fields",
+        "priority"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://npcgen.local/contracts/MasterConcept.v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "schemaVersion"
+        ]
+      },
+      "then": {
+        "properties": {
+          "hierarchy": {
+            "additionalProperties": false,
+            "properties": {
+              "archivedCategoryIds": {
+                "description": "Inactive category membership only; original sections and retained revisions remain intact.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "groups": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "categoryIds": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "description": {
+                      "maxLength": 1000,
+                      "type": "string"
+                    },
+                    "id": {
+                      "pattern": "^[A-Za-z0-9._:-]{1,180}$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "maxLength": 100,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "title",
+                    "categoryIds"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              },
+              "schemaVersion": {
+                "const": "npc-concept-groups.v1"
+              }
+            },
+            "required": [
+              "schemaVersion",
+              "groups"
+            ],
+            "type": "object"
+          },
+          "sections": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "priority": {
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "priority"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "priority": {
+                      "const": 2
+                    }
+                  },
+                  "required": [
+                    "priority"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "priority": {
+                      "const": 3
+                    }
+                  },
+                  "required": [
+                    "priority"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "priority": {
+                      "const": 4
+                    }
+                  },
+                  "required": [
+                    "priority"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "priority": {
+                      "const": 5
+                    }
+                  },
+                  "required": [
+                    "priority"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "priority": {
+                      "const": 6
+                    }
+                  },
+                  "required": [
+                    "priority"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "priority": {
+                      "const": 7
+                    }
+                  },
+                  "required": [
+                    "priority"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "priority": {
+                      "const": 8
+                    }
+                  },
+                  "required": [
+                    "priority"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "items": false,
+            "maxItems": 8,
+            "minItems": 8,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/section"
+                  },
+                  {
+                    "properties": {
+                      "fields": {
+                        "allOf": [
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 2
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 3
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          }
+                        ],
+                        "items": false,
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "prefixItems": [
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "playerRole",
+                                    "description": "플레이어 정체성, 권한, 장기 지속성, 선택이 다음 이야기로 이어지는 범위를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "coreLoop",
+                                    "description": "제작 흐름과 플레이 반복 행동, 선택 조건·결과, 다음 경로 결정 방식을 분리해 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "centralQuestion",
+                                    "description": "게임의 핵심 질문, 초반 믿음, 뒤집는 경험, 플레이어가 책임질 판단을 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      "id": {
+                        "const": "experience"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/section"
+                  },
+                  {
+                    "properties": {
+                      "fields": {
+                        "allOf": [
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 2
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 3
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 4
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          }
+                        ],
+                        "items": false,
+                        "maxItems": 4,
+                        "minItems": 4,
+                        "prefixItems": [
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "eraCulture",
+                                    "description": "시대 모티프와 가상화 범위, 주된 문화·표현 기준, 다른 영향의 허용 범위를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 4
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "society",
+                                    "description": "집단과 제도, 생업·의례, 현상에 대한 서로 다른 태도와 생활상에 미치는 영향을 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 4
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "supernatural",
+                                    "description": "현상과 존재의 원리, 관찰·믿음·진실의 구분, 발현·변화·예외의 경계를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 4
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "prohibitions",
+                                    "description": "모든 자산에 적용할 금지와 검토 기준, 허용된 예외와 사실 주장 경계를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 4
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      "id": {
+                        "const": "world"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/section"
+                  },
+                  {
+                    "properties": {
+                      "fields": {
+                        "allOf": [
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 2
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 3
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          }
+                        ],
+                        "items": false,
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "prefixItems": [
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "premise",
+                                    "description": "외적·내적 갈등, 주인공의 임무, 오해와 진실, 여러 Act를 관통할 변화를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "mandatoryEvents",
+                                    "description": "기존 사건을 보존하고 큰 사건별 표면·이면·선택의 대가·연쇄를 작성한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "endingConstraint",
+                                    "description": "모든 경로의 필수 수습, 가변 결말, 선택 조건·비용, 다음 이야기로 전달할 상태를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      "id": {
+                        "const": "story"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/section"
+                  },
+                  {
+                    "properties": {
+                      "fields": {
+                        "allOf": [
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 2
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 3
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          }
+                        ],
+                        "items": false,
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "prefixItems": [
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "actions",
+                                    "description": "플레이 행동, 진입 조건·관찰 정보·결과, 필수 사건과 플레이어 자유의 경계를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "npcRuntime",
+                                    "description": "페르소나·상태를 런타임 행동으로 바꾸는 입력·출력·대체·재현 규칙을 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "stateVocabulary",
+                                    "description": "사실·믿음·관계·몸·복장·능력·장소 상태의 공통 범주와 변경 이력을 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      "id": {
+                        "const": "gameplay"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/section"
+                  },
+                  {
+                    "properties": {
+                      "fields": {
+                        "allOf": [
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 2
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 3
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          }
+                        ],
+                        "items": false,
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "prefixItems": [
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "identity",
+                                    "description": "동일 인물 ID, 상태·제작 버전, 별도 인물 기준, 생성 자산의 참조 정보를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "persona",
+                                    "description": "지속되는 욕구·가치·금기·해석·말투와 공개 모습·비밀의 경계를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "mutable",
+                                    "description": "상태 범주와 변화 원인·시점·경로, 대사·이미지·스킬·행동으로의 전달 방식을 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      "id": {
+                        "const": "character"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/section"
+                  },
+                  {
+                    "properties": {
+                      "fields": {
+                        "allOf": [
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 2
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          }
+                        ],
+                        "items": false,
+                        "maxItems": 2,
+                        "minItems": 2,
+                        "prefixItems": [
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "places",
+                                    "description": "장소 ID·계층·접근·상태·소문과 실제 용도, 자산 참조 범위를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 2
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "timeline",
+                                    "description": "발생 시간과 공개 시간을 분리하고 장면·선택·상태의 경로별 유효 범위를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 2
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      "id": {
+                        "const": "timeSpace"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/section"
+                  },
+                  {
+                    "properties": {
+                      "fields": {
+                        "allOf": [
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 2
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 3
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          }
+                        ],
+                        "items": false,
+                        "maxItems": 3,
+                        "minItems": 3,
+                        "prefixItems": [
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "narrativeTone",
+                                    "description": "관점·지식의 한계, 대사·선택지·반전 제시, 생성 지문의 검토 기준을 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "visualStyle",
+                                    "description": "기본 미술 언어와 문화 해석, 인물·장소의 상태별 연속성, 서비스 간 공통 참조를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "visualProhibitions",
+                                    "description": "금지할 표현, 스포일러·소문과 사실의 혼동, 자산 상태 불일치를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 3
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      "id": {
+                        "const": "expression"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/section"
+                  },
+                  {
+                    "properties": {
+                      "fields": {
+                        "allOf": [
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 1
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 2
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 3
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          },
+                          {
+                            "contains": {
+                              "properties": {
+                                "priority": {
+                                  "const": 4
+                                }
+                              },
+                              "required": [
+                                "priority"
+                              ],
+                              "type": "object"
+                            },
+                            "maxContains": 1,
+                            "minContains": 1
+                          }
+                        ],
+                        "items": false,
+                        "maxItems": 4,
+                        "minItems": 4,
+                        "prefixItems": [
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "priority",
+                                    "description": "확정된 상위 규칙부터 파생 자산까지의 권한 순서와 상태별 사용 가능 범위를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 4
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "revisionRule",
+                                    "description": "불변 개정, 변경 사유, 영향 추적, 이전 플레이 이력의 재현·전환을 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 4
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "canonRule",
+                                    "description": "생성 후보, 승인 경로, 실제 선택된 플레이 이력을 구별하고 합류 상태를 정의한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 4
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          },
+                          {
+                            "allOf": [
+                              {
+                                "$ref": "#/$defs/field"
+                              },
+                              {
+                                "properties": {
+                                  "id": {
+                                    "const": "reviewNote",
+                                    "description": "기존 자료 충돌과 미결정 사항, 다음 결정 소유 영역을 구체적으로 기록한다."
+                                  },
+                                  "priority": {
+                                    "maximum": 4
+                                  }
+                                },
+                                "type": "object"
+                              }
+                            ]
+                          }
+                        ],
+                        "type": "array"
+                      },
+                      "id": {
+                        "const": "governance"
+                      }
+                    },
+                    "type": "object"
+                  }
+                ]
+              }
+            ],
+            "type": "array"
+          }
+        }
+      }
+    }
+  ],
+  "description": "Project-neutral schema compatible with the NPC Gen v1 document shape. Prose quality is checked with the authoring guide.",
+  "properties": {
+    "hierarchy": {
+      "additionalProperties": false,
+      "properties": {
+        "archivedCategoryIds": {
+          "description": "Inactive category membership only; original sections and retained revisions remain intact.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "archivedItems": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "categoryId": {
+                "pattern": "^[A-Za-z0-9._:-]{1,180}$",
+                "type": "string"
+              },
+              "itemId": {
+                "pattern": "^[A-Za-z0-9._:-]{1,180}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "categoryId",
+              "itemId"
+            ],
+            "type": "object"
+          },
+          "maxItems": 4096,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "groups": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "categoryIds": {
+                "items": {
+                  "pattern": "^[A-Za-z0-9._:-]{1,180}$",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "description": {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              "id": {
+                "pattern": "^[A-Za-z0-9._:-]{1,180}$",
+                "type": "string"
+              },
+              "title": {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "categoryIds"
+            ],
+            "type": "object"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": "npc-concept-groups.v1"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "groups"
+      ],
+      "type": "object"
+    },
+    "projectId": {
+      "maxLength": 80,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schemaVersion": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "sections": {
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "priority": {
+                "const": 1
+              }
+            },
+            "required": [
+              "priority"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "priority": {
+                "const": 2
+              }
+            },
+            "required": [
+              "priority"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "priority": {
+                "const": 3
+              }
+            },
+            "required": [
+              "priority"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "priority": {
+                "const": 4
+              }
+            },
+            "required": [
+              "priority"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "priority": {
+                "const": 5
+              }
+            },
+            "required": [
+              "priority"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "priority": {
+                "const": 6
+              }
+            },
+            "required": [
+              "priority"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "priority": {
+                "const": 7
+              }
+            },
+            "required": [
+              "priority"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "priority": {
+                "const": 8
+              }
+            },
+            "required": [
+              "priority"
+            ],
+            "type": "object"
+          },
+          "maxContains": 1,
+          "minContains": 1
+        }
+      ],
+      "items": {
+        "$ref": "#/$defs/dynamicSection"
+      },
+      "maxItems": 100,
+      "minItems": 8,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/section"
+            },
+            {
+              "properties": {
+                "fields": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 2
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 3
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    }
+                  ],
+                  "items": {
+                    "$ref": "#/$defs/dynamicField"
+                  },
+                  "maxItems": 128,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "playerRole",
+                              "description": "플레이어 정체성, 권한, 장기 지속성, 선택이 다음 이야기로 이어지는 범위를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "coreLoop",
+                              "description": "제작 흐름과 플레이 반복 행동, 선택 조건·결과, 다음 경로 결정 방식을 분리해 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "centralQuestion",
+                              "description": "게임의 핵심 질문, 초반 믿음, 뒤집는 경험, 플레이어가 책임질 판단을 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                "id": {
+                  "const": "experience"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/section"
+            },
+            {
+              "properties": {
+                "fields": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 2
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 3
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 4
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    }
+                  ],
+                  "items": {
+                    "$ref": "#/$defs/dynamicField"
+                  },
+                  "maxItems": 128,
+                  "minItems": 4,
+                  "prefixItems": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "eraCulture",
+                              "description": "시대 모티프와 가상화 범위, 주된 문화·표현 기준, 다른 영향의 허용 범위를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 4
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "society",
+                              "description": "집단과 제도, 생업·의례, 현상에 대한 서로 다른 태도와 생활상에 미치는 영향을 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 4
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "supernatural",
+                              "description": "현상과 존재의 원리, 관찰·믿음·진실의 구분, 발현·변화·예외의 경계를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 4
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "prohibitions",
+                              "description": "모든 자산에 적용할 금지와 검토 기준, 허용된 예외와 사실 주장 경계를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 4
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                "id": {
+                  "const": "world"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/section"
+            },
+            {
+              "properties": {
+                "fields": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 2
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 3
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    }
+                  ],
+                  "items": {
+                    "$ref": "#/$defs/dynamicField"
+                  },
+                  "maxItems": 128,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "premise",
+                              "description": "외적·내적 갈등, 주인공의 임무, 오해와 진실, 여러 Act를 관통할 변화를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "mandatoryEvents",
+                              "description": "기존 사건을 보존하고 큰 사건별 표면·이면·선택의 대가·연쇄를 작성한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "endingConstraint",
+                              "description": "모든 경로의 필수 수습, 가변 결말, 선택 조건·비용, 다음 이야기로 전달할 상태를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                "id": {
+                  "const": "story"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/section"
+            },
+            {
+              "properties": {
+                "fields": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 2
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 3
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    }
+                  ],
+                  "items": {
+                    "$ref": "#/$defs/dynamicField"
+                  },
+                  "maxItems": 128,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "actions",
+                              "description": "플레이 행동, 진입 조건·관찰 정보·결과, 필수 사건과 플레이어 자유의 경계를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "npcRuntime",
+                              "description": "페르소나·상태를 런타임 행동으로 바꾸는 입력·출력·대체·재현 규칙을 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "stateVocabulary",
+                              "description": "사실·믿음·관계·몸·복장·능력·장소 상태의 공통 범주와 변경 이력을 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                "id": {
+                  "const": "gameplay"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/section"
+            },
+            {
+              "properties": {
+                "fields": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 2
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 3
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    }
+                  ],
+                  "items": {
+                    "$ref": "#/$defs/dynamicField"
+                  },
+                  "maxItems": 128,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "identity",
+                              "description": "동일 인물 ID, 상태·제작 버전, 별도 인물 기준, 생성 자산의 참조 정보를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "persona",
+                              "description": "지속되는 욕구·가치·금기·해석·말투와 공개 모습·비밀의 경계를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "mutable",
+                              "description": "상태 범주와 변화 원인·시점·경로, 대사·이미지·스킬·행동으로의 전달 방식을 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                "id": {
+                  "const": "character"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/section"
+            },
+            {
+              "properties": {
+                "fields": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 2
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    }
+                  ],
+                  "items": {
+                    "$ref": "#/$defs/dynamicField"
+                  },
+                  "maxItems": 128,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "places",
+                              "description": "장소 ID·계층·접근·상태·소문과 실제 용도, 자산 참조 범위를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 2
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "timeline",
+                              "description": "발생 시간과 공개 시간을 분리하고 장면·선택·상태의 경로별 유효 범위를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 2
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                "id": {
+                  "const": "timeSpace"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/section"
+            },
+            {
+              "properties": {
+                "fields": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 2
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 3
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    }
+                  ],
+                  "items": {
+                    "$ref": "#/$defs/dynamicField"
+                  },
+                  "maxItems": 128,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "narrativeTone",
+                              "description": "관점·지식의 한계, 대사·선택지·반전 제시, 생성 지문의 검토 기준을 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "visualStyle",
+                              "description": "기본 미술 언어와 문화 해석, 인물·장소의 상태별 연속성, 서비스 간 공통 참조를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "visualProhibitions",
+                              "description": "금지할 표현, 스포일러·소문과 사실의 혼동, 자산 상태 불일치를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 3
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                "id": {
+                  "const": "expression"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/section"
+            },
+            {
+              "properties": {
+                "fields": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 1
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 2
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 3
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "priority": {
+                            "const": 4
+                          }
+                        },
+                        "required": [
+                          "priority"
+                        ],
+                        "type": "object"
+                      },
+                      "maxContains": 1,
+                      "minContains": 1
+                    }
+                  ],
+                  "items": {
+                    "$ref": "#/$defs/dynamicField"
+                  },
+                  "maxItems": 128,
+                  "minItems": 4,
+                  "prefixItems": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "priority",
+                              "description": "확정된 상위 규칙부터 파생 자산까지의 권한 순서와 상태별 사용 가능 범위를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 4
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "revisionRule",
+                              "description": "불변 개정, 변경 사유, 영향 추적, 이전 플레이 이력의 재현·전환을 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 4
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "canonRule",
+                              "description": "생성 후보, 승인 경로, 실제 선택된 플레이 이력을 구별하고 합류 상태를 정의한다."
+                            },
+                            "priority": {
+                              "maximum": 4
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/$defs/field"
+                        },
+                        {
+                          "properties": {
+                            "id": {
+                              "const": "reviewNote",
+                              "description": "기존 자료 충돌과 미결정 사항, 다음 결정 소유 영역을 구체적으로 기록한다."
+                            },
+                            "priority": {
+                              "maximum": 4
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                },
+                "id": {
+                  "const": "governance"
+                }
+              },
+              "type": "object"
+            }
+          ]
+        }
+      ],
+      "type": "array"
+    },
+    "title": {
+      "maxLength": 120,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "projectId",
+    "title",
+    "sections"
+  ],
+  "title": "마스터 컨셉 확장 계약 v2 검토안",
+  "type": "object"
+}

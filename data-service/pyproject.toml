@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "projectbs-data-service"
+version = "0.1.0"
+description = "Portable single-writer SQLite and storage boundary for ProjectBS services"
+requires-python = ">=3.9"
+
+[project.scripts]
+projectbs-data-service = "project_data_service.http_server:main"
+
+[tool.setuptools.packages.find]
+include = ["project_data_service*"]

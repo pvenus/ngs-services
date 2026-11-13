@@ -1,0 +1,566 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "id": "inner",
+      "title": "내면 · 가치",
+      "kind": "traits",
+      "view": "radar",
+      "description": "무엇을 우선하고 어떤 원칙을 지키는가. 값의 합은 100일 필요가 없습니다.",
+      "axes": [
+        {
+          "key": "protection",
+          "label": "보호욕구",
+          "low": "타인의 안전에 개입하지 않음",
+          "high": "타인의 안전을 최우선으로 지킴",
+          "sourceField": "values"
+        },
+        {
+          "key": "responsibility",
+          "label": "책임감",
+          "low": "결과에 대한 책임을 회피함",
+          "high": "자신의 선택과 피해를 끝까지 책임짐",
+          "sourceField": "arc"
+        },
+        {
+          "key": "fairness",
+          "label": "공정성",
+          "low": "신분·사익에 따라 판단함",
+          "high": "신분과 무관하게 동일 기준을 적용함",
+          "sourceField": "values"
+        },
+        {
+          "key": "autonomy",
+          "label": "자율성",
+          "low": "외부 지시를 그대로 따름",
+          "high": "자신의 판단으로 명령에도 이의 제기함",
+          "sourceField": "values"
+        },
+        {
+          "key": "order",
+          "label": "규범중시",
+          "low": "절차를 거의 고려하지 않음",
+          "high": "제도와 절차 준수를 강하게 선호함",
+          "sourceField": "values"
+        },
+        {
+          "key": "selfPreservation",
+          "label": "자기보존",
+          "low": "자신의 안전을 거의 고려하지 않음",
+          "high": "자신의 생존과 안전을 우선함",
+          "sourceField": "fear"
+        },
+        {
+          "key": "integrity",
+          "label": "정직성",
+          "low": "유리하면 사실을 왜곡함",
+          "high": "불리해도 사실과 기록을 지킴",
+          "sourceField": "values"
+        },
+        {
+          "key": "conviction",
+          "label": "신념지속",
+          "low": "압력에 쉽게 원칙을 포기함",
+          "high": "손해와 압력에도 원칙을 유지함",
+          "sourceField": "arc"
+        }
+      ]
+    },
+    {
+      "id": "cognition",
+      "title": "인지 · 판단",
+      "kind": "traits",
+      "view": "radar",
+      "description": "정보를 해석하는 습관입니다. 실제 조사 능력과 구분합니다.",
+      "axes": [
+        {
+          "key": "evidence",
+          "label": "증거중시",
+          "low": "인상과 전언으로 판단함",
+          "high": "확인 가능한 근거를 요구함",
+          "sourceField": "belief"
+        },
+        {
+          "key": "caution",
+          "label": "신중성",
+          "low": "검토 없이 결론을 내림",
+          "high": "결정 전에 위험과 대안을 검토함",
+          "sourceField": "fear"
+        },
+        {
+          "key": "intuition",
+          "label": "직관의존",
+          "low": "직감을 판단에 거의 쓰지 않음",
+          "high": "즉각적인 감을 적극 신뢰함",
+          "sourceField": "summary"
+        },
+        {
+          "key": "flexibility",
+          "label": "관점전환",
+          "low": "새 증거에도 기존 결론을 유지함",
+          "high": "새 증거에 따라 가설을 수정함",
+          "sourceField": "belief"
+        },
+        {
+          "key": "skepticism",
+          "label": "의심성",
+          "low": "권위와 소문을 그대로 믿음",
+          "high": "권위와 소문도 검증 대상으로 봄",
+          "sourceField": "belief"
+        },
+        {
+          "key": "foresight",
+          "label": "장기고려",
+          "low": "즉각적인 결과에 집중함",
+          "high": "멀리 이어질 결과를 고려함",
+          "sourceField": "desire"
+        },
+        {
+          "key": "ambiguityTolerance",
+          "label": "불확실수용",
+          "low": "모르면 성급하게 단정함",
+          "high": "모르는 상태를 인정하고 조사함",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "perspectiveTaking",
+          "label": "입장분리",
+          "low": "상대 해석을 사실로 취급함",
+          "high": "관찰·주장·원인을 분리해 생각함",
+          "sourceField": "belief"
+        }
+      ]
+    },
+    {
+      "id": "action",
+      "title": "위기 · 행동",
+      "kind": "traits",
+      "view": "radar",
+      "description": "행동의 선호와 지속 방식입니다. 플레이어의 결정을 대신하지 않습니다.",
+      "axes": [
+        {
+          "key": "initiative",
+          "label": "선제행동",
+          "low": "지시나 타인의 개입을 기다림",
+          "high": "먼저 움직여 개입함",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "decisiveness",
+          "label": "결단성",
+          "low": "결정을 오래 미룸",
+          "high": "불확실해도 필요한 결정을 내림",
+          "sourceField": "fear"
+        },
+        {
+          "key": "riskTaking",
+          "label": "위험감수",
+          "low": "개인적 위험을 피함",
+          "high": "필요한 목표를 위해 위험을 감수함",
+          "sourceField": "summary"
+        },
+        {
+          "key": "restraint",
+          "label": "무력절제",
+          "low": "강제력을 쉽게 확대함",
+          "high": "최소한의 힘으로 피해를 제한함",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "persistence",
+          "label": "지속성",
+          "low": "저항과 실패 뒤 쉽게 포기함",
+          "high": "실패 뒤에도 계속 추적함",
+          "sourceField": "desire"
+        },
+        {
+          "key": "negotiation",
+          "label": "대화시도",
+          "low": "대화의 가능성을 먼저 닫음",
+          "high": "안전을 확보한 뒤 대화를 시도함",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "repair",
+          "label": "수습우선",
+          "low": "실수 뒤 변명과 회피를 택함",
+          "high": "실수 인정과 피해 수습을 우선함",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "adaptation",
+          "label": "방법전환",
+          "low": "실패한 방식도 고수함",
+          "high": "목표를 지키며 수단을 바꿈",
+          "sourceField": "behavior"
+        }
+      ]
+    },
+    {
+      "id": "relations",
+      "title": "관계 · 정서",
+      "kind": "traits",
+      "view": "radar",
+      "description": "대인 성향과 감정 조절의 평소 경향입니다. 특정 상대와의 관계는 별도 기록합니다.",
+      "axes": [
+        {
+          "key": "empathy",
+          "label": "공감성",
+          "low": "상대의 고통을 고려하지 않음",
+          "high": "상대의 고통과 관점을 살핌",
+          "sourceField": "publicFace"
+        },
+        {
+          "key": "trustOpening",
+          "label": "신뢰개방",
+          "low": "먼저 믿는 일을 피함",
+          "high": "처음에도 신뢰할 여지를 줌",
+          "sourceField": "relationships"
+        },
+        {
+          "key": "cooperation",
+          "label": "협력성",
+          "low": "타인의 전문성을 배제함",
+          "high": "타인의 전문성과 도움을 수용함",
+          "sourceField": "relationships"
+        },
+        {
+          "key": "authorityUse",
+          "label": "권위사용",
+          "low": "권한을 드러내지 않음",
+          "high": "직책과 강제 권한을 적극 사용함",
+          "sourceField": "publicFace"
+        },
+        {
+          "key": "emotionExpression",
+          "label": "감정표현",
+          "low": "감정을 겉으로 거의 드러내지 않음",
+          "high": "감정을 말과 표정으로 드러냄",
+          "sourceField": "voice"
+        },
+        {
+          "key": "secrecy",
+          "label": "비밀유지",
+          "low": "정보를 쉽게 공개함",
+          "high": "임무와 정보의 공개를 통제함",
+          "sourceField": "publicFace"
+        },
+        {
+          "key": "regulation",
+          "label": "감정조절",
+          "low": "감정에 따라 판단이 크게 흔들림",
+          "high": "감정을 느끼면서 행동을 조절함",
+          "sourceField": "voice"
+        },
+        {
+          "key": "recovery",
+          "label": "정서회복",
+          "low": "좌절 뒤 회복이 매우 느림",
+          "high": "좌절 뒤 빠르게 평형을 되찾음",
+          "sourceField": "fear"
+        }
+      ]
+    },
+    {
+      "id": "motives",
+      "title": "욕구 · 두려움",
+      "kind": "profile",
+      "view": "radar",
+      "description": "무엇이 행동을 촉발하는가. 두려움의 민감도는 현재 공포와 다릅니다.",
+      "axes": [
+        {
+          "key": "protectWeak",
+          "label": "약자보호",
+          "low": "약자 보호가 동기가 되지 않음",
+          "high": "약자 보호가 강한 행동 동기임",
+          "sourceField": "desire"
+        },
+        {
+          "key": "truthSeeking",
+          "label": "진실추구",
+          "low": "사실 확인에 만족을 느끼지 않음",
+          "high": "진실과 책임 규명이 핵심 동기임",
+          "sourceField": "desire"
+        },
+        {
+          "key": "duty",
+          "label": "임무완수",
+          "low": "맡은 임무에 구속되지 않음",
+          "high": "공적 임무 완수를 강하게 원함",
+          "sourceField": "summary"
+        },
+        {
+          "key": "recognition",
+          "label": "인정욕구",
+          "low": "평판과 칭찬을 추구하지 않음",
+          "high": "타인의 인정이 핵심 동기임",
+          "sourceField": "desire"
+        },
+        {
+          "key": "belonging",
+          "label": "소속욕구",
+          "low": "소속감을 거의 추구하지 않음",
+          "high": "집단과의 연결을 강하게 원함",
+          "sourceField": "desire"
+        },
+        {
+          "key": "control",
+          "label": "통제욕구",
+          "low": "결과를 타인에게 맡길 수 있음",
+          "high": "상황을 직접 통제하려 함",
+          "sourceField": "desire"
+        },
+        {
+          "key": "wrongfulHarmFear",
+          "label": "오판두려움",
+          "low": "잘못된 개입을 걱정하지 않음",
+          "high": "자신의 오판이 피해를 낼까 매우 두려움",
+          "sourceField": "fear"
+        },
+        {
+          "key": "inactionFear",
+          "label": "방관두려움",
+          "low": "행동하지 않은 피해를 걱정하지 않음",
+          "high": "망설임으로 사람을 잃을까 매우 두려움",
+          "sourceField": "fear"
+        }
+      ]
+    },
+    {
+      "id": "speech",
+      "title": "말투 · 표현",
+      "kind": "profile",
+      "view": "radar",
+      "description": "대사 생성의 기본 조절값입니다. 시대 어휘와 실제 대사 예시는 텍스트 규칙을 함께 사용합니다.",
+      "axes": [
+        {
+          "key": "brevity",
+          "label": "간결함",
+          "low": "길게 풀어 설명함",
+          "high": "짧은 문장과 필요한 말만 사용함",
+          "sourceField": "voice"
+        },
+        {
+          "key": "directness",
+          "label": "직설성",
+          "low": "우회적으로 말함",
+          "high": "핵심 질문과 요점을 바로 말함",
+          "sourceField": "voice"
+        },
+        {
+          "key": "formality",
+          "label": "격식",
+          "low": "격식과 예의를 거의 쓰지 않음",
+          "high": "공식적인 예의와 말투를 유지함",
+          "sourceField": "voice"
+        },
+        {
+          "key": "warmth",
+          "label": "온기",
+          "low": "건조하고 거리감 있는 말투",
+          "high": "안심시키고 배려하는 말투",
+          "sourceField": "voice"
+        },
+        {
+          "key": "humor",
+          "label": "유머",
+          "low": "농담을 거의 하지 않음",
+          "high": "농담과 익살을 자주 사용함",
+          "sourceField": "voice"
+        },
+        {
+          "key": "questioning",
+          "label": "질문비중",
+          "low": "선언과 설명 위주로 말함",
+          "high": "질문과 확인으로 대화를 진행함",
+          "sourceField": "voice"
+        },
+        {
+          "key": "uncertaintyMarking",
+          "label": "추측구분",
+          "low": "추측도 사실처럼 단정함",
+          "high": "추측과 사실을 말로 명확히 구분함",
+          "sourceField": "voice"
+        },
+        {
+          "key": "audienceAdaptation",
+          "label": "상대맞춤",
+          "low": "상대와 무관하게 같은 방식으로 말함",
+          "high": "아이·피해자·권력자에 맞춰 설명함",
+          "sourceField": "voice"
+        }
+      ]
+    },
+    {
+      "id": "capabilities",
+      "title": "능력 · 숙련",
+      "kind": "profile",
+      "view": "radar",
+      "description": "세계관 내 숙련 척도입니다. 성향에서 능력을 추론하지 않으며, 검증 전에는 미설정으로 둡니다.",
+      "axes": [
+        {
+          "key": "observation",
+          "label": "현장관찰",
+          "low": "미숙",
+          "high": "세계관 내 최상급",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "interview",
+          "label": "면담조사",
+          "low": "미숙",
+          "high": "세계관 내 최상급",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "records",
+          "label": "기록분석",
+          "low": "미숙",
+          "high": "세계관 내 최상급",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "tracking",
+          "label": "추적",
+          "low": "미숙",
+          "high": "세계관 내 최상급",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "combat",
+          "label": "전투",
+          "low": "미숙",
+          "high": "세계관 내 최상급",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "stealth",
+          "label": "은밀행동",
+          "low": "미숙",
+          "high": "세계관 내 최상급",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "spiritKnowledge",
+          "label": "괴이지식",
+          "low": "미숙",
+          "high": "세계관 내 최상급",
+          "sourceField": "behavior"
+        },
+        {
+          "key": "firstAid",
+          "label": "응급처치",
+          "low": "미숙",
+          "high": "세계관 내 최상급",
+          "sourceField": "behavior"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "title": "장면 상태",
+      "kind": "profile",
+      "view": "radar",
+      "description": "특정 분기·장면의 상태 스냅샷입니다. 이벤트가 누적된 결과이며 기본 인격을 덮어쓰지 않습니다.",
+      "axes": [
+        {
+          "key": "fatigue",
+          "label": "피로",
+          "low": "피로 없음",
+          "high": "행동 지속이 어려움",
+          "sourceField": "stateKeys"
+        },
+        {
+          "key": "injury",
+          "label": "부상",
+          "low": "부상 없음",
+          "high": "행동 불가능에 가까움",
+          "sourceField": "stateKeys"
+        },
+        {
+          "key": "fear",
+          "label": "공포",
+          "low": "공포 없음",
+          "high": "극도의 공포",
+          "sourceField": "stateKeys"
+        },
+        {
+          "key": "anger",
+          "label": "분노",
+          "low": "분노 없음",
+          "high": "극도의 분노",
+          "sourceField": "stateKeys"
+        },
+        {
+          "key": "guilt",
+          "label": "죄책감",
+          "low": "죄책감 없음",
+          "high": "극심한 죄책감",
+          "sourceField": "stateKeys"
+        },
+        {
+          "key": "stress",
+          "label": "압박",
+          "low": "압박 없음",
+          "high": "극도의 압박",
+          "sourceField": "stateKeys"
+        },
+        {
+          "key": "resolve",
+          "label": "결의",
+          "low": "의지 상실",
+          "high": "현재 목표에 강한 결의",
+          "sourceField": "stateKeys"
+        },
+        {
+          "key": "composure",
+          "label": "침착",
+          "low": "침착을 잃음",
+          "high": "매우 침착함",
+          "sourceField": "stateKeys"
+        }
+      ]
+    }
+  ],
+  "relationshipAxes": [
+    {
+      "key": "trust",
+      "label": "신뢰",
+      "low": "믿지 않음",
+      "high": "깊이 신뢰함"
+    },
+    {
+      "key": "affinity",
+      "label": "친밀",
+      "low": "가깝지 않음",
+      "high": "매우 가까움"
+    },
+    {
+      "key": "hostility",
+      "label": "적대",
+      "low": "적대 없음",
+      "high": "강한 적대"
+    },
+    {
+      "key": "respect",
+      "label": "존중",
+      "low": "존중 없음",
+      "high": "깊은 존중"
+    },
+    {
+      "key": "obligation",
+      "label": "부채감",
+      "low": "빚진 마음 없음",
+      "high": "강하게 빚졌다고 느낌"
+    },
+    {
+      "key": "fear",
+      "label": "두려움",
+      "low": "두려워하지 않음",
+      "high": "매우 두려워함"
+    }
+  ],
+  "relationshipTargets": {
+    "npc.monarch": "군주"
+  }
+}

@@ -1,0 +1,271 @@
+{
+  "schemaVersion": 1,
+  "projectId": "example",
+  "title": "NPC 제작 마스터 컨셉",
+  "sections": [
+    {
+      "id": "experience",
+      "title": "게임의 핵심 경험",
+      "description": "플레이어가 반복하는 판단과 행동",
+      "fields": [
+        {
+          "id": "playerRole",
+          "label": "플레이어의 위치",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 2
+        },
+        {
+          "id": "coreLoop",
+          "label": "반복 경험",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 1
+        },
+        {
+          "id": "centralQuestion",
+          "label": "핵심 질문",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 3
+        }
+      ],
+      "priority": 1
+    },
+    {
+      "id": "world",
+      "title": "세계관의 불변 규칙",
+      "description": "모든 하위 기획과 생성물이 따를 시대·문화·현상 규칙",
+      "fields": [
+        {
+          "id": "eraCulture",
+          "label": "시대와 문화",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 1
+        },
+        {
+          "id": "society",
+          "label": "사회와 생활",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 4
+        },
+        {
+          "id": "supernatural",
+          "label": "초자연 현상의 원리",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 3
+        },
+        {
+          "id": "prohibitions",
+          "label": "공통 금지·검토 기준",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 2
+        }
+      ],
+      "priority": 2
+    },
+    {
+      "id": "story",
+      "title": "메인 스토리의 뼈대",
+      "description": "NPC의 목표와 변화가 복종할 상위 사건",
+      "fields": [
+        {
+          "id": "premise",
+          "label": "중심 갈등",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 1
+        },
+        {
+          "id": "mandatoryEvents",
+          "label": "필수 사건",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 2
+        },
+        {
+          "id": "endingConstraint",
+          "label": "결말 조건",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 3
+        }
+      ],
+      "priority": 3
+    },
+    {
+      "id": "gameplay",
+      "title": "게임플레이 규칙",
+      "description": "NPC 행동·스킬 제작의 실행 가능 범위",
+      "fields": [
+        {
+          "id": "actions",
+          "label": "확인된 행동 범주",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 1
+        },
+        {
+          "id": "npcRuntime",
+          "label": "현재 NPC 런타임 접점",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 2
+        },
+        {
+          "id": "stateVocabulary",
+          "label": "공통 상태 어휘",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 3
+        }
+      ],
+      "priority": 5
+    },
+    {
+      "id": "character",
+      "title": "인물 설계 원칙",
+      "description": "동일 인물의 정체성과 변화 가능한 상태",
+      "fields": [
+        {
+          "id": "identity",
+          "label": "인물 식별",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 2
+        },
+        {
+          "id": "persona",
+          "label": "기본 페르소나",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 1
+        },
+        {
+          "id": "mutable",
+          "label": "변화 가능한 인물 상태",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 3
+        }
+      ],
+      "priority": 4
+    },
+    {
+      "id": "timeSpace",
+      "title": "시간과 공간",
+      "description": "사건 및 NPC 상태가 유효한 범위",
+      "fields": [
+        {
+          "id": "places",
+          "label": "주요 공간",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 2
+        },
+        {
+          "id": "timeline",
+          "label": "시간·장면 식별",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 1
+        }
+      ],
+      "priority": 7
+    },
+    {
+      "id": "expression",
+      "title": "표현 기준",
+      "description": "대사·이미지·애니메이션에 전달할 공통 방향",
+      "fields": [
+        {
+          "id": "narrativeTone",
+          "label": "서사와 대화",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 1
+        },
+        {
+          "id": "visualStyle",
+          "label": "시각 표현",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 2
+        },
+        {
+          "id": "visualProhibitions",
+          "label": "시각적 금지",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 3
+        }
+      ],
+      "priority": 8
+    },
+    {
+      "id": "governance",
+      "title": "확정과 변경 규칙",
+      "description": "후속 서비스가 참조할 설정의 권한과 개정 방식",
+      "fields": [
+        {
+          "id": "priority",
+          "label": "원본 우선순위",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 1
+        },
+        {
+          "id": "revisionRule",
+          "label": "설정 개정",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 3
+        },
+        {
+          "id": "canonRule",
+          "label": "스토리 확정",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 2
+        },
+        {
+          "id": "reviewNote",
+          "label": "정합성 검토 사항",
+          "value": "",
+          "status": "open",
+          "sources": [],
+          "priority": 4
+        }
+      ],
+      "priority": 6
+    }
+  ]
+}
