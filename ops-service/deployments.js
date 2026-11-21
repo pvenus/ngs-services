@@ -79,6 +79,32 @@ async function openSpaceHandoff(handoff,fallback){
   status('아래 요청 문구를 복사해 배포 스레드에서 직접 전송해 주세요.');
  }
 }
+const publicationLabels={pending:'게시 요청 대기',claimed:'게시 작업 중',succeeded:'게시 완료',failed:'게시 실패',uncertain:'게시 결과 확인 필요'};
+const isSha=sha=>typeof sha==='string'&&sha.length===40&&shaPattern.test(sha);
+function spacePublication(item){
+ const publication=item?.publication;
+ if(publication?.provider!=='chatgpt-sites'||publication.hostname!==spacePublicationHost)return null;
+ const candidate=isSha(publication.candidateSha)?publication.candidateSha:null;
+ const request=publication.request;
+ const latest=request&&Object.hasOwn(publicationLabels,request.state)&&
+  typeof request.requestId==='string'&&/^[a-zA-Z0-9._-]{1,128}(?![\s\S])/u.test(request.requestId)&&
+  evidence({sha:request.sha,deployedAt:request.requestedAt})?request:null;
+ return {candidate,latest,configured:typeof publication.canRequest==='boolean',canRequest:publication.canRequest===true,
+  busy:['pending','claimed'].includes(latest?.state),blocked:latest?.state==='uncertain'};
+}
+function publicationStatus(cell,publication){
+ if(!publication)return;
+ if(publication.candidate){
+  const candidate=node('small','게시 후보: '+publication.candidate);
+  candidate.className='deploy-space-candidate';cell.append(candidate);
+ }
+ const request=publication.latest;
+ if(!request)return;
+ const state=node('small',publicationLabels[request.state]);state.dataset.publicationState=request.state;
+ const sha=node('code',request.sha.slice(0,12));sha.title=request.sha;
+ const requested=node('time',stampFormat.format(Date.parse(request.requestedAt)));requested.dateTime=request.requestedAt;
+ cell.append(state,node('small','요청 ID: '+request.requestId),sha,requested);
+}
 function groupSection(id,layout,value,targets){
  const section=node('section',undefined,'deploy-group');
  section.dataset.group=id;section.setAttribute('aria-labelledby','deploy-heading-'+id);
@@ -116,12 +142,16 @@ function groupSection(id,layout,value,targets){
    const recovery=failure.rollback==='restored'?' · 이전 버전 복구됨':failure.rollback==='failed'?' · 복구 확인 필요':'';
    stateCell.append(node('small',phase+' · '+failure.code+recovery));
   }
-  const handoff=spaceUnlinked?spaceHandoff(item):null;
-  const action=node('td'),button=node('button',handoff?(handoff.url?'배포 스레드에 전달':'배포 요청 복사'):'배포','deploy-row-action');button.type='button';
-  button.setAttribute('aria-label',handoff?'배포 스레드에 전달 (직접 전송)':label+' 배포');
-  button.disabled=active||(!handoff&&(item?.canDeploy!==true||state==='running'||spaceUnlinked));
+  const publication=target==='ngs-space'?spacePublication(item):null;
+  publicationStatus(stateCell,publication);
+  const queue=spaceUnlinked&&Boolean(publication?.configured||publication?.latest);
+  const handoff=spaceUnlinked&&!queue?spaceHandoff(item):null;
+  const action=node('td'),button=node('button',queue?'스페이스 게시 요청':handoff?(handoff.url?'배포 스레드에 전달':'배포 요청 복사'):'배포','deploy-row-action');button.type='button';
+  button.setAttribute('aria-label',queue?'스페이스 게시 요청':handoff?'배포 스레드에 전달 (직접 전송)':label+' 배포');
+  button.disabled=active||(queue?(!publication.canRequest||!publication.candidate||publication.busy||publication.blocked):(!handoff&&(item?.canDeploy!==true||state==='running'||spaceUnlinked)));
   rowButtons.set(target,button);action.append(button);
-  if(handoff){
+  if(queue)button.addEventListener('click',()=>void queueSpace(button));
+  else if(handoff){
    if(!handoff.url)action.append(node('small','전송 대상: '+handoff.title));
    const fallback=node('textarea');fallback.readOnly=true;fallback.hidden=true;
    fallback.setAttribute('aria-label','복사할 배포 요청 문구');action.append(fallback);
@@ -159,7 +189,7 @@ function render(response){
  groupsNode.replaceChildren(...Object.entries(groupLayout).map(([id,layout])=>groupSection(id,layout,value,targets)));
  all.disabled=active||value.canDeployAll!==true||spacePublicationUnlinked(targets.get('ngs-space'));
  if(focusTarget&&!rowButtons.get(focusTarget)?.disabled)rowButtons.get(focusTarget)?.focus();
- return [...targets.values()].some(item=>['running','queued'].includes(item.state));
+ return [...targets.values()].some(item=>['running','queued'].includes(item.state))||spacePublication(targets.get('ngs-space'))?.busy===true;
 }
 async function reload(){
  clearTimeout(timer);
@@ -179,16 +209,27 @@ async function reload(){
   current=null;disableActions();status('배포 상태를 확인하지 못했습니다. 새로고침해서 결과를 확인해 주세요.');
  }
 }
+async function queueSpace(button){
+ if(active||!current||button.disabled)return;
+ const item=current.targets.get('ngs-space'),publication=spacePublication(item);
+ if(!spacePublicationUnlinked(item)||!publication?.canRequest||!publication.candidate||publication.busy||publication.blocked)return;
+ await submitDeployment({action:'queue-space',target:'ngs-space',sha:publication.candidate},
+  '스페이스 게시 요청을 접수하는 중입니다.');
+}
 async function deploy(target,button){
  if(active||!current||button.disabled)return;
  const {value,targets}=current;
  if(target==='all'?value.canDeployAll!==true:targets.get(target)?.canDeploy!==true)return;
- clearTimeout(timer);readSequence++;active=true;disableActions();
- status(target==='all'?'모든 대상의 배포를 요청하는 중입니다.':'선택한 대상의 배포를 요청하는 중입니다.');
+ await submitDeployment({action:'wake',target},
+  target==='all'?'모든 대상의 배포를 요청하는 중입니다.':'선택한 대상의 배포를 요청하는 중입니다.');
+}
+async function submitDeployment(payload,message){
+ const csrf=current.value.csrf;
+ clearTimeout(timer);readSequence++;active=true;disableActions();status(message);
  try{
   const r=await fetch(api,{method:'POST',credentials:'same-origin',cache:'no-store',headers:{
-   'Content-Type':'application/json','X-OPS-Deploy-CSRF':value.csrf},
-   body:JSON.stringify({action:'wake',target})});
+   'Content-Type':'application/json','X-OPS-Deploy-CSRF':csrf},
+   body:JSON.stringify(payload)});
   if(r.status===401){active=false;await reload();return;}
   if(r.status!==202){status('배포를 접수하지 못했습니다. 새로고침한 뒤 상태를 확인해 주세요.');return;}
   active=false;await reload();

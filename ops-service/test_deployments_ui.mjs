@@ -170,3 +170,36 @@ test('verified Dot thread ID without a provider URL copies without pretending to
  assert.match(app.of('deploy-status').textContent,/비나리 스페이스 배포/);
  assert.equal(app.hits.length,1);
 });
+
+test('Space queue submits only the verified candidate and presents publication lifecycle without local deployment',async()=>{
+ const model=data(),space=model.cycle.targets.find(x=>x.id==='ngs-space');
+ space.state='not_configured';space.canDeploy=false;
+ space.publication={provider:'chatgpt-sites',hostname:'vinus-npcgen.park-venus0518.chatgpt.site',canRequest:true,candidateSha:b};
+ const request={requestId:'space.request.1',sha:b,requestedAt:date,state:'pending'};
+ const app=fixtures(async(_url,{method})=>{
+  if(method==='POST'){space.publication.request=request;return Response.json({}, {status:202});}
+  return Response.json(model);
+ });
+ await flush();
+ const row=()=>app.row('ngs-space'),button=()=>app.find(row(),n=>n.tag==='button');
+ assert.equal(button().textContent,'스페이스 게시 요청');assert.equal(button().disabled,false);
+ assert.ok(app.find(row(),n=>n.textContent==='게시 후보: '+b));
+ assert.equal(app.of('deploy-all').disabled,true);
+ button().fire('click');await flush();
+ const [[url,opts]]=app.hits.filter(([,o])=>o.method==='POST');
+ assert.equal(url,'/api/deployments');assert.equal(opts.headers['X-OPS-Deploy-CSRF'],csrf);
+ assert.deepEqual(JSON.parse(opts.body),{action:'queue-space',target:'ngs-space',sha:b});
+ for(const [state,label,disabled] of [['pending','게시 요청 대기',true],['claimed','게시 작업 중',true],
+  ['uncertain','게시 결과 확인 필요',true],['succeeded','게시 완료',false],['failed','게시 실패',false]]){
+  request.state=state;app.of('deploy-refresh').fire('click');await flush();
+  assert.ok(app.find(row(),n=>n.dataset.publicationState===state&&n.textContent===label));
+  assert.ok(app.find(row(),n=>n.textContent==='요청 ID: '+request.requestId));
+  assert.equal(button().disabled,disabled);
+ }
+ for(const [sha,canRequest] of [['bad',true],[b,false]]){
+  space.publication.candidateSha=sha;space.publication.canRequest=canRequest;
+  app.of('deploy-refresh').fire('click');await flush();
+  assert.equal(button().disabled,true);button().fire('click');
+ }
+ assert.equal(app.hits.filter(([,o])=>o.method==='POST').length,1);
+});

@@ -86,3 +86,5 @@ tr[data-deploy-state=failed] .deploy-state{color:#983b35}
 @media(max-width:560px){.deploy-summary{align-items:flex-start}.deploy-summary p{font-size:.86rem}.deploy-all{min-width:90px;padding:5px 8px}.deploy-group{padding:9px}.deploy-group th,.deploy-group td{padding:7px 6px}}
 
 .ngs-observation-version{overflow-wrap:anywhere}
+
+.deploy-space-candidate{overflow-wrap:anywhere}
