@@ -73,3 +73,17 @@ HTTP:
 
 Use `null` for an environment without verified proof. Only canonical NGS
 SHAs may be compared, not the provider SHA.
+
+### NGS contact observations
+
+RS reports successful queue contact via the existing loopback-only
+`POST /api/service-heartbeat`: `{"serverName":"ngs-local"}` or
+`{"serverName":"ngs-space","commitSha":"<40 lowercase hexadecimal Git SHA>"}`.
+Only these two names can carry an optional commit SHA on HTTP; existing
+heartbeat clients and the MCP tool retain their existing body format. Omit the
+SHA when the same contact did not establish the Git revision.
+
+`GET /api/service-status` includes nullable `commitSha` for these two rows.
+OPS timestamps the receipt, clears obsolete SHA evidence when a later report
+omits it, and uses the ordinary in-memory heartbeat status rules without making
+any additional probes or writing the request database.

@@ -158,13 +158,22 @@ function openProgress(row){
 }
 const serviceLabels={connected:'연결됨',warning:'경고',stop:'중지'};
 const shortTime=value=>new Date(value).toLocaleTimeString('ko-KR',{hour12:false});
-function serviceCard({serverName,state,missed,lastReceivedAt}){
+function serviceCard({serverName,state,missed,lastReceivedAt,commitSha}){
  const item=document.createElement('li'),name=document.createElement('strong');
  const badge=document.createElement('span'),detail=document.createElement('small');
- name.textContent=serverName;
+ const observation=serverName==='ngs-local'||serverName==='ngs-space';
+ name.textContent=observation?(serverName==='ngs-local'?'NGS Local':'NGS Space'):serverName;
  badge.className='service-state';badge.dataset.state=state;badge.textContent=serviceLabels[state];
- detail.textContent='최근 수신 '+shortTime(lastReceivedAt)+(missed>=2?' · '+missed+'회 누락':'');
- item.append(name,badge,detail);return item;
+ detail.textContent=(observation?'마지막 연락 ':'최근 수신 ')+
+  (observation?new Date(lastReceivedAt).toLocaleString('ko-KR',{hour12:false}):shortTime(lastReceivedAt))+
+  (missed>=2?' · '+missed+'회 누락':'');
+ item.append(name,badge,detail);
+ if(observation){
+  const version=document.createElement('small');version.className='ngs-observation-version';
+  version.textContent=commitSha?'커밋 '+commitSha:'커밋 확인 안 됨';
+  item.append(version);
+ }
+ return item;
 }
 let checkingServices=false;
 async function checkServices(){

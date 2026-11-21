@@ -192,7 +192,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path=='/mcp':
             return self.handle_mcp(value)
         try:
-            self.server.heartbeats.record(name_from(value))
+            if isinstance(value,dict) and set(value)=={'serverName','commitSha'} and isinstance(value['commitSha'],str):
+                self.server.heartbeats.record(value['serverName'],commit_sha=value['commitSha'])
+            else:
+                self.server.heartbeats.record(name_from(value))
         except ValueError:
             return self.send(400,{'error':'INVALID_HEARTBEAT'})
         return self.send(200,{'ok':True})

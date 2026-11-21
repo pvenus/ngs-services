@@ -107,6 +107,58 @@ class ViewerTests(unittest.TestCase):
             self.assertEqual(get(p,'/api/service-status',method='POST')[0],405)
             self.assertEqual([(r['serverName'],r['state']) for r in rows()],[('ngs-fixture','connected'),('pds-peer','connected')])
 
+    def test_ngs_observations_are_separate_and_only_refresh_on_valid_contact(self):
+        import datetime
+        clock=[0]
+        registry=S.Heartbeats(clock=lambda:clock[0],wall=lambda:datetime.datetime.fromtimestamp(clock[0],datetime.timezone.utc))
+        sha='a'*40
+        route='/api/service-heartbeat'
+        with started(S.server(0,lambda _:self.fail('ledger call'),heartbeats=registry)) as port:
+            def post(value, headers=None, path=route):
+                c=http.client.HTTPConnection(S.HOST,port,timeout=2)
+                try:
+                    c.request('POST',path,json.dumps(value),{'Content-Type':'application/json',**(headers or {})})
+                    r=c.getresponse()
+                    return r.status, json.loads(r.read())
+                finally:c.close()
+            def observations():
+                status,body=get(port,'/api/service-status')
+                self.assertEqual(status,200)
+                return [row for row in json.loads(body)['services'] if 'commitSha' in row]
+            self.assertEqual(observations(),[])
+            self.assertEqual(post({'serverName':'ngs-local'}),(200,{'ok':True}))
+            first,=observations()
+            self.assertEqual((first['serverName'],first['commitSha'],first['state']),('ngs-local',None,'connected'))
+            clock[0]=30
+            self.assertEqual(post({'serverName':'ngs-local','commitSha':sha})[0],200)
+            self.assertEqual(post({'serverName':'ngs-space','commitSha':'b'*40})[0],200)
+            local,space=observations()
+            self.assertEqual((local['commitSha'],space['commitSha']),(sha,'b'*40))
+            self.assertNotEqual(local['lastReceivedAt'],first['lastReceivedAt'])
+            for body in ({'serverName':'rs','commitSha':sha},{'serverName':'ngs-space','commitSha':None},{'serverName':'ngs-local','commitSha':'abc123'},
+                         {'serverName':'ngs-local','commitSha':'A'*40},{'serverName':'ngs-local','source':'pds'},
+                         {'serverName':'ngs-local','lastReceivedAt':'invented'},{}):
+                self.assertEqual(post(body)[0],400)
+            for headers in ({'Origin':f'http://{S.HOST}:{port}'},{'Sec-Fetch-Site':'same-origin'},
+                            {'Host':f'localhost:{port}'}):
+                self.assertEqual(post({'serverName':'ngs-local'},headers)[0],403)
+            self.assertEqual(get(port,route)[0],404)
+            self.assertEqual(post({'serverName':'ngs-local'},path=route+'?source=space')[0],405)
+            self.assertEqual(observations(),[local,space])
+            self.assertEqual(post({'serverName':'NGS Space'},path='/api/service-heartbeat')[0],400)
+            self.assertEqual(post({'serverName':'pds'},path='/api/service-heartbeat')[0],200)
+            rpc={'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':S.MCP_TOOL,
+                 'arguments':{'serverName':'ngs-space','commitSha':sha}}}
+            self.assertEqual(post(rpc,path='/mcp')[1]['error']['code'],-32602)
+            self.assertEqual(observations(),[local,space])
+            clock[0]=150
+            self.assertEqual([row['state'] for row in observations()],['warning','warning'])
+            clock[0]=210
+            self.assertEqual([row['state'] for row in observations()],['stop','stop'])
+            self.assertEqual(post({'serverName':'ngs-local'})[0],200)
+            local,space=observations()
+            self.assertEqual((local['commitSha'],local['state'],space['commitSha'],space['state']),(None,'connected','b'*40,'stop'))
+
     def test_fixed_mcp_exact_read_tool_and_result_allowlist(self):
         seen=[]
         def call(method,params):
