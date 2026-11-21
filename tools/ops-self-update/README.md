@@ -3,10 +3,9 @@
 This staged coordinator is independent of the OPS web PID. A reviewed user
 LaunchAgent can invoke the pinned copy of `run_once.py` every five minutes.
 The `launchagent.template.plist` has an intentionally non-runnable path.
-An eventual owner-authorized “즉시 배포” button should only kickstart that
-same fixed detached job. There is no alternate command, selected SHA, forced
-execution or alternate eligibility policy. The button integration is not
-included here; existing OPS prepared NGS deployment is a separate path.
+OPS is deliberately excluded from the OPS web deployment tab. The detached
+job is responsible only for the OPS service. Every other deployment target
+uses the separate OPS deployment cycle and its immediate trigger.
 
 GitHub-hosted `prepare-ops-release.yml` runs only on push to the canonical
 main branch. Only OPS tests and the `ops-service/` source artifact are

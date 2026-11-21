@@ -20,63 +20,56 @@ node --check app.js
 node --test test_alarms_ui.mjs
 ```
 
-## Prepared NGS deployment (disabled by default)
+## Deployment controls (disabled by default)
 
-`/deployments` is a separate owner-local screen. It does not wait for or
-use the heartbeat MCP. Set `NGS_OPS_DEPLOY_ENABLED=1` only after configuring
-the prepared-release verifier and the fixed local adapter. The default
-leaves every deployment API disabled.
+`/deployments` is a separate owner-local screen. There are three groups:
+NGS (Local and Space), services (Request Service, Workflow Planner, and
+the backend stack containing PDS), and six workers (document, file,
+image, animation, postprocess, and music). The PDS runs in a seven-service
+stack today and is not a standalone restart target. OPS itself is never
+an OPS deployment target: its independent Mac self-update is documented in
+`tools/ops-self-update/README.md`.
 
-The private owner workflow supplies `~/Workspaces/NGS/runtime/deploy-control`
-(0700) with these exact entries:
+The HTTP action is `POST /api/deployments` with exactly
+`{"action":"wake","target":"worker-audio"}`. Use the
+target ID shown by the status API, or `all` for every listed target.
+The browser sends no SHA, command, path, flags or credentials for GitHub or
+the provider. Only verified candidates for those targets are eligible.
+`all` is not a fallback: it starts nothing if a selected target is
+unavailable. A failure during execution stops the remaining batch. Results
+are recorded per target; it is not a distributed transaction or a rollback
+of targets that already finished. The button, checked background sweep,
+target-specific rollback and verification all go through fixed code paths.
 
-- `owner-key`: a locally delivered random 64-character lowercase hex owner
-  proof (0600). Enter it only in the loopback OPS deployment screen. It is
-  neither prefilled nor passed in a URL, environment variable or log. An
-  authenticated browser receives a 15-minute HttpOnly same-site cookie and
-  a session-bound CSRF token. The existing OPS heartbeat access or
-  loopback reachability alone does not grant deployment access.
-- `prepared.json` (0600): atomically published by a separate trustworthy
-  verifier after validating the canonical GitHub run, actual artifact and
-  prepared Mac release. OPS does not fetch/build on button press:
+`NGS_OPS_DEPLOY_ENABLED=1` enables the owner-local controller, and
+`NGS_OPS_DEPLOY_AUTOMATIC=1` additionally enables the OPS loop (one minute
+between checks by default). Neither switch is enabled by this source.
+Only the existing approved native launcher should set them. Provision
+`~/Workspaces/NGS/runtime/deploy-control` (0700) and an `owner-key` (0600)
+containing a random 64-character lowercase hex key. Enter it only in the
+loopback OPS deployment screen. No key is prefilled, passed in a URL, or
+logged. The browser receives a short-lived HttpOnly same-origin cookie and
+session-bound CSRF token. Heartbeats do not grant deployment access.
 
-      {"schemaVersion":"ops.ngs-prepared-deploy.v1","sha":"<full GitHub SHA>","verifiedAt":"2026-11-22T00:00:00Z",
-       "mac":{"ready":true},"provenance":{"runId":"1","runAttempt":"1","artifactId":"1","archiveSha256":"<64 hex>"}}
+The cycle consumes per-target trusted readiness and a fixed `run-once`
+adapter under the private path `targets/<id>/`. No candidate is generated
+on button press. CI source proof is not deployment readiness; a trusted
+preparation step must verify it and prepare the specific runtime before
+publishing `ready.json`. The fixed Local NGS bridge reads the independently
+prepared exact SHA/digest and uses the existing Mac executor and its durable
+health receipt. Space remains unavailable until an unattended publisher
+that preserves the site's audience and proves its deployed SHA is present.
+A prepared Space bundle is not a deployed Space version.
 
-  An optional exact `space:{sourceSha,packageBaseSha,archiveSha256}` is
-  independent packaging provenance, not a hosted deployment receipt. Even
-  when it exists, Space is **pending**. This feature does not use Sites
-  browser cookies or invoke an undocumented publishing API.
-- `bin/ngs-mac-apply`: the only possible child process; the owner-private
-  binary or script receives the exact prepared GitHub SHA and no other
-  request inputs. Its success response must be
-  `{"sha":"<exact requested SHA>","target":"mac","state":"deployed","health":"verified"}`
-  after its own provenance, transaction, and service health checks.
-- `jobs/` (0700): one private durable job receipt per SHA, never stored in
-  the Request/Workflow ledger. Duplicate actions for the same SHA replay the
-  existing result without launching again. A crash with no final receipt shows
-  **unknown**; do not auto-retry or delete the receipt. Reconcile with the
-  adapter's independent journal and live release before taking action.
-
-The owner-local API requires an exact same-origin browser request context.
-The trigger accepts only `{"action":"deploy","target":"local","sha":"<full prepared SHA>"}`
-plus the session-bound CSRF header. No path, target, flags, command, deploy
-provider credential, Git user input or webhook is accepted.
-
-The tab always distinguishes the prepared GitHub SHA from each target's
-last verified deployment. For already deployed environments, the trusted
-operator may place private `observed.json` (0600). There is intentionally
-no HTTP write/import for it:
+The status API displays independently verified last deployment SHA and time,
+not build time, or no observation. For a verified preexisting NGS baseline
+only, the owner may supply private `observed.json` (0600), never writable via
+HTTP:
 
     {"schemaVersion":"ops.ngs-observed-deployments.v1",
-     "local":{"sha":"<full GitHub SHA>","deployedAt":"2026-11-22T00:00:00Z"},
-     "space":{"sha":"<full GitHub SHA>","deployedAt":"2026-11-22T00:00:00Z",
-              "deploymentId":"<native deployment ID>","providerSha":"<Sites Git SHA>"}}
+     "local":{"sha":"<canonical SHA>","deployedAt":"2026-11-22T00:00:00Z"},
+     "space":{"sha":"<canonical SHA>","deployedAt":"2026-11-22T00:00:00Z",
+              "deploymentId":"<native deployment ID>","providerSha":"<provider SHA>"}}
 
-Use `null` for an environment without verified evidence. A successful
-local job records its actual verified completion time. The UI highlights
-mismatch only when both canonical GitHub SHAs were observed, and never
-compares the Sites Git SHA to the canonical GitHub SHA. Unknown or uncertain
-deployment progress suppresses mismatch. The `all` and `space` targets
-stay disabled and return unavailable until a supported native publisher
-is connected; clicking `all` never silently starts a local-only run.
+Use `null` for an environment without verified proof. Only canonical NGS
+SHAs may be compared, not the provider SHA.
