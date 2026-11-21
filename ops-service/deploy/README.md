@@ -64,3 +64,34 @@ cutover for active work, verified runtime dependencies, and a successful
 isolated apply and rollback check. Planner remains listed but unconfigured
 until its independent health check is available. Space has its own separate
 publisher and is not handled by this Mac adapter.
+
+### Services and worker static target proof
+
+`prepare_service_targets.py` is a staging library, never a launcher or
+network transport. The operator must read the exact canonical main ref,
+matching workflow, successful main push run and artifact metadata from
+GitHub, download the exact artifact ZIP, and confirm main did not advance
+before publishing any state. `verify_target_artifact` checks the canonical
+repo/run/attempt/ZIP digest and the single data-free `release.json`.
+`tracked_targets` binds it to exact reviewed Git object IDs, fixed entrypoints
+and source counts. `assemble_source` creates a new private source release from
+those Git blobs only. It never starts code, copies a runtime tree or reads
+private worker bindings. Existing releases are not overwritten.
+
+For Request Service, `request_candidate` verifies every staged file, pins
+the exact existing selector and required storage/startup module bytes, and
+generates the existing private `candidate.json` DTO without publishing it.
+Folder/data paths, the inbox, and all operators’ configuration stay in place.
+The seven-service backend stack is verified as a single source target, not
+seven deployment switches. Its actionable readiness still needs runtime and
+dependency compatibility proof, particularly the existing private Filex/PDS
+bindings and all seven listener/health checks.
+
+`verify_equivalent` compares tracked non-documentation source bytes to the
+present selected release and rejects unrelated visible files; it is neither
+a health report nor an observed Git revision change. The trusted local
+coordinator can record `equivalent_record` in its private target directory
+bound to the observed prior source and exact selector. Do not write a ready
+record or deployment timestamp for equivalent code. Service/worker target
+publication is separate from source verification and stays in the supported
+private OPS runtime, not a repository checkout.
