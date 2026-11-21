@@ -108,19 +108,42 @@ class LaunchHost:
         return subprocess.run(['/bin/launchctl', *args], timeout=15, capture_output=True,
                               text=True, stdin=subprocess.DEVNULL)
 
-    def pid(self, label):
+    def job(self, label):
         state = self.ctl('print', self.gui + '/' + label)
-        m = LABEL_PID.search(state.stdout) if state.returncode == 0 else None
-        return int(m[1]) if m else None
+        if state.returncode == 113:  # launchctl: no such service in existing gui domain
+            return False, None
+        need(state.returncode == 0, 'TARGET_LAUNCH_STATUS_FAILED')
+        m = LABEL_PID.search(state.stdout)
+        return True, int(m[1]) if m else None
+
+    def pid(self, label):
+        return self.job(label)[1]
+
+    def wait_for(self, check, timeout=5):
+        deadline = time.monotonic() + timeout
+        while True:
+            if check():
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(.15)
 
     def remove(self, label):
+        if not self.job(label)[0]:
+            return  # rollback after a failed bootstrap need not unload anything
         result = self.ctl('bootout', self.gui + '/' + label)
-        need(result.returncode == 0, 'TARGET_UNLOAD_FAILED')
+        need(result.returncode == 0 or (result.returncode == 113 and not self.job(label)[0]),
+             'TARGET_UNLOAD_FAILED')
+        need(self.wait_for(lambda: not self.job(label)[0]), 'TARGET_UNLOAD_TIMEOUT')
 
     def start(self, label, selector):
         need(self.ctl('bootstrap', self.gui, str(selector)).returncode == 0, 'TARGET_BOOTSTRAP_FAILED')
         if self.pid(label) is None:
-            need(self.ctl('kickstart', self.gui + '/' + label).returncode == 0, 'TARGET_START_FAILED')
+            result = self.ctl('kickstart', self.gui + '/' + label)
+            if result.returncode != 0:
+                # RunAtLoad may have won between print and kickstart. A successful
+                # bootstrap and a live PID are required; applied health follows.
+                need(self.wait_for(lambda: self.pid(label) is not None), 'TARGET_START_FAILED')
 
     def get(self, port, path):
         with self.http.open(f'http://127.0.0.1:{port}{path}', timeout=2) as r:
@@ -184,24 +207,31 @@ def apply_target(target, sha, archive_sha, directory, home, host):
         need(selector.read_bytes() == prior, 'TARGET_SELECTOR_CHANGED')
         pid = host.pid(catalog.label)
         need(pid is not None, 'TARGET_PRIOR_NOT_RUNNING')
-        since = datetime.now(timezone.utc)
-        host.remove(catalog.label)
+        try:
+            host.remove(catalog.label)
+        except Exception as error:
+            raise ApplyFailure('unload', diagnostic_code(error)) from None
+        phase = 'selector'
         try:
             atomic_write(selector, desired)
+            phase = 'start'
+            since = datetime.now(timezone.utc)
             host.start(catalog.label, selector)
+            phase = 'health'
             host.wait_healthy(catalog, since, pid)
-        except Exception:
-            failed_pid = host.pid(catalog.label)
+        except Exception as error:
+            rollback = 'failed'
             try:
+                failed_pid = host.pid(catalog.label)
                 host.remove(catalog.label)
+                atomic_write(selector, prior)
+                before = datetime.now(timezone.utc)
+                host.start(catalog.label, selector)
+                host.wait_healthy(catalog, before, failed_pid)
+                rollback = 'restored'
             except Exception:
-                if failed_pid:
-                    raise RuntimeError('TARGET_ROLLBACK_UNLOAD_FAILED')
-            atomic_write(selector, prior)
-            before = datetime.now(timezone.utc)
-            host.start(catalog.label, selector)
-            host.wait_healthy(catalog, before, failed_pid)
-            raise RuntimeError('TARGET_APPLY_FAILED_ROLLED_BACK')
+                pass
+            raise ApplyFailure(phase, diagnostic_code(error), rollback) from None
     finally:
         os.close(lock_fd)
     return dict(schemaVersion='ops.deploy-target-receipt.v1', target=target, sha=sha,
@@ -209,21 +239,62 @@ def apply_target(target, sha, archive_sha, directory, home, host):
                 state='deployed', health='verified')
 
 
+DIAGNOSTIC_CODES = frozenset({
+    'TARGET_INPUT_INVALID', 'TARGET_UNSUPPORTED', 'TARGET_CANDIDATE_MISMATCH',
+    'TARGET_RELEASE_TREE_MISMATCH', 'TARGET_SELECTOR_CHANGED', 'TARGET_PRIOR_NOT_RUNNING',
+    'TARGET_SELECTOR_LABEL', 'TARGET_SELECTOR_ARGUMENTS', 'TARGET_SELECTOR_ENTRY',
+    'TARGET_RS_MCP_SELECTOR', 'TARGET_SELECTOR_WORKDIR', 'TARGET_UNHANDLED_RELEASE_REFERENCE',
+    'TARGET_UNHANDLED_RELEASE_ARG', 'TARGET_RELEASE_ENTRY_MISSING', 'TARGET_AUDIO_ADAPTER',
+    'TARGET_POSTPROCESS_ADAPTER', 'TARGET_LAUNCH_STATUS_FAILED', 'TARGET_UNLOAD_FAILED',
+    'TARGET_UNLOAD_TIMEOUT', 'TARGET_BOOTSTRAP_FAILED', 'TARGET_START_FAILED', 'TARGET_HEALTH_TIMEOUT',
+    'TARGET_HEALTH_HTTP', 'TARGET_OPERATION_TIMEOUT', 'TARGET_PRIVATE_INPUT_INVALID', 'TARGET_APPLY_REFUSED',
+})
+
+
+def diagnostic_code(error):
+    if isinstance(error, subprocess.TimeoutExpired):
+        return 'TARGET_OPERATION_TIMEOUT'
+    value = str(error)
+    if value in DIAGNOSTIC_CODES:
+        return value
+    if value in ('PRIVATE_FILE_REQUIRED', 'PRIVATE_DIRECTORY_REQUIRED'):
+        return 'TARGET_PRIVATE_INPUT_INVALID'
+    return 'TARGET_APPLY_REFUSED'
+
+
+class ApplyFailure(RuntimeError):
+    def __init__(self, phase, code, rollback='not_attempted'):
+        super().__init__(code)
+        self.phase, self.code, self.rollback = phase, code, rollback
+
+
+def error_receipt(target, sha, error):
+    if not isinstance(error, ApplyFailure):
+        error = ApplyFailure('preflight', diagnostic_code(error))
+    return dict(schemaVersion='ops.deploy-target-error.v1', target=target, sha=sha,
+                phase=error.phase, code=error.code, rollback=error.rollback)
+
+
 def main():
     need(len(sys.argv) == 1, 'TARGET_ARGS_FORBIDDEN')
     directory = Path(sys.argv[0]).absolute().parent
     need(directory.parent.name == 'targets' and Path(sys.argv[0]).name == 'run-once',
          'TARGET_RUNNER_LOCATION')
-    receipt = apply_target(directory.name, os.environ.get('OPS_DEPLOY_CANDIDATE_SHA'),
-                           os.environ.get('OPS_DEPLOY_ARTIFACT_SHA256'), directory,
-                           Path.home().resolve(), LaunchHost(os.getuid()))
+    target, sha = directory.name, os.environ.get('OPS_DEPLOY_CANDIDATE_SHA')
+    try:
+        receipt = apply_target(target, sha, os.environ.get('OPS_DEPLOY_ARTIFACT_SHA256'), directory,
+                               Path.home().resolve(), LaunchHost(os.getuid()))
+    except Exception as error:
+        if target in TARGETS and matches(SHA, sha):
+            print(json.dumps(error_receipt(target, sha, error), separators=(',', ':')))
+        return 1
     print(json.dumps(receipt, separators=(',', ':')))
+    return 0
 
 
 if __name__ == '__main__':
     try:
-        main()
-    except Exception as error:
-        code = str(error)
-        print(code if re.fullmatch(r'TARGET_[A-Z_]+', code) else 'TARGET_APPLY_REFUSED', file=sys.stderr)
-        raise SystemExit(1)
+        status = main()
+    except Exception:
+        status = 1
+    raise SystemExit(status)

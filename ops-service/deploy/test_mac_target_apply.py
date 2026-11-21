@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import plistlib
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import mac_target_apply as apply
@@ -101,8 +102,12 @@ class TargetTests(unittest.TestCase):
             home = Path(root).resolve()
             folder, selector, prior, _ = self.make(home, 'worker-document')
             host = FakeHost(True)
-            with self.assertRaisesRegex(RuntimeError, 'ROLLED_BACK'):
+            with self.assertRaises(apply.ApplyFailure) as failure:
                 apply.apply_target('worker-document', 'a' * 40, 'b' * 64, folder, home, host)
+            self.assertEqual(apply.error_receipt('worker-document', 'a' * 40, failure.exception), {
+                'schemaVersion':'ops.deploy-target-error.v1', 'target':'worker-document', 'sha':'a' * 40,
+                'phase':'health', 'code':'TARGET_APPLY_REFUSED','rollback':'restored',
+            })
             self.assertEqual(selector.read_bytes(), prior)
             self.assertEqual([x[0] for x in host.events], ['remove','start','health','remove','start','health'])
 
@@ -119,6 +124,46 @@ class TargetTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'TREE_MISMATCH'):
                 apply.apply_target('worker-document', 'a' * 40, 'b' * 64, folder, home, host)
             self.assertEqual(host.events, [])
+
+
+class NativeSequenceTests(unittest.TestCase):
+    def host(self, results):
+        host = apply.LaunchHost(501)
+        expected = iter(results)
+        def command(verb, *_):
+            match, status, stdout = next(expected)
+            self.assertEqual(verb, match)
+            return SimpleNamespace(returncode=status, stdout=stdout)
+        host.ctl = command
+        # Bounded fake clock path; exact launchctl reads still exercised.
+        host.wait_for = lambda check: any(check() for _ in range(2))
+        self.addCleanup(lambda: self.assertEqual(list(expected), []))
+        return host
+
+    def test_bootout_waits_for_label_not_just_pid(self):
+        host = self.host([('print',0,'pid = 101'),('bootout',0,''),
+                          ('print',0,'state = waiting'),('print',113,'')])
+        host.remove('com.vinus.ngs.rs-mcp')
+
+    def test_kickstart_race_requires_positive_pid(self):
+        host = self.host([('bootstrap',0,''),('print',0,''),('kickstart',5,''),
+                          ('print',0,''),('print',0,'pid = 102')])
+        host.start('com.vinus.ngs.rs-mcp', Path('/not-accessed'))
+        host = self.host([('bootstrap',0,''),('print',0,''),('kickstart',5,''),
+                          ('print',0,''),('print',0,'')])
+        with self.assertRaisesRegex(ValueError, 'TARGET_START_FAILED'):
+            host.start('com.vinus.ngs.rs-mcp', Path('/not-accessed'))
+
+    def test_other_launchctl_error_is_not_disappearance(self):
+        host = self.host([('print',0,'pid = 101'),('bootout',0,''),('print',1,'')])
+        with self.assertRaisesRegex(ValueError, 'TARGET_LAUNCH_STATUS_FAILED'):
+            host.remove('com.vinus.ngs.rs-mcp')
+
+    def test_diagnostic_never_exposes_error_details(self):
+        r = apply.error_receipt('rs-mcp','a'*40, RuntimeError('/not-for-retention /private/path'))
+        self.assertEqual(r['phase'], 'preflight')
+        self.assertEqual(r['code'], 'TARGET_APPLY_REFUSED')
+        self.assertEqual(r['rollback'], 'not_attempted')
 
 
 if __name__ == '__main__':
