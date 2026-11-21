@@ -117,3 +117,13 @@ An exact replay returns the same ID and original time even after state
 advances; a different payload for the same key is rejected. Cancel and other
 external tool permissions are not widened. Do not activate without a verified
 Site adapter and compatible Planner. Native CLI does not configure the reader.
+
+The macOS Request Service may enable the approved Space client with
+`NGS_SPACE_REQUEST_RELAY_ENABLED=1` and
+`NGS_SPACE_REQUEST_CREDENTIAL_FILE=/absolute/private/path.json`. The existing
+local owner supplies a regular mode-0600 file outside code whose object is
+exactly `{token,platformToken}`. No credential is embedded in source or logged.
+The client can only call the fixed approved Site's HTTPS
+`/api/space-machine-mcp` machine endpoint, uses the existing platform service
+authorization and distinct machine token, and does not follow redirects.
+Without explicit enablement, the ordinary local launcher contract is unchanged.

@@ -3,10 +3,13 @@ import {pathToFileURL} from 'node:url';
 import {openOfficialInbox,validateInboxPath} from './official-inbox.mjs';
 import {requestMcp} from './request-mcp.mjs';
 import {startServiceHeartbeat} from './service-heartbeat.mjs';
+import {configureSpaceMachineReader} from './space-machine-reader.mjs';
 
 export const host='127.0.0.1',port=8770;
 export function configuration(env){
- return {directory:validateInboxPath(env.REQUEST_OFFICIAL_INBOX_DIR)};
+ const directory=validateInboxPath(env.REQUEST_OFFICIAL_INBOX_DIR);
+ const readSpaceRequest=configureSpaceMachineReader(env);
+ return {directory,...(readSpaceRequest?{readSpaceRequest}:{})};
 }
 export function createRequestService({directory,readSpaceRequest}){
  if(readSpaceRequest!==undefined&&typeof readSpaceRequest!=='function')throw Error('REQUEST_SPACE_INVALID');
@@ -37,7 +40,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   server.once('close',()=>stopHeartbeat());
   for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{stopHeartbeat();server.close();});
  }catch(error){
-  console.error(['OFFICIAL_REQUEST_INBOX_PRIVATE_REQUIRED','OFFICIAL_REQUEST_SCHEMA_UNSUPPORTED'].includes(error?.message)?error.message:'REQUEST_SERVICE_START_FAILED');
+  console.error(['OFFICIAL_REQUEST_INBOX_PRIVATE_REQUIRED','OFFICIAL_REQUEST_SCHEMA_UNSUPPORTED','REQUEST_SPACE_RELAY_CONFIGURATION_INVALID'].includes(error?.message)?error.message:'REQUEST_SERVICE_START_FAILED');
   process.exitCode=1;
  }
 }
