@@ -44,3 +44,23 @@ before the runner emits a deployed receipt. On failed startup, it restores the
 exact prior selector and verifies service recovery; it never emits a success
 receipt for rollback. Planner is deliberately unsupported until it has an
 independent readiness probe. This code does not install or run any live updater.
+
+## Mac service and worker apply adapter
+
+The detached OPS self-updater does not deploy any of these. OPS runs the fixed
+`mac_target_apply.py` adapter for six workers, RS, and the seven-child backend
+stack. It changes only the fixed LaunchAgent source pins; runtime configuration,
+DB paths and model paths are preserved. It records success only after the new
+process has a fresh heartbeat or, for the stack, all seven health endpoints
+are healthy. Failure attempts to restore the old plist and verify it again.
+
+Use the exact target's trusted candidate manifest and installed-tree digest.
+The hosted `prepare-service-targets.yml` and `prepare-worker-targets.yml`
+workflows report source readiness only. They do not provision private runtime
+config, build native dependencies or automatically publish `ready.json`.
+An OPS runner has to be prepared and pinned locally before a target is eligible.
+Do not enable the timer or provision readiness until that target has a safe
+cutover for active work, verified runtime dependencies, and a successful
+isolated apply and rollback check. Planner remains listed but unconfigured
+until its independent health check is available. Space has its own separate
+publisher and is not handled by this Mac adapter.
