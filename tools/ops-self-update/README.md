@@ -22,7 +22,7 @@ or the canonical proof doesn't match, nothing is applied.
 
 Before enabling separately, an operator needs to verify the existing
 LaunchAgent/OPS code and create the owner-private path
-`~/Workspaces/NGS/runtime/ops-self-update` (0700). Its `installed.json` (0600)
+`~/Workspaces/OPS/runtime/ops-self-update` (0700). Its `installed.json` (0600)
 contains:
 
     {"sha":"<actual canonical ngs-services commit>",
@@ -51,3 +51,65 @@ The terminal private `status.json` exposes only:
 
 No service is installed, no access policy changes and no credentials are
 provisioned by this branch.
+
+## Existing Mac installation: guarded one-time runtime relocation
+
+Private OPS state is isolated from NGS runtime. The only supported roots
+are `~/Workspaces/OPS/runtime/ops-self-update` and its sibling
+`~/Workspaces/OPS/runtime/deploy-control`. No fallback path, symlink, or
+copy of an active owner key is accepted. The pinned script and its
+WorkingDirectory and logs belong to the new self-update root. Other
+services' native state remains where it is.
+
+1. Verify the new canonical GitHub commit and OPS/app/adapters each use the
+   new fixed control root. Let the existing updater apply the new OPS
+   service normally before moving it. The new UI can report deployment
+   controls unconfigured during this narrow transition; its ordinary
+   requests/alarms remain available. Do not try to bootstrap both updaters.
+2. Verify the current OPS label, native process and :8090 are healthy.
+   Compare the actual selector bytes with the existing private
+   `installed.json` receipt. Pin both old directory inodes/device/owner,
+   both destination names absent, and source/destination parent on the
+   same volume (do not merge with existing files or mount paths). Preserve
+   both runtime directory modes 0700. Existing unrelated OPS runtime
+   siblings are never moved.
+3. Pause only the separate `com.vinus.ngs.ops-self-update` LaunchAgent and
+   verify its old PID/label stopped. Do not pause OPS, NGS, PDS, RS,
+   Planner, Space or workers. Obtain the existing nonblocking exclusive
+   locks in the updater and deployment control roots; refuse migration
+   if either is held, its file is not the same inode, the OPS updater
+   journal is in `switching`, or a grouped `active.json` remains.
+   Hold both lock descriptors through relocation and selector rotation.
+4. Keep a separate owner-private exact rollback copy of the original
+   updater LaunchAgent and pinned executable. With the same-volume
+   private guards, rename the verified directories, not their contents;
+   preserve receipts, journals, owner proof, adapter binaries and
+   artifacts without editing their signed/verified identities. If one
+   rename fails, restore the other verified inode before continuing.
+   Install the new exact GitHub-backed updater pin in the new subtree.
+   Re-render only that updater's script/WorkingDirectory/log paths, retain
+   the existing label and interval, and relint the plist. Prior receipts
+   may describe old paths as historical facts. Live runnable references
+   must be reverified from their original publishers, not broadly replaced
+   in records. Unverified/missing candidates remain disabled.
+5. Release the two locks when both moves/rotations are complete, then
+   bootstrap only the same updater label. Verify the normal timer
+   interval, active new script/WorkingDirectory, source proof and file
+   modes; verify :8090, same running OPS PID and its unchanged launch
+   selector, authorized status from the new control root, and the next
+   natural timer receipt. No deploy button or job is needed to test the
+   move. The old two paths must stay absent; do not touch unrelated NGS
+   runtime.
+6. If activation fails, stop only the migrated updater, verify no new
+   cycle and reacquire locks, reverse both guarded same-volume renames,
+   restore the exact previous executable/selector there, and verify the
+   old timer, ordinary OPS health and status. A newer OPS process that
+   only knows the new root may keep deployment actions disabled after a
+   rollback rather than re-enabling old credentials through a fallback;
+   leave it healthy and report the control-plane mismatch for a reviewed
+   update. If drift or a newly active journal makes recovery unsafe,
+   leave paths intact and report exact phase. Do not delete old paths or
+   attempt cross-volume copy as a substitute.
+
+This plan is not an installer and this source change does not operate,
+move, or bootstrap any live service.

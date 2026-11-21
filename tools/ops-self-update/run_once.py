@@ -21,8 +21,9 @@ import urllib.request
 REPO='pvenus/ngs-services'
 REMOTE='https://github.com/'+REPO+'.git'
 WORKFLOW='.github/workflows/prepare-ops-release.yml'
-SUPPORT=Path.home()/'Workspaces/NGS/runtime/ops-self-update'
-DEPLOY_CONTROL=Path.home()/'Workspaces/NGS/runtime/deploy-control'
+OPS_RUNTIME=Path.home()/'Workspaces/OPS/runtime'
+SUPPORT=OPS_RUNTIME/'ops-self-update'
+DEPLOY_CONTROL=OPS_RUNTIME/'deploy-control'
 RELEASES=Path.home()/'Workspaces/BackendServices/code/releases'
 LABEL='com.vinus.npcgen.ops'
 PLIST=Path.home()/'Library/LaunchAgents'/(LABEL+'.plist')

@@ -33,6 +33,19 @@ def tar(members=None):
     return data.getvalue()
 
 
+class FixedRuntime(unittest.TestCase):
+    def test_one_ops_runtime_for_updater_and_deployment_fence(self):
+        runtime=Path.home()/'Workspaces/OPS/runtime'
+        self.assertEqual(R.OPS_RUNTIME,runtime)
+        self.assertEqual(R.SUPPORT,runtime/'ops-self-update')
+        self.assertEqual(R.DEPLOY_CONTROL,runtime/'deploy-control')
+        template=plistlib.loads(Path(__file__).with_name('launchagent.template.plist').read_bytes())
+        self.assertFalse(template['RunAtLoad'])
+        self.assertFalse(template['KeepAlive'])
+        self.assertEqual(template['WorkingDirectory'],'REPLACE_WITH_PINNED_PRIVATE_OPS_UPDATER_DIRECTORY')
+        self.assertEqual(template['ProgramArguments'][-1],'REPLACE_WITH_PINNED_PRIVATE_OPS_RUNTIME_RUN_ONCE_PATH')
+
+
 class Evidence(unittest.TestCase):
     def test_verified_fixed_main_and_most_recent_attempt(self):
         self.assertEqual(R.verify_workflow({'workflow_runs':[result()]},N),{'runId':'12','runAttempt':'1'})
