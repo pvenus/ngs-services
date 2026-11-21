@@ -16,7 +16,7 @@ from deploy_control import KEY, bounded_private, is_sha, reject, secure_director
 
 TARGETS=(
     ('ngs-local','로컬','ngs'),('ngs-space','스페이스','ngs'),
-    ('request-service','Request Service','services'),('workflow-planner','Workflow Planner','services'),
+    ('request-service','Request Service','services'),('rs-mcp','RS-MCP','services'),('workflow-planner','Workflow Planner','services'),
     ('backend-stack','백엔드 스택','services'),
     ('worker-document','문서 워커','workers'),('worker-image','이미지 워커','workers'),
     ('worker-animation','애니메이션 워커','workers'),('worker-postprocess','후처리 워커','workers'),

@@ -7,7 +7,7 @@ const code=readFileSync(new URL('./deployments.js',import.meta.url),'utf8');
 const csrf='f'.repeat(64),a='a'.repeat(40),b='b'.repeat(40);
 const date='2026-11-21T18:01:02Z',newDate='2026-11-21T18:08:15Z';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-const layout={ngs:['ngs-local','ngs-space'],services:['request-service','workflow-planner','backend-stack'],
+const layout={ngs:['ngs-local','ngs-space'],services:['request-service','rs-mcp','workflow-planner','backend-stack'],
  workers:['worker-document','worker-file','worker-image','worker-animation','worker-postprocess','worker-audio']};
 function data({all=true,running=false,compare=null}={}){
  const groups=Object.entries(layout).map(([id,targets])=>({id,label:id,targets:[...targets],canDeploy:true}));
@@ -38,7 +38,7 @@ function fixtures(fetcher){
  const row=target=>find(of('deploy-groups'),n=>n.dataset.deployTarget===target);
  return {of,row,find,hits,scheduled};
 }
-test('grouped page shows 11 known deploy targets and verified evidence only; OPS cannot become a target',async()=>{
+test('grouped page shows 12 known deploy targets and verified evidence only; OPS cannot become a target',async()=>{
  const model=data(),fake={id:'ops',label:'OPS',group:'services',state:'ready',canDeploy:true};
  model.cycle.groups.find(x=>x.id==='services').targets.push(fake.id);model.cycle.targets.push(fake);
  const app=fixtures(async()=>Response.json(model));

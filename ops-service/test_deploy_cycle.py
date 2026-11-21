@@ -46,7 +46,7 @@ class Cycle(unittest.TestCase):
     def test_exact_inventory_and_all_preflight_never_partial_if_one_missing(self):
         c=C.DeploymentCycle(self.root,runner=self.receipt)
         self.assertEqual({r['id'] for r in c.status()['targets']},C.IDS)
-        self.assertEqual(len(C.IDS),11)
+        self.assertEqual(len(C.IDS),12)
         self.assertNotIn('ops',C.IDS)
         for id in C.IDS-{'ngs-space'}:self.stage(id)
         self.assertFalse(c.status()['allReady'])
@@ -62,7 +62,7 @@ class Cycle(unittest.TestCase):
         self.assertEqual([key for key,_ in self.hits],c._selection('all'))
         self.assertEqual(c.status()['comparison'],'match') # provider SHA is independent
         c.trigger('all');c.sweep()
-        self.assertEqual(len(self.hits),11)
+        self.assertEqual(len(self.hits),12)
     def test_failed_candidate_does_not_repeat_and_honors_new_verified_ref(self):
         id='worker-document';folder=self.stage(id)
         def fail(d,r):

@@ -23,7 +23,7 @@ node --test test_alarms_ui.mjs
 ## Deployment controls (disabled by default)
 
 `/deployments` is a separate owner-local screen. There are three groups:
-NGS (Local and Space), services (Request Service, Workflow Planner, and
+NGS (Local and Space), services (Request Service, RS-MCP, Workflow Planner, and
 the backend stack containing PDS), and six workers (document, file,
 image, animation, postprocess, and music). The PDS runs in a seven-service
 stack today and is not a standalone restart target. OPS itself is never

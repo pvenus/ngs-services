@@ -9,7 +9,7 @@ const stateLabels={
 };
 const groupLayout={
  ngs:{label:'NGS',targets:[['ngs-local','로컬'],['ngs-space','스페이스']]},
- services:{label:'서비스',targets:[['request-service','RS'],['workflow-planner','Workflow Planner'],['backend-stack','백엔드 스택 · PDS 포함']]},
+ services:{label:'서비스',targets:[['request-service','RS'],['rs-mcp','RS-MCP'],['workflow-planner','Workflow Planner'],['backend-stack','백엔드 스택 · PDS 포함']]},
  workers:{label:'워커',targets:[['worker-document','문서'],['worker-file','파일'],['worker-image','이미지'],
   ['worker-animation','애니메이션'],['worker-postprocess','후처리'],['worker-audio','음악']]},
 };
