@@ -13,6 +13,8 @@ const groupLayout={
  workers:{label:'워커',targets:[['worker-document','문서'],['worker-file','파일'],['worker-image','이미지'],
   ['worker-animation','애니메이션'],['worker-postprocess','후처리'],['worker-audio','음악']]},
 };
+const spacePublicationHost='vinus-npcgen.park-venus0518.chatgpt.site';
+const spacePublicationUnlinked=target=>target?.state==='not_configured';
 const shaPattern=/^[a-f0-9]{40}$/u,keyPattern=/^[a-f0-9]{64}$/u;
 const stampFormat=new Intl.DateTimeFormat('ko-KR',{dateStyle:'medium',timeStyle:'medium'});
 let current=null,timer=null,active=false,readSequence=0,rowButtons=new Map();
@@ -69,7 +71,9 @@ function groupSection(id,layout,value,targets){
   const item=targets.get(target),state=Object.hasOwn(stateLabels,item?.state)?item.state:'unknown';
   const row=node('tr');row.dataset.deployTarget=target;row.dataset.deployState=state;
   const name=node('th',label);name.scope='row';if(target==='backend-stack')name.append(node('small','PDS와 연결된 백엔드 서비스가 함께 교체됩니다.'));
-  const stateCell=node('td'),badge=node('span',stateLabels[state],'deploy-state');stateCell.append(badge);
+  const spaceUnlinked=target==='ngs-space'&&spacePublicationUnlinked(item);
+  if(target==='ngs-space')name.append(node('small','게시 대상: '+spacePublicationHost));
+  const stateCell=node('td'),badge=node('span',spaceUnlinked?'자동 게시 미연결':stateLabels[state],'deploy-state');stateCell.append(badge);
   const failure=item?.failure;
   if(state==='failed'&&typeof failure?.code==='string'&&/^TARGET_[A-Z_]+$/u.test(failure.code)&&failure.code.length<60){
    const phases={preflight:'준비 확인',unload:'기존 실행 종료',selector:'코드 교체',start:'시작',health:'상태 확인'};
@@ -78,7 +82,7 @@ function groupSection(id,layout,value,targets){
    stateCell.append(node('small',phase+' · '+failure.code+recovery));
   }
   const action=node('td'),button=node('button','배포','deploy-row-action');button.type='button';
-  button.setAttribute('aria-label',label+' 배포');button.disabled=active||item?.canDeploy!==true||state==='running';
+  button.setAttribute('aria-label',label+' 배포');button.disabled=active||item?.canDeploy!==true||state==='running'||spaceUnlinked;
   button.addEventListener('click',()=>void deploy(target,button));
   rowButtons.set(target,button);action.append(button);
   row.append(name,stateCell,evidenceCell(item?.observed),action);body.append(row);
@@ -111,7 +115,7 @@ function render(response){
  current={value,targets};rowButtons=new Map();
  gate.hidden=true;details.hidden=false;
  groupsNode.replaceChildren(...Object.entries(groupLayout).map(([id,layout])=>groupSection(id,layout,value,targets)));
- all.disabled=active||value.canDeployAll!==true;
+ all.disabled=active||value.canDeployAll!==true||spacePublicationUnlinked(targets.get('ngs-space'));
  if(focusTarget&&!rowButtons.get(focusTarget)?.disabled)rowButtons.get(focusTarget)?.focus();
  return [...targets.values()].some(item=>['running','queued'].includes(item.state));
 }

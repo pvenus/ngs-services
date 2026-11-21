@@ -89,3 +89,23 @@ test('authorization boundary and missing configuration never expose executable b
   app.of('deploy-all').fire('click');assert.equal(app.hits.length,1);
  }
 });
+
+test('Space uses a fixed publication destination and unlinked Space cannot be deployed',async()=>{
+ const model=data(),space=model.cycle.targets.find(x=>x.id==='ngs-space');
+ space.state='not_configured';space.canDeploy=true;space.destination='untrusted.example';
+ const app=fixtures(async()=>Response.json(model));await flush();
+ const row=app.row('ngs-space');
+ assert.ok(app.find(row,n=>n.textContent==='게시 대상: vinus-npcgen.park-venus0518.chatgpt.site'));
+ assert.ok(app.find(row,n=>n.textContent==='자동 게시 미연결'));
+ assert.equal(app.find(row,n=>n.textContent.includes('untrusted.example')),undefined);
+ assert.equal(app.find(row,n=>n.tag==='button').disabled,true);
+ assert.equal(app.of('deploy-all').disabled,true);
+ assert.match(app.find(app.of('deploy-groups'),n=>n.className.includes('deploy-comparison')).textContent,/버전 불일치/);
+ app.find(row,n=>n.tag==='button').fire('click');app.of('deploy-all').fire('click');
+ assert.equal(app.hits.length,1);
+ space.state='ready';
+ app.of('deploy-refresh').fire('click');await flush();
+ assert.equal(app.find(app.row('ngs-space'),n=>n.textContent==='자동 게시 미연결'),undefined);
+ assert.ok(app.find(app.row('ngs-space'),n=>n.textContent==='배포 준비'));
+ assert.equal(app.find(app.row('ngs-space'),n=>n.tag==='button').disabled,false);
+});
