@@ -115,6 +115,28 @@ class EvidenceFixture(unittest.TestCase):
             self.assertEqual(record, prep.json_load((control / "prepared.json").read_bytes()))
             self.assertEqual((control / "prepared.json").stat().st_mode & 0o777, 0o600)
 
+    def test_cycle_receives_only_the_matching_prepared_sha_and_pinned_runner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve()
+            record={"sha":self.head,"verifiedAt":"2026-11-22T04:00:00Z",
+                    "provenance":{"archiveSha256":"c"*64}}
+            self.assertIsNone(prep.publish_ngs_local_ready(root, record))
+            (root/'targets').mkdir(mode=0o700)
+            target=root/'targets/ngs-local'
+            target.mkdir(mode=0o700)
+            runner=target/'run-once'
+            runner.write_bytes(b'fixed runner')
+            runner.chmod(0o500)
+            prep.atomic_write(root/'prepared.json',prep.json_bytes(record))
+            published=prep.publish_ngs_local_ready(root, record)
+            self.assertEqual(published["runnerSha256"],prep.digest(b'fixed runner'))
+            self.assertEqual(published["artifactSha256"],"c"*64)
+            self.assertEqual(published["sha"],self.head)
+            self.assertEqual(prep.json_load((target/'ready.json').read_bytes()),published)
+            with self.assertRaisesRegex(prep.Refused,'NGS_LOCAL_PREPARED_MOVED'):
+                prep.publish_ngs_local_ready(root,{**record,"sha":"1"*40})
+            self.assertEqual(prep.json_load((target/'ready.json').read_bytes()),published)
+
     def test_latest_main_fetch_reads_one_exact_successfully_bound_artifact(self):
         fix = self
         base = "repos/" + prep.REPO + "/"

@@ -202,6 +202,35 @@ def atomic_write(path, payload):
             pass
 
 
+def publish_ngs_local_ready(control, record):
+    """Project a verified Local release into the provisioned OPS cycle.
+
+    Invoke only from the successful preparation pipeline. No path or SHA comes
+    from HTTP. A missing target or runner leaves the prepared release offline.
+    """
+    private_directory(control)
+    root=control/'targets'
+    target=root/'ngs-local'
+    try:
+        private_directory(root)
+        private_directory(target)
+        runner=target/'run-once'
+        private_file(runner)
+    except FileNotFoundError:
+        return None
+    attrs=runner.lstat()
+    need(stat.S_IMODE(attrs.st_mode) in (0o500,0o700) and 0<attrs.st_size<=1024*1024,
+         'NGS_LOCAL_RUNNER_UNTRUSTED')
+    bundle=record['provenance']['archiveSha256']
+    public={"schemaVersion":"ops.deploy-target-ready.v1","target":"ngs-local","sha":record['sha'],
+            "artifactSha256":bundle,"runnerSha256":digest(runner.read_bytes()),"verifiedAt":record['verifiedAt']}
+    require=control/'prepared.json'
+    private_file(require,0o600)
+    need(json_load(require.read_bytes())==record,'NGS_LOCAL_PREPARED_MOVED')
+    atomic_write(target/'ready.json', json_bytes(public))
+    return public
+
+
 def write_prepared(verified, control, installed, execution, prior_plist, *, expected_prior_sha256, stamp=None):
     head, proof = verified["head"], verified["evidence"]
     for directory in (control, installed, execution, control / "mac-releases"):
@@ -255,6 +284,7 @@ def write_prepared(verified, control, installed, execution, prior_plist, *, expe
               "mac": {"ready": True}, "provenance": proof}
     require_original_plist()
     atomic_write(control / "prepared.json", json_bytes(record))
+    publish_ngs_local_ready(control, record)
     return record
 
 
