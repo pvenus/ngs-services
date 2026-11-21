@@ -44,6 +44,13 @@ LIMIT = 64 * 1024
 SOURCE = {".py": "python", ".mjs": "js", ".cjs": "js", ".js": "js", ".json": "json"}
 NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
 SUFFIX = {".py", ".mjs", ".cjs", ".js", ".json", ".md", ".toml", ".sql", ".txt", ".yaml", ".yml", ".html", ".css"}
+WORKER_SUM = re.compile(r"workflow-production/(?:animation|document|file|image|postprocess)/"
+                        r"vendor/planner-(?:[0-9a-f]{7,40}|pixel-sprite-v1)/SHA256SUMS")
+
+
+def permitted_source(path, family):
+    return (path.name == ".gitignore" or path.suffix in SUFFIX
+            or family == WORKERS and WORKER_SUM.fullmatch(path.as_posix()) is not None)
 
 
 def verify_target_artifact(head, workflow, run, artifact, raw, *, repo):
@@ -113,7 +120,7 @@ def tracked_targets(verified, repo):
                 path = Path(name)
                 need(mode in {b"100644", b"100755"} and kind == b"blob" and name.startswith(root + "/")
                      and all(NAME.fullmatch(part) or part == ".gitignore" for part in path.parts)
-                     and (path.name == ".gitignore" or path.suffix in SUFFIX)
+                     and permitted_source(path, p["repository"])
                      and not any(part.lower() in {"private", "credentials", "tokens", "secrets"} for part in path.parts)
                      and name not in files, "TARGET_TRACKED_SOURCE_SCOPE_INVALID")
                 files[name] = (blob.decode(), int(mode[-3:], 8))

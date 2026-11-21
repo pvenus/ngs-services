@@ -124,5 +124,16 @@ class ServiceTargets(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "MIGRATION_NOT_VERIFIED"):
                 p.request_candidate(result, self.repo, stage, home, sha)
 
+
+    def test_worker_vendor_checksums_only_in_known_source_subtree(self):
+        good = Path("workflow-production/image/vendor/planner-f24d23a/SHA256SUMS")
+        self.assertTrue(p.permitted_source(good, p.WORKERS))
+        self.assertTrue(p.permitted_source(Path("workflow-production/image/vendor/planner-pixel-sprite-v1/SHA256SUMS"), p.WORKERS))
+        self.assertFalse(p.permitted_source(good, p.SERVICES))
+        for n in ("workflow-production/image/SHA256SUMS",
+                  "workflow-production/image/vendor/other/SHA256SUMS",
+                  "workflow-production/native-image/vendor/planner-f24d23a/SHA256SUMS"):
+            self.assertFalse(p.permitted_source(Path(n), p.WORKERS))
+
 if __name__ == "__main__":
     unittest.main()
