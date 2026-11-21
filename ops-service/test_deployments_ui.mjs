@@ -12,7 +12,7 @@ const layout={ngs:['ngs-local','ngs-space'],services:['request-service','rs-mcp'
 function data({all=true,running=false,compare=null}={}){
  const groups=Object.entries(layout).map(([id,targets])=>({id,label:id,targets:[...targets],canDeploy:true}));
  return {csrf,observed:{local:{sha:a,deployedAt:date},space:{sha:b,deployedAt:newDate}},cycle:{groups,
-  comparison:compare,canDeployAll:all,targets:groups.flatMap(({id,targets})=>targets.map(target=>({
+  comparison:compare,sourceComparison:running?'unknown':'different-local-source',canDeployAll:all,targets:groups.flatMap(({id,targets})=>targets.map(target=>({
    id:target,label:target,group:id,state:target==='ngs-space'&&running?'running':target==='worker-image'?'blocked':
     target==='worker-file'?'not_configured':'ready',
    candidateSha:target==='worker-file'?'e'.repeat(40):a,
@@ -53,7 +53,7 @@ test('grouped page shows 12 known deploy targets and verified evidence only; OPS
  assert.equal(app.find(app.row('worker-file'),n=>n.tag==='time'),undefined);
  assert.equal(app.find(app.row('worker-document'),n=>n.tag==='code').title,a);
  assert.equal(app.find(app.row('worker-document'),n=>n.tag==='time').dateTime,date);
- assert.match(app.find(app.of('deploy-groups'),n=>n.className.includes('deploy-comparison')).textContent,/버전 불일치/);
+ assert.match(app.find(app.of('deploy-groups'),n=>n.className.includes('deploy-comparison')).textContent,/로컬 코드 차이/);
  assert.equal(app.of('deploy-all').disabled,false);
 });
 test('manual row and all issue only wake for selected scope; disabled state cannot send',async()=>{
@@ -100,7 +100,7 @@ test('Space uses a fixed publication destination and unlinked Space cannot be de
  assert.equal(app.find(row,n=>n.textContent.includes('untrusted.example')),undefined);
  assert.equal(app.find(row,n=>n.tag==='button').disabled,true);
  assert.equal(app.of('deploy-all').disabled,true);
- assert.match(app.find(app.of('deploy-groups'),n=>n.className.includes('deploy-comparison')).textContent,/버전 불일치/);
+ assert.match(app.find(app.of('deploy-groups'),n=>n.className.includes('deploy-comparison')).textContent,/로컬 코드 차이/);
  app.find(row,n=>n.tag==='button').fire('click');app.of('deploy-all').fire('click');
  assert.equal(app.hits.length,1);
  space.state='ready';
@@ -202,4 +202,13 @@ test('Space queue submits only the verified candidate and presents publication l
   assert.equal(button().disabled,true);button().fire('click');
  }
  assert.equal(app.hits.filter(([,o])=>o.method==='POST').length,1);
+});
+
+test('Space-only differences in GitHub commit do not color an equal Local source as an error',async()=>{
+ const model=data();
+ model.cycle.sourceComparison='same-local-source';
+ const app=fixtures(async()=>Response.json(model));await flush();
+ const note=app.find(app.of('deploy-groups'),n=>n.className.includes('deploy-comparison'));
+ assert.match(note.textContent,/로컬 코드 일치/);
+ assert.doesNotMatch(note.className,/deploy-mismatch/);
 });

@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from deploy_control import COOKIE, TTL, KEY, Rejected, from_environment
 from heartbeat import Heartbeats, MCP_TOOL, SERVER_NAME_PATTERN
+from ngs_source_compare import NgsSourceCompare
 from space_publish_api import METHODS as SPACE_PUBLISH_TOOLS, SpacePublisher
 from space_publish_queue import QueueRejected
 from request_progress import ProgressUnavailable, query_id, read_alarms, read_progress
@@ -262,6 +263,16 @@ class Handler(BaseHTTPRequestHandler):
                                 if local:state['cycle']['comparison']='match' if local['sha']==observation['sha'] else 'mismatch'
                         except (Rejected,OSError,ValueError):
                             row['publication'].update(canRequest=False,candidateSha=None)
+                cycle=state['cycle']
+                rows={row['id']:row for row in cycle.get('targets',[])}
+                pair=[rows.get(name,{}) for name in ('ngs-local','ngs-space')]
+                if all(row and row.get('state') not in ('running','queued','failed','unknown') for row in pair):
+                    baseline=state.get('observed',{})
+                    shas=[(row.get('observed') or baseline.get(name) or {}).get('sha')
+                          for row,name in zip(pair,('local','space'))]
+                    cycle['sourceComparison']=self.server.ngs_source_compare.classify(*shas)
+                else:
+                    cycle['sourceComparison']='unknown'
                 return self.send(200,state)
             sizes=self.headers.get_all('Content-Length',[])
             if (self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Encoding') or
@@ -368,6 +379,7 @@ def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress
     http.space_publisher_lock=threading.Lock()
     http.current_space_publisher=None
     http.space_candidate=space_candidate
+    http.ngs_source_compare=NgsSourceCompare()
     http.heartbeats=heartbeats if heartbeats is not None else Heartbeats()
     return http
 

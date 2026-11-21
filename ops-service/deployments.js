@@ -45,15 +45,17 @@ function compare(value,targets){
  const localRow=targets.get('ngs-local'),spaceRow=targets.get('ngs-space');
  const local=evidence(localRow?.observed),space=evidence(spaceRow?.observed);
  const inProgress=[localRow,spaceRow].some(row=>['running','queued','failed','unknown'].includes(row?.state));
- const comparison=value.comparison===null&&!inProgress&&local&&space?
-  (local.sha===space.sha?'match':'mismatch'):value.comparison;
- if(!local||!space||!['match','mismatch'].includes(comparison)){
-  compareNode.textContent='로컬·스페이스 양쪽 배포가 확인되면 버전을 비교합니다.';
- }else if(comparison==='mismatch'&&local.sha!==space.sha){
-  compareNode.className+=' deploy-mismatch';compareNode.textContent='버전 불일치: 로컬·스페이스에 다른 커밋이 배포돼 있습니다.';
- }else if(comparison==='match'&&local.sha===space.sha){
+ const comparison=inProgress?'unknown':value.sourceComparison;
+ if(!local||!space){
+  compareNode.textContent='로컬·스페이스 양쪽 배포가 확인되면 소스를 비교합니다.';
+ }else if(local.sha===space.sha&&!inProgress){
   compareNode.textContent='버전 일치: 로컬·스페이스에 같은 커밋이 배포돼 있습니다.';
- }else compareNode.textContent='검증된 버전 비교를 확인할 수 없습니다.';
+ }else if(comparison==='same-local-source'){
+  compareNode.textContent='로컬 코드 일치: 배포 커밋은 다르지만 로컬에 쓰는 코드는 같습니다.';
+ }else if(comparison==='different-local-source'){
+  compareNode.className+=' deploy-mismatch';
+  compareNode.textContent='로컬 코드 차이: 두 배포에 포함된 로컬 소스가 다릅니다.';
+ }else compareNode.textContent='로컬 소스의 일치 여부를 아직 확인하지 못했습니다.';
  return compareNode;
 }
 const threadUrlPattern=/^(?:https:\/\/chatgpt\.com\/c\/|codex:\/\/threads\/)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\s\S])/u;

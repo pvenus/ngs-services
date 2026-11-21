@@ -71,7 +71,7 @@ class DeployTests(unittest.TestCase):
             self.assertEqual(self.req(port,'/api/deployments/session',{'ownerKey':KEY},{'Sec-Fetch-Site':'cross-site'})[0],403)
             self.assertEqual(self.req(port,'/api/deployments/session',{'ownerKey':'e'*64})[0],403)
             sid,data=self.auth(port)
-            self.assertEqual(data['cycle'],{'allReady':False,'targets':[]})
+            self.assertEqual(data['cycle'],{'allReady':False,'targets':[],'sourceComparison':'unknown'})
             self.assertEqual(self.wake(port,sid)[0],403)
             self.assertEqual(self.wake(port,{**sid,'X-OPS-Deploy-CSRF':'e'*64})[0],403)
             verified={**sid,'X-OPS-Deploy-CSRF':data['csrf']}
