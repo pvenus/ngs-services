@@ -175,6 +175,23 @@ function serviceCard({serverName,state,missed,lastReceivedAt,commitSha}){
  }
  return item;
 }
+const serviceGroupLabels={ngs:'NGS',services:'서비스',workers:'워커'};
+function serviceGroups(rows){
+ const byGroup={ngs:[],services:[],workers:[]};
+ for(const row of rows){
+  const name=row.serverName;
+  const group=name==='ngs-local'||name==='ngs-space'?'ngs':
+   (name.endsWith('-worker')||name.startsWith('worker-'))?'workers':'services';
+  byGroup[group].push(row);
+ }
+ return Object.entries(byGroup).filter(([,items])=>items.length).map(([group,items])=>{
+  const section=document.createElement('section'),title=document.createElement('h2'),list=document.createElement('ul');
+  section.className='deploy-group';section.dataset.group=group;
+  title.textContent=serviceGroupLabels[group];
+  list.append(...items.map(serviceCard));section.append(title,list);
+  return section;
+ });
+}
 let checkingServices=false;
 async function checkServices(){
  if(checkingServices)return;
@@ -183,7 +200,7 @@ async function checkServices(){
   const res=await fetch('/api/service-status',{cache:'no-store',signal:AbortSignal.timeout(6500)});
   if(!res.ok)throw Error('STATUS_UNAVAILABLE');
   const data=await res.json();
-  $('service-rows').replaceChildren(...data.services.map(serviceCard));
+  $('service-rows').replaceChildren(...serviceGroups(data.services));
   $('service-empty').textContent=data.services.length?'':'헬스체크를 받은 서버가 없습니다.';
   $('service-checked-at').textContent='화면 갱신 '+shortTime(data.checkedAt);
  }catch{
