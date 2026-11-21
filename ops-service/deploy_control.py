@@ -34,6 +34,12 @@ def is_sha(value):
     return type(value) is str and bool(SHA.fullmatch(value))
 
 
+def stamp(value):
+    if type(value) is not str or not STAMP.fullmatch(value):
+        raise ValueError('INVALID_DEPLOY_TIMESTAMP')
+    return datetime.datetime.fromisoformat(value)
+
+
 def secure_directory(path):
     attrs = path.lstat()
     if path.resolve() != path or attrs.st_uid != os.getuid() or not stat.S_ISDIR(attrs.st_mode) or stat.S_IMODE(attrs.st_mode) != 0o700:
@@ -154,13 +160,54 @@ class DeployControl:
 
     def _job(self, sha):
         try:
-            expected=json.loads(bounded_private(self.root/'jobs'/f'{sha}.json',512))
+            item=json.loads(bounded_private(self.root/'jobs'/f'{sha}.json',512))
         except FileNotFoundError:
             return None
-        if (not isinstance(expected,dict) or set(expected)!={'sha','state'} or expected['sha']!=sha or
-            expected['state'] not in ('running','deployed','failed')):
+        if (not isinstance(item,dict) or set(item)-{'deployedAt'}!={'sha','state'} or item['sha']!=sha or
+            item['state'] not in ('running','deployed','failed') or
+            ('deployedAt' in item) != (item['state']=='deployed')):
             raise ValueError('INVALID_DEPLOY_JOB')
-        return expected['state']
+        if 'deployedAt' in item:stamp(item['deployedAt'])
+        return item
+
+    def _baseline(self):
+        try:
+            value=json.loads(bounded_private(self.root/'observed.json',2048))
+        except FileNotFoundError:
+            return {'local':None,'space':None}
+        if (not isinstance(value,dict) or set(value)!={'schemaVersion','local','space'} or
+            value['schemaVersion']!='ops.ngs-observed-deployments.v1'):
+            raise ValueError('INVALID_OBSERVED_RELEASES')
+        for target in ('local','space'):
+            item=value[target]
+            if item is None:continue
+            expected={'sha','deployedAt'} | ({'providerSha','deploymentId'} if target=='space' else set())
+            if not isinstance(item,dict) or set(item)!=expected or not is_sha(item['sha']):
+                raise ValueError('INVALID_OBSERVED_RELEASE')
+            stamp(item['deployedAt'])
+            if target=='space' and (not is_sha(item['providerSha']) or type(item['deploymentId']) is not str or not
+                    re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}',item['deploymentId'])):
+                raise ValueError('INVALID_SPACE_RECEIPT')
+        return {'local':value['local'],'space':value['space']}
+
+    def _jobs(self):
+        with os.scandir(self.root/'jobs') as entries:
+            for index, entry in enumerate(entries):
+                if index>=4096:raise ValueError('DEPLOY_RECEIPT_LIMIT')
+                if not entry.name.endswith('.json') or not is_sha(entry.name[:-5]):continue
+                job=self._job(entry.name[:-5])
+                if job:yield job
+
+    def _last_local(self, observed, jobs):
+        # Receipts are written atomically per SHA. Derive the latest completed
+        # observation without a possible split/crash between a job and pointer.
+        choices=([observed] if observed else [])+[
+            {'sha':job['sha'],'deployedAt':job['deployedAt']}
+            for job in jobs if job['state']=='deployed']
+        if not choices:return None
+        newest=max(item['deployedAt'] for item in choices)
+        items=[item for item in choices if item['deployedAt']==newest]
+        return items[0] if len({item['sha'] for item in items})==1 else None
 
     def _stored(self, path, payload, *, first=False):
         raw=(json.dumps(payload,separators=(',',':'))+'\n').encode()
@@ -190,7 +237,10 @@ class DeployControl:
         finally:
             with self.lock:
                 try:
-                    self._stored(self.root/'jobs'/f'{sha}.json',{'sha':sha,'state':state})
+                    record={'sha':sha,'state':state}
+                    if state=='deployed':
+                        record['deployedAt']=datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    self._stored(self.root/'jobs'/f'{sha}.json',record)
                 except (OSError,UnboundLocalError):
                     pass # A restart/unpersisted receipt is shown as unknown, never retried automatically.
                 finally:
@@ -198,16 +248,25 @@ class DeployControl:
 
     def _display(self):
         candidate=self._prepared()
-        if not candidate:
-            return {'sha':None,'verifiedAt':None,'mac':'not_prepared','space':'not_configured','canDeploy':False}
-        sha=candidate['sha']
-        state=self._job(sha)
-        if state=='running' and self.active!=sha:
+        observed=self._baseline()
+        jobs=list(self._jobs())
+        observed['local']=self._last_local(observed['local'],jobs)
+        sha=candidate['sha'] if candidate else None
+        job=self._job(sha) if sha else None
+        state=job['state'] if job else None
+        if self.active is not None and self.active!=sha:
+            state='running'
+        if self.active is None and any(item['state']=='running' for item in jobs):
             state='unknown'
         if state is None:
-            state='ready' if self._adapter_ready() else 'not_configured'
-        return {'sha':sha,'verifiedAt':candidate['verifiedAt'],'mac':state,'space':'pending' if 'space' in candidate else 'not_configured',
-                'canDeploy':state=='ready' and self.active is None}
+            state=('ready' if self._adapter_ready() else 'not_configured') if candidate else 'not_prepared'
+        space_state=('pending' if candidate and 'space' in candidate else 'not_configured')
+        compare=None
+        if observed['local'] and observed['space'] and state not in ('running','failed','unknown'):
+            compare='match' if observed['local']['sha']==observed['space']['sha'] else 'mismatch'
+        return {'sha':sha,'verifiedAt':candidate['verifiedAt'] if candidate else None,
+                'mac':state,'space':space_state,'observed':observed,'comparison':compare,
+                'canDeploy':state=='ready' and self.active is None,'canDeploySpace':False,'canDeployAll':False}
 
     def status(self, sid):
         with self.lock:
@@ -217,10 +276,11 @@ class DeployControl:
             except (OSError,ValueError):
                 reject(503,'OPS_DEPLOY_NOT_CONFIGURED')
 
-    def request(self, sid, csrf, sha):
+    def request(self, sid, csrf, sha, target):
         with self.lock:
             try:
                 self._session(sid,csrf)
+                if target!='local':reject(503,'OPS_DEPLOY_SPACE_PUBLISH_UNAVAILABLE')
                 candidate=self._prepared()
                 if not candidate or candidate['sha']!=sha:
                     reject(409,'OPS_DEPLOY_RELEASE_NOT_PREPARED')
@@ -231,6 +291,9 @@ class DeployControl:
                     reject(503,'OPS_DEPLOY_ADAPTER_UNAVAILABLE')
                 if self.active is not None:
                     reject(409,'OPS_DEPLOY_ALREADY_RUNNING')
+                if any(item['state']=='running' for item in self._jobs()):
+                    reject(409,'OPS_DEPLOY_PREVIOUS_RESULT_UNKNOWN')
+                self._display() # Check evidence shape before committing execution.
                 path=self.root/'jobs'/f'{sha}.json'
                 if self._stored(path,{'sha':sha,'state':'running'},first=True):
                     self.active=sha

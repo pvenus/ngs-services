@@ -236,11 +236,12 @@ class Handler(BaseHTTPRequestHandler):
             if action=='session' and set(value)=={'ownerKey'}:
                 session=control.begin(value['ownerKey'])
                 return self.send(200,{'ok':True},cookie=f'{COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/api/deployments; Max-Age={TTL}')
-            if action=='apply' and set(value)=={'sha','action'} and value['action']=='deploy' and is_sha(value['sha']):
+            if (action=='apply' and set(value)=={'sha','action','target'} and value['action']=='deploy' and
+                    value['target'] in ('local','space','all') and is_sha(value['sha'])):
                 token=self.headers.get_all('X-OPS-Deploy-CSRF',[])
                 if len(token)!=1 or not KEY.fullmatch(token[0]):
                     return self.send(403,{'error':'OPS_DEPLOY_CSRF_DENIED'})
-                return self.send(202,control.request(sid,token[0],value['sha']))
+                return self.send(202,control.request(sid,token[0],value['sha'],value['target']))
             raise ValueError('INVALID_BODY')
         except Rejected as exc:
             return self.send(exc.status,{'error':exc.code})

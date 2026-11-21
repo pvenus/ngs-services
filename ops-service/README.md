@@ -59,6 +59,24 @@ The private owner workflow supplies `~/Workspaces/NGS/runtime/deploy-control`
   adapter's independent journal and live release before taking action.
 
 The owner-local API requires an exact same-origin browser request context.
-The trigger accepts only `{"action":"deploy","sha":"<full prepared SHA>"}`
+The trigger accepts only `{"action":"deploy","target":"local","sha":"<full prepared SHA>"}`
 plus the session-bound CSRF header. No path, target, flags, command, deploy
 provider credential, Git user input or webhook is accepted.
+
+The tab always distinguishes the prepared GitHub SHA from each target's
+last verified deployment. For already deployed environments, the trusted
+operator may place private `observed.json` (0600). There is intentionally
+no HTTP write/import for it:
+
+    {"schemaVersion":"ops.ngs-observed-deployments.v1",
+     "local":{"sha":"<full GitHub SHA>","deployedAt":"2026-11-22T00:00:00Z"},
+     "space":{"sha":"<full GitHub SHA>","deployedAt":"2026-11-22T00:00:00Z",
+              "deploymentId":"<native deployment ID>","providerSha":"<Sites Git SHA>"}}
+
+Use `null` for an environment without verified evidence. A successful
+local job records its actual verified completion time. The UI highlights
+mismatch only when both canonical GitHub SHAs were observed, and never
+compares the Sites Git SHA to the canonical GitHub SHA. Unknown or uncertain
+deployment progress suppresses mismatch. The `all` and `space` targets
+stay disabled and return unavailable until a supported native publisher
+is connected; clicking `all` never silently starts a local-only run.

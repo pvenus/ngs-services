@@ -13,10 +13,11 @@
  <dl>
   <dt>GitHub 커밋</dt><dd><code id="deploy-sha"></code></dd>
   <dt>검증 시각</dt><dd id="deploy-verified"></dd>
-  <dt>Mac</dt><dd id="deploy-mac"></dd>
-  <dt>Space</dt><dd id="deploy-space"></dd>
+  <dt>로컬</dt><dd><span id="deploy-mac"></span><br><small id="deploy-local-observed"></small></dd>
+  <dt>스페이스</dt><dd><span id="deploy-space"></span><br><small id="deploy-space-observed"></small></dd>
  </dl>
- <p><button id="deploy-apply" type="button" disabled>Mac에 배포</button></p>
- <p>Mac 배포가 완료되어도 Space에 자동 게시되지 않습니다.</p>
+ <p id="deploy-comparison" aria-live="polite"></p>
+ <div class="actions"><button id="deploy-all" type="button" disabled>모두 배포</button> <button id="deploy-local" type="button" disabled>로컬</button> <button id="deploy-site" type="button" disabled>스페이스</button></div>
+ <p>스페이스 자동 게시가 연결되기 전에는 로컬 배포만 실행할 수 있습니다.</p>
 </section>
 </main></html>

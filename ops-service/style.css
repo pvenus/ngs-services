@@ -58,3 +58,5 @@
 #progress-rows .progress-dependency{color:#175c90;text-decoration:underline;text-underline-offset:2px}
 #progress-rows .progress-dependency:focus-visible{outline:2px solid #236da4;outline-offset:3px}
 #progress-rows tr.dependency-target{outline:2px solid #236da4;outline-offset:-2px}
+
+.deploy-mismatch{font-weight:700;color:#a32e23;border-inline-start:3px solid currentColor;padding-inline-start:.6rem}

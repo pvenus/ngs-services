@@ -53,8 +53,8 @@ class DeployTests(unittest.TestCase):
         status,_,raw=self.req(port,'/api/deployments',headers=sid)
         self.assertEqual(status,200)
         return sid,json.loads(raw)
-    def apply(self,p,auth,sha=SHA):
-        return self.req(p,'/api/deployments',{'sha':sha,'action':'deploy'},auth)
+    def apply(self,p,auth,sha=SHA,target='local'):
+        return self.req(p,'/api/deployments',{'sha':sha,'action':'deploy','target':target},auth)
     def test_default_off_and_not_discoverable_through_heartbeat(self):
         self.assertIsNone(D.from_environment({}))
         with started(S.server(0)) as port:
@@ -81,11 +81,16 @@ class DeployTests(unittest.TestCase):
             sid,data=self.auth(port)
             self.assertEqual((data['sha'],data['mac'],data['space'],data['canDeploy']),(SHA,'ready','pending',True))
             self.assertNotIn('archiveSha256',data)
+            self.assertIsNone(data['comparison'])
+            self.assertFalse(data['canDeploySpace'])
+            self.assertFalse(data['canDeployAll'])
             self.assertEqual(self.apply(port,sid)[0],403)
             self.assertEqual(self.apply(port,{**sid,'X-OPS-Deploy-CSRF':'x'*64})[0],403)
             verified={**sid,'X-OPS-Deploy-CSRF':data['csrf']}
             self.assertEqual(self.apply(port,verified,OTHER)[0],409)
-            self.assertEqual(self.req(port,'/api/deployments',{'action':'deploy','sha':SHA,'argv':['bad']},verified)[0],400)
+            for unsupported in ('all','space'):
+                self.assertEqual(self.apply(port,verified,target=unsupported)[0],503)
+            self.assertEqual(self.req(port,'/api/deployments',{'action':'deploy','sha':SHA,'target':'local','argv':['bad']},verified)[0],400)
             self.assertEqual(self.req(port,'/api/deployments',b'{"sha":"'+SHA.encode()+b'","action":"deploy","action":"deploy"}',verified)[0],400)
             with ThreadPoolExecutor(2) as threads:
                 result=list(threads.map(lambda _:self.apply(port,verified),range(2)))
@@ -103,6 +108,10 @@ class DeployTests(unittest.TestCase):
             else:self.fail('durable completion not observed')
             self.assertEqual(json.loads(self.apply(port,verified)[2])['mac'],'deployed')
             self.assertEqual(len(hits),1)
+            final=json.loads(raw)
+            self.assertEqual(final['observed']['local']['sha'],SHA)
+            D.stamp(final['observed']['local']['deployedAt'])
+            self.assertIsNone(final['observed']['space'])
             self.assertEqual(next((self.root/'jobs').glob('*.json')).stat().st_mode&0o777,0o600)
         # Persisted completion/replay accounting survives an OPS restart.
         c=D.DeployControl(self.root,run_mac=runner)
@@ -150,3 +159,32 @@ class DeployTests(unittest.TestCase):
             self.assertEqual(self.apply(port,{**sid,'X-OPS-Deploy-CSRF':data['csrf']})[0],503)
             self.prepared(provenance={'runId':'x'})
             self.assertEqual(self.req(port,'/api/deployments',headers=sid)[0],503)
+
+    def test_compares_only_verified_observations_not_provider_or_candidate(self):
+        seen=[]
+        when='2026-11-22T04:05:00Z'
+        def observed(local,space):
+            private(self.root/'observed.json',json.dumps({
+                'schemaVersion':'ops.ngs-observed-deployments.v1','local':local,'space':space}).encode())
+        c=D.DeployControl(self.root,run_mac=lambda *values:seen.append(values))
+        obj={'sha':SHA,'deployedAt':when}
+        native={**obj,'providerSha':OTHER,'deploymentId':'release.real-42'}
+        observed(obj,native)
+        with started(S.server(0,deploy_control=c)) as port:
+            sid,data=self.auth(port)
+            self.assertEqual(data['comparison'],'match') # Different native/provider SHA is not a mismatch.
+            self.assertEqual(data['observed']['space'],native)
+            observed({**obj,'sha':OTHER},native)
+            self.assertEqual(json.loads(self.req(port,'/api/deployments',headers=sid)[2])['comparison'],'mismatch')
+            observed(None,native)
+            self.assertIsNone(json.loads(self.req(port,'/api/deployments',headers=sid)[2])['comparison'])
+            observed(obj,native)
+            private(self.root/'jobs'/f'{OTHER}.json',json.dumps({'sha':OTHER,'state':'running'}).encode())
+            data=json.loads(self.req(port,'/api/deployments',headers=sid)[2])
+            self.assertEqual(data['mac'],'unknown')
+            self.assertIsNone(data['comparison'])
+            self.assertEqual(self.apply(port,{**sid,'X-OPS-Deploy-CSRF':data['csrf']})[0],409)
+            self.assertEqual(seen,[])
+            observed(obj,{**native,'deploymentId':'../../fake'})
+            self.assertEqual(self.req(port,'/api/deployments',headers=sid)[0],503)
+            self.assertNotEqual(self.req(port,'/api/deployments/native-receipt',native,headers=sid)[0],200)
