@@ -1,0 +1,60 @@
+#!/opt/homebrew/bin/python3.12
+"""Fixed NGS Local adapter for the OPS cycle. No CLI options or provider selection."""
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+
+CONTROL = Path.home() / 'Workspaces/NGS/runtime/deploy-control'
+
+
+def private_file(path, modes):
+    s = path.lstat()
+    if (path.resolve() != path or s.st_uid != os.getuid() or not stat.S_ISREG(s.st_mode)
+            or s.st_nlink != 1 or stat.S_IMODE(s.st_mode) not in modes or not 0 < s.st_size <= 1048576):
+        raise ValueError('INVALID_LOCAL_DEPLOY_FILE')
+    return path
+
+
+def read_json(path):
+    path = private_file(path, {0o600})
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), 'rb') as src:
+        raw = src.read(4097)
+    if len(raw) > 4096:
+        raise ValueError('INVALID_LOCAL_DEPLOY_FILE')
+    return json.loads(raw)
+
+
+def run(control, sha, archive):
+    if not re.fullmatch(r'[0-9a-f]{40}', sha or '') or not re.fullmatch(r'[0-9a-f]{64}', archive or ''):
+        raise ValueError('INVALID_LOCAL_DEPLOY_PROOF')
+    plan = read_json(control / 'prepared.json')
+    if (plan.get('schemaVersion') != 'ops.ngs-prepared-deploy.v1' or plan.get('sha') != sha
+            or plan.get('provenance', {}).get('archiveSha256') != archive or plan.get('mac') != {'ready': True}):
+        raise ValueError('LOCAL_DEPLOY_PLAN_DRIFT')
+    receipt = control / 'mac-releases' / sha / 'result.json'
+    executable = private_file(control / 'bin/ngs-mac-apply', {0o500, 0o700})
+    with tempfile.TemporaryFile(dir=control) as output:
+        subprocess.run([str(executable), sha], cwd=control, env={
+            'HOME': str(Path.home()), 'PATH': '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+        }, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL, check=True)
+    result = read_json(receipt)
+    when = result.pop('deployedAt', None)
+    if result != {'sha': sha, 'target': 'mac', 'state': 'deployed', 'health': 'verified'} or not when:
+        raise ValueError('INVALID_LOCAL_DEPLOY_RECEIPT')
+    return {**result, 'target': 'ngs-local', 'schemaVersion': 'ops.deploy-target-receipt.v1', 'deployedAt': when}
+
+
+if __name__ == '__main__':
+    try:
+        if len(sys.argv) != 1:
+            raise ValueError('NO_LOCAL_DEPLOY_ARGS')
+        print(json.dumps(run(CONTROL, os.environ.get('OPS_DEPLOY_CANDIDATE_SHA'),
+                            os.environ.get('OPS_DEPLOY_ARTIFACT_SHA256')), separators=(',', ':')), flush=True)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
+        print('LOCAL_DEPLOY_UNVERIFIED', file=sys.stderr)
+        sys.exit(1)

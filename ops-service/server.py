@@ -1,12 +1,14 @@
 """Owner-local request viewer and service heartbeat receiver."""
 import http.client
 import json
+import os
+import threading
 from http.cookies import SimpleCookie, CookieError
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
-from deploy_control import COOKIE, TTL, KEY, Rejected, from_environment, is_sha
+from deploy_control import COOKIE, TTL, KEY, Rejected, from_environment
 from heartbeat import Heartbeats, MCP_TOOL, SERVER_NAME_PATTERN
 from request_progress import ProgressUnavailable, query_id, read_alarms, read_progress
 
@@ -170,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path in ('/api/deployments','/api/deployments/session'):
-            return self.deploy_api('session' if self.path.endswith('/session') else 'apply')
+            return self.deploy_api('session' if self.path.endswith('/session') else 'wake')
         if self.path not in ('/mcp','/api/service-heartbeat'):
             return self.send(405,{'error':'READ_ONLY'})
         host=f'{HOST}:{self.server.server_port}'
@@ -236,12 +238,12 @@ class Handler(BaseHTTPRequestHandler):
             if action=='session' and set(value)=={'ownerKey'}:
                 session=control.begin(value['ownerKey'])
                 return self.send(200,{'ok':True},cookie=f'{COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/api/deployments; Max-Age={TTL}')
-            if (action=='apply' and set(value)=={'sha','action','target'} and value['action']=='deploy' and
-                    value['target'] in ('local','space','all') and is_sha(value['sha'])):
+            if (action=='wake' and set(value)=={'action','target'} and value['action']=='wake' and
+                    type(value['target']) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,40}',value['target'])):
                 token=self.headers.get_all('X-OPS-Deploy-CSRF',[])
                 if len(token)!=1 or not KEY.fullmatch(token[0]):
                     return self.send(403,{'error':'OPS_DEPLOY_CSRF_DENIED'})
-                return self.send(202,control.request(sid,token[0],value['sha'],value['target']))
+                return self.send(202,control.wake(sid,token[0],value['target']))
             raise ValueError('INVALID_BODY')
         except Rejected as exc:
             return self.send(exc.status,{'error':exc.code})
@@ -294,5 +296,24 @@ def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress
     return http
 
 
+def run_deploy_schedule(cycle, stop, interval=60):
+    # The manual wake and this timer use the same coordinator and lock.
+    while not stop.is_set():
+        try:
+            cycle.sweep()
+        except (Rejected,OSError,ValueError):
+            pass  # The next check can succeed once a trusted candidate exists.
+        if stop.wait(interval):
+            return
+
+
 if __name__=='__main__':
-    with server(deploy_control=from_environment()) as app: app.serve_forever()
+    control=from_environment()
+    stop=threading.Event()
+    with server(deploy_control=control) as app:
+        if control is not None and os.environ.get('NGS_OPS_DEPLOY_AUTOMATIC')=='1':
+            threading.Thread(target=run_deploy_schedule,args=(control.cycle,stop),daemon=True).start()
+        try:
+            app.serve_forever()
+        finally:
+            stop.set()

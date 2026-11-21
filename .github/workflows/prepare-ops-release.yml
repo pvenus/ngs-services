@@ -13,7 +13,9 @@ jobs:
           persist-credentials: false
       - name: Verify OPS, never other service targets
         run: |
-          cd ops-service
+          cd tools/ops-self-update
+          python3 -B -m unittest -q
+          cd ../../ops-service
           python3 -B -m unittest -q
           node --check deployments.js
           node --test test_alarms_ui.mjs
