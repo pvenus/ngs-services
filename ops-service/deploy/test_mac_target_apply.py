@@ -4,6 +4,7 @@ import plistlib
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import mac_target_apply as apply
 
@@ -60,6 +61,14 @@ class TargetTests(unittest.TestCase):
         selector.parent.mkdir(mode=0o700, parents=True)
         env = {'X':'same'}
         wd = old / Path(item.entry).parent
+        if target == 'workflow-planner':
+            old_entry = old / item.entry
+            old_entry.parent.mkdir(parents=True)
+            old_entry.write_text('old')
+            db = home / 'Workspaces/Workers/data/workflow-planner/workflow.sqlite'
+            db.parent.mkdir(mode=0o700, parents=True)
+            db.touch(mode=0o600)
+            args[3] = str(db)
         if target == 'rs-mcp':
             args[2:] = ['--watch']
             wd = old
@@ -79,7 +88,7 @@ class TargetTests(unittest.TestCase):
         return directory, selector, before, entry
 
     def test_all_fixed_targets_real_contract_and_preservation(self):
-        for name in apply.TARGETS:
+        for name in set(apply.TARGETS)-{'workflow-planner'}:
             with self.subTest(target=name), tempfile.TemporaryDirectory() as root:
                 home = Path(root).resolve()
                 folder, selector, prior, entry = self.make(home, name)
@@ -96,6 +105,44 @@ class TargetTests(unittest.TestCase):
                 self.assertEqual(selected['EnvironmentVariables'], original['EnvironmentVariables'])
                 self.assertEqual(receipt['health'], 'verified')
                 self.assertEqual([x[0] for x in host.events], ['remove', 'start', 'health'])
+
+    def test_planner_same_database_and_old_no_revision_rollback(self):
+        for fail in (False, True):
+            with self.subTest(fail=fail), tempfile.TemporaryDirectory() as root:
+                home = Path(root).resolve()
+                folder, selector, prior, entry = self.make(home, 'workflow-planner')
+                host = FakeHost()
+                before = plistlib.loads(prior)
+                db = Path(before['ProgramArguments'][3])
+                inode = db.stat().st_ino
+                def launch_report(label):
+                    spec = plistlib.loads(selector.read_bytes())
+                    return host.running, ('\targuments = {\n' +
+                        ''.join('\t\t' + arg + '\n' for arg in spec['ProgramArguments']) +
+                        '\t}\n\tworking directory = ' + spec['WorkingDirectory'])
+                host.launch_report = launch_report
+                observed = []
+                def wait(**kwargs):
+                    args, _, identity, sha = kwargs['expected']
+                    self.assertEqual(kwargs['database_identity'](), identity)
+                    self.assertEqual(identity[1], inode)
+                    self.assertEqual(args[2:], ('--db', str(db)))
+                    self.assertEqual(kwargs['live']()[0], host.running)
+                    observed.append(sha)
+                    if fail and sha:
+                        raise ValueError('TARGET_PLANNER_HEALTH_TIMEOUT')
+                with patch.object(apply,'wait_planner',side_effect=wait):
+                    if fail:
+                        with self.assertRaises(apply.ApplyFailure) as error:
+                            apply.apply_target('workflow-planner','a'*40,'b'*64,folder,home,host)
+                        self.assertEqual(error.exception.rollback,'restored')
+                        self.assertEqual(selector.read_bytes(),prior)
+                    else:
+                        self.assertEqual(apply.apply_target('workflow-planner','a'*40,'b'*64,folder,home,host)['health'],'verified')
+                        proposed = plistlib.loads(selector.read_bytes())
+                        self.assertEqual(proposed['ProgramArguments'][1],str(entry))
+                        self.assertEqual(proposed['EnvironmentVariables'],{'X':'same',apply.REVISION:'a'*40})
+                self.assertEqual(observed,['a'*40,None] if fail else ['a'*40])
 
     def test_health_failure_rolls_back_exact_bytes(self):
         with tempfile.TemporaryDirectory() as root:
