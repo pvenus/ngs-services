@@ -70,6 +70,13 @@ function groupSection(id,layout,value,targets){
   const row=node('tr');row.dataset.deployTarget=target;row.dataset.deployState=state;
   const name=node('th',label);name.scope='row';if(target==='backend-stack')name.append(node('small','PDS와 연결된 백엔드 서비스가 함께 교체됩니다.'));
   const stateCell=node('td'),badge=node('span',stateLabels[state],'deploy-state');stateCell.append(badge);
+  const failure=item?.failure;
+  if(state==='failed'&&typeof failure?.code==='string'&&/^TARGET_[A-Z_]+$/u.test(failure.code)&&failure.code.length<60){
+   const phases={preflight:'준비 확인',unload:'기존 실행 종료',selector:'코드 교체',start:'시작',health:'상태 확인'};
+   const phase=Object.hasOwn(phases,failure.phase)?phases[failure.phase]:'배포';
+   const recovery=failure.rollback==='restored'?' · 이전 버전 복구됨':failure.rollback==='failed'?' · 복구 확인 필요':'';
+   stateCell.append(node('small',phase+' · '+failure.code+recovery));
+  }
   const action=node('td'),button=node('button','배포','deploy-row-action');button.type='button';
   button.setAttribute('aria-label',label+' 배포');button.disabled=active||item?.canDeploy!==true||state==='running';
   button.addEventListener('click',()=>void deploy(target,button));

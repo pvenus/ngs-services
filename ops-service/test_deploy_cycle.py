@@ -136,3 +136,15 @@ class Cycle(unittest.TestCase):
         self.assertEqual(self.hits,[(only,A)])
         c.sweep();c.trigger(only)
         self.assertEqual(self.hits,[(only,A)])
+    def test_failure_receipt_preserves_only_exact_phase_code_and_rollback(self):
+        data={'phase':'start','code':'TARGET_BOOTSTRAP_FAILED','rollback':'restored'}
+        raw={'schemaVersion':C.ERROR,'target':'rs-mcp','sha':A,**data}
+        source=("#!/bin/sh\nprintf '%s\\n' '"+json.dumps(raw)+"'\nexit 1\n").encode()
+        t=self.stage('rs-mcp',source=source)
+        c=C.DeploymentCycle(self.root)
+        c.trigger('rs-mcp');self.drain(c)
+        self.assertEqual(self.target(c,'rs-mcp')['failure'],data)
+        self.assertEqual(json.loads((t/'last-result.json').read_bytes())['failure'],data)
+        self.assertFalse(self.target(c,'rs-mcp')['canDeploy'])
+        with self.assertRaisesRegex(ValueError,'OPS_TARGET_ERROR_INVALID'):
+            C.safe_failure({**data,'code':'/private/credentials'})

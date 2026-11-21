@@ -26,6 +26,19 @@ GROUPS=(('ngs','NGS'),('services','서비스'),('workers','워커'))
 IDS={item[0] for item in TARGETS}
 READY='ops.deploy-target-ready.v1'
 RECEIPT='ops.deploy-target-receipt.v1'
+ERROR='ops.deploy-target-error.v1'
+PHASES={'preflight','unload','selector','start','health'}
+ROLLBACK={'not_attempted','restored','failed'}
+ERROR_CODES=frozenset((
+  'TARGET_INPUT_INVALID TARGET_UNSUPPORTED TARGET_CANDIDATE_MISMATCH '
+  'TARGET_RELEASE_TREE_MISMATCH TARGET_SELECTOR_CHANGED TARGET_PRIOR_NOT_RUNNING '
+  'TARGET_SELECTOR_LABEL TARGET_SELECTOR_ARGUMENTS TARGET_SELECTOR_ENTRY TARGET_RS_MCP_SELECTOR '
+  'TARGET_SELECTOR_WORKDIR TARGET_UNHANDLED_RELEASE_REFERENCE TARGET_UNHANDLED_RELEASE_ARG '
+  'TARGET_RELEASE_ENTRY_MISSING TARGET_AUDIO_ADAPTER TARGET_POSTPROCESS_ADAPTER '
+  'TARGET_LAUNCH_STATUS_FAILED TARGET_UNLOAD_FAILED TARGET_UNLOAD_TIMEOUT TARGET_BOOTSTRAP_FAILED '
+  'TARGET_START_FAILED TARGET_HEALTH_TIMEOUT TARGET_HEALTH_HTTP TARGET_OPERATION_TIMEOUT '
+  'TARGET_PRIVATE_INPUT_INVALID TARGET_APPLY_REFUSED'
+).split())
 TERMINAL='ops.deploy-target-result.v1'
 ACTIVE='ops.deploy-cycle-active.v1'
 
@@ -85,6 +98,18 @@ def verified_runner(path):
     return hashlib.sha256(data).hexdigest()
 
 
+class TargetFailure(Exception):
+    def __init__(self, diagnostic):
+        self.diagnostic=diagnostic
+
+
+def safe_failure(value):
+    check(exact(value,'phase','code','rollback') and
+          all(type(value[k]) is str for k in value) and value['phase'] in PHASES and
+          value['code'] in ERROR_CODES and value['rollback'] in ROLLBACK,'OPS_TARGET_ERROR_INVALID')
+    return value
+
+
 def fixed_runner(directory,record):
     immutable=record['runnerSha256']
     path=directory/'run-once'
@@ -96,8 +121,14 @@ def fixed_runner(directory,record):
                          stderr=subprocess.DEVNULL,check=False)
         out.seek(0)
         payload=out.read(8193)
-    check(p.returncode==0 and len(payload)<=8192,'OPS_TARGET_RUNNER_FAILED')
-    return json.loads(payload)
+    check(len(payload)<=8192,'OPS_TARGET_RUNNER_FAILED')
+    value=json.loads(payload)
+    if p.returncode:
+        check(exact(value,'schemaVersion','target','sha','phase','code','rollback') and
+              value['schemaVersion']==ERROR and value['target']==directory.name and
+              value['sha']==record['sha'],'OPS_TARGET_RUNNER_FAILED')
+        raise TargetFailure(safe_failure({k:value[k] for k in ('phase','code','rollback')}))
+    return value
 
 
 def proof(value,target,sha):
@@ -150,9 +181,13 @@ class DeploymentCycle:
         initial=observed(optional(path/'observed.json'),target)
         state=optional(path/'last-result.json')
         if state is not None:
-            check(exact(state,'schemaVersion','target','attemptedSha','state','finishedAt','observed') and
+            check((exact(state,'schemaVersion','target','attemptedSha','state','finishedAt','observed') or
+                   exact(state,'schemaVersion','target','attemptedSha','state','finishedAt','observed','failure')) and
                   state['schemaVersion']==TERMINAL and state['target']==target and is_sha(state['attemptedSha']) and
                   state['state'] in ('deployed','failed'),'OPS_TARGET_RESULT_INVALID')
+            if 'failure' in state:
+                check(state['state']=='failed','OPS_TARGET_RESULT_INVALID')
+                safe_failure(state['failure'])
             stamp(state['finishedAt'])
             result=observed(state['observed'],target)
             if state['state']=='deployed':
@@ -199,6 +234,10 @@ class DeploymentCycle:
                  'candidateSha':record['sha'] if record else None,'observed':initial,
                  'ready':phase in ('ready','current') and not locked and not unknown,
                  'canDeploy':phase=='ready' and not (locked or journal)}
+            if phase=='failed' and record is not None:
+                last=optional(self.root/'targets'/target/'last-result.json')
+                if last and last.get('attemptedSha')==record['sha'] and 'failure' in last:
+                    row['failure']=safe_failure(last['failure'])
             if row['ready']:plans[target]=(record,initial,phase)
             rows.append(row)
         ready={row['id']:row['ready'] for row in rows}
@@ -231,10 +270,11 @@ class DeploymentCycle:
         except BaseException:
             os.close(fd);raise
 
-    def _terminal(self,target,record,status,prior):
+    def _terminal(self,target,record,status,prior,diagnostic=None):
         persist(self.root/'targets'/target/'last-result.json',
                 {'schemaVersion':TERMINAL,'target':target,'attemptedSha':record['sha'],
-                 'state':status,'finishedAt':now(),'observed':prior})
+                 'state':status,'finishedAt':now(),'observed':prior,
+                 **({'failure':diagnostic} if diagnostic else {})})
 
     def _plan_still_exact(self,target,record):
         current,_,phase=self._target(target)
@@ -256,6 +296,9 @@ class DeploymentCycle:
                         break
                     directory=self.root/'targets'/target
                     try: after=proof(self.runner(directory,record),target,record['sha'])
+                    except TargetFailure as error:
+                        self._terminal(target,record,'failed',previous,error.diagnostic)
+                        break
                     except Exception:
                         self._terminal(target,record,'failed',previous)
                         break
