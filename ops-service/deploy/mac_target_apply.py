@@ -42,6 +42,8 @@ TARGETS = {
     'worker-audio': worker('audio', 'candidate-audio-resident/audio-cli.mjs'),
     'request-service': Target('com.vinus.ngs.request-service', 'BackendServices', 'ngs-services-github-',
                               'request-service/request-service.mjs', 'rs'),
+    'rs-mcp': Target('com.vinus.ngs.rs-mcp', 'NGS', 'project-page-github-',
+                     'sites/npcgen/build/rs-mcp.mjs', 'rs-mcp'),
     'backend-stack': Target('com.projectbs.backend-stack', 'BackendServices', 'ngs-services-github-',
                             'runtime/stack.py', None),
 }
@@ -62,6 +64,13 @@ def validate_and_rewrite(prior, release, catalog, base):
          and '/'.join(rel[1:]) == catalog.entry, 'TARGET_SELECTOR_ENTRY')
     old = root / rel[0]
     changes = {str(old / catalog.entry): str(release / catalog.entry)}
+    if catalog.heartbeat == 'rs-mcp':
+        env = v.get('EnvironmentVariables')
+        need(args[2:] == ['--watch'] and v.get('WorkingDirectory') == str(old)
+             and isinstance(env, dict)
+             and isinstance(env.get('NGS_SPACE_MACHINE_CREDENTIALS_FILE'), str)
+             and Path(env['NGS_SPACE_MACHINE_CREDENTIALS_FILE']).is_absolute()
+             and env.get('NGS_SPACE_REQUEST_RELAY_ENABLED') == '1', 'TARGET_RS_MCP_SELECTOR')
     if catalog.heartbeat == 'audio-worker':
         adapter = 'candidate-audio-resident/adapters/load.mjs'
         need(args.count('--adapter-module') == 1 and args.index('--adapter-module') + 1 < len(args)
@@ -81,7 +90,8 @@ def validate_and_rewrite(prior, release, catalog, base):
     v['ProgramArguments'] = [changes.get(arg, arg) for arg in args]
     if 'WorkingDirectory' in v:
         wd = Path(v['WorkingDirectory'])
-        need(wd == old / Path(catalog.entry).parent, 'TARGET_SELECTOR_WORKDIR')
+        need(wd == (old if catalog.heartbeat == 'rs-mcp' else old / Path(catalog.entry).parent),
+             'TARGET_SELECTOR_WORKDIR')
         v['WorkingDirectory'] = str(release / wd.relative_to(old))
     # Reject hidden old release references rather than rewrite unrelated provider/environment values.
     check = plistlib.dumps(v)

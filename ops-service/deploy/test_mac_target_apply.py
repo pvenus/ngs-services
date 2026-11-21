@@ -57,9 +57,15 @@ class TargetTests(unittest.TestCase):
                     args.extend(['--worker-source', str(old / rel)])
         selector = home / 'Library/LaunchAgents' / (item.label + '.plist')
         selector.parent.mkdir(mode=0o700, parents=True)
+        env = {'X':'same'}
+        wd = old / Path(item.entry).parent
+        if target == 'rs-mcp':
+            args[2:] = ['--watch']
+            wd = old
+            env.update(NGS_SPACE_MACHINE_CREDENTIALS_FILE='/test/private/missing.json',
+                       NGS_SPACE_REQUEST_RELAY_ENABLED='1')
         before = plistlib.dumps(dict(Label=item.label, ProgramArguments=args, RunAtLoad=True,
-                              WorkingDirectory=str(old / Path(item.entry).parent),
-                              EnvironmentVariables={'X': 'same'}))
+                              WorkingDirectory=str(wd), EnvironmentVariables=env))
         selector.write_bytes(before)
         selector.chmod(0o600)
         directory = home / target
@@ -80,8 +86,13 @@ class TargetTests(unittest.TestCase):
                 receipt = apply.apply_target(name, 'a' * 40, 'b' * 64, folder, home, host)
                 selected = plistlib.loads(selector.read_bytes())
                 self.assertEqual(selected['ProgramArguments'][1], str(entry))
-                self.assertEqual(selected['ProgramArguments'][3], '/test/same-ledger')
-                self.assertEqual(selected['EnvironmentVariables'], {'X': 'same'})
+                original = plistlib.loads(prior)
+                if name == 'rs-mcp':
+                    self.assertEqual(selected['ProgramArguments'][2:], ['--watch'])
+                    self.assertEqual(selected['WorkingDirectory'], str(entry.parents[3]))
+                else:
+                    self.assertEqual(selected['ProgramArguments'][3], '/test/same-ledger')
+                self.assertEqual(selected['EnvironmentVariables'], original['EnvironmentVariables'])
                 self.assertEqual(receipt['health'], 'verified')
                 self.assertEqual([x[0] for x in host.events], ['remove', 'start', 'health'])
 
