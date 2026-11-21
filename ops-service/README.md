@@ -44,7 +44,9 @@ target-specific rollback and verification all go through fixed code paths.
 `NGS_OPS_DEPLOY_ENABLED=1` enables the owner-local controller, and
 `NGS_OPS_DEPLOY_AUTOMATIC=1` additionally enables the OPS loop (one minute
 between checks by default). Neither switch is enabled by this source.
-Only the existing approved native launcher should set them. Provision
+The alternative private file `manual-enabled` (0600, exact bytes `1\n`) enables
+the same owner-local manual controller at OPS startup without rewriting the
+LaunchAgent. It does not start automatic deployment for the other services. Provision
 `~/Workspaces/NGS/runtime/deploy-control` (0700) and an `owner-key` (0600)
 containing a random 64-character lowercase hex key. Enter it only in the
 loopback OPS deployment screen. No key is prefilled, passed in a URL, or

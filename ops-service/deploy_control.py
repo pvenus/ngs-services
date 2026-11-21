@@ -139,7 +139,15 @@ class DeployControl:
                 reject(503,'OPS_DEPLOY_NOT_CONFIGURED')
 
 
-def from_environment(env=os.environ):
+def from_environment(env=os.environ, *, root=None):
+    root = Path(root) if root is not None else Path.home()/'Workspaces/NGS/runtime/deploy-control'
     if env.get('NGS_OPS_DEPLOY_ENABLED')!='1':
-        return None
-    return DeployControl(Path.home()/'Workspaces/NGS/runtime/deploy-control')
+        if 'NGS_OPS_DEPLOY_ENABLED' in env:
+            return None
+        try:
+            secure_directory(root)
+            if bounded_private(root/'manual-enabled',2)!=b'1\n':
+                return None
+        except (OSError,ValueError):
+            return None
+    return DeployControl(root)

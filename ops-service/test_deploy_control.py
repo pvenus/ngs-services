@@ -47,7 +47,7 @@ class DeployTests(unittest.TestCase):
         return self.req(p,'/api/deployments',{'action':'wake','target':target},auth)
 
     def test_default_off_and_not_discoverable_through_heartbeat(self):
-        self.assertIsNone(D.from_environment({}))
+        self.assertIsNone(D.from_environment({},root=self.root))
         with started(S.server(0)) as port:
             self.assertEqual(self.req(port,'/api/deployments')[0],503)
             self.assertEqual(self.wake(port,{})[0],503)
@@ -118,6 +118,16 @@ class DeployTests(unittest.TestCase):
             observed(obj,{**native,'deploymentId':'../../fake'})
             self.assertEqual(self.req(port,'/api/deployments',headers=sid)[0],503)
             self.assertNotEqual(self.req(port,'/api/deployments/native-receipt',native,headers=sid)[0],200)
+
+    def test_owner_private_manual_opt_in_requires_exact_file(self):
+        toggle=self.root/'manual-enabled'
+        private(toggle,b'1\n')
+        self.assertIsNotNone(D.from_environment({},root=self.root))
+        self.assertIsNone(D.from_environment({'NGS_OPS_DEPLOY_ENABLED':'0'},root=self.root))
+        toggle.chmod(0o644)
+        self.assertIsNone(D.from_environment({},root=self.root))
+        private(toggle,b'0\n')
+        self.assertIsNone(D.from_environment({},root=self.root))
 
     def test_periodic_path_calls_the_same_cycle_sweep(self):
         stop=threading.Event()
