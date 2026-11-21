@@ -140,7 +140,7 @@ class DeployControl:
 
 
 def from_environment(env=os.environ, *, root=None):
-    root = Path(root) if root is not None else Path.home()/'Workspaces/NGS/runtime/deploy-control'
+    root = Path(root) if root is not None else Path.home()/'Workspaces/OPS/runtime/deploy-control'
     if env.get('NGS_OPS_DEPLOY_ENABLED')!='1':
         if 'NGS_OPS_DEPLOY_ENABLED' in env:
             return None

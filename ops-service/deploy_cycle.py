@@ -12,6 +12,7 @@ import tempfile
 import threading
 
 from deploy_control import KEY, bounded_private, is_sha, reject, secure_directory, stamp
+from release_equivalence import equivalent_release
 
 
 TARGETS=(
@@ -211,7 +212,7 @@ class DeploymentCycle:
             return (None,initial,'pending')
         if state and state['attemptedSha']==record['sha'] and state['state']=='failed':
             return (record,initial,'failed')
-        if initial and initial['sha']==record['sha']:
+        if initial and (initial['sha']==record['sha'] or equivalent_release(path,target,record,initial)):
             return (record,initial,'current')
         return (record,initial,'ready')
 

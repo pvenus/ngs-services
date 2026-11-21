@@ -208,6 +208,11 @@ class Handler(BaseHTTPRequestHandler):
             (origins not in ([],['http://'+host]) if action=='status' else origins!=['http://'+host])):
             return self.send(403,{'error':'LOCAL_ORIGIN_REQUIRED'})
         control=self.server.deploy_control
+        if control is None and self.server.native_deployment_discovery:
+            with self.server.deploy_initialization_lock:
+                if self.server.deploy_control is None:
+                    self.server.deploy_control=from_environment()
+                control=self.server.deploy_control
         if control is None:
             return self.send(503,{'error':'OPS_DEPLOY_NOT_CONFIGURED'})
         sid=None
@@ -289,12 +294,14 @@ class Handler(BaseHTTPRequestHandler):
                                'content':[{'type':'text','text':'{"ok":true}'}]})
 
 
-def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress=read_progress,alarms=read_alarms,deploy_control=None):
+def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress=read_progress,alarms=read_alarms,deploy_control=None,native_deployment_discovery=False):
     http=ThreadingHTTPServer((HOST,port),Handler)
     http.list_requests=list_requests
     http.request_progress=request_progress
     http.alarms=alarms
     http.deploy_control=deploy_control
+    http.native_deployment_discovery=native_deployment_discovery
+    http.deploy_initialization_lock=threading.Lock()
     http.heartbeats=heartbeats if heartbeats is not None else Heartbeats()
     return http
 
@@ -313,7 +320,7 @@ def run_deploy_schedule(cycle, stop, interval=60):
 if __name__=='__main__':
     control=from_environment()
     stop=threading.Event()
-    with server(deploy_control=control) as app:
+    with server(deploy_control=control,native_deployment_discovery=True) as app:
         if control is not None and os.environ.get('NGS_OPS_DEPLOY_AUTOMATIC')=='1':
             threading.Thread(target=run_deploy_schedule,args=(control.cycle,stop),daemon=True).start()
         try:

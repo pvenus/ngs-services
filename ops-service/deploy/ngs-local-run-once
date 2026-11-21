@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-CONTROL = Path.home() / 'Workspaces/NGS/runtime/deploy-control'
+CONTROL = Path.home() / 'Workspaces/OPS/runtime/deploy-control'
 
 
 def private_file(path, modes):
