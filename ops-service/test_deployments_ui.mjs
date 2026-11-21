@@ -21,7 +21,7 @@ function data({all=true,running=false,compare=null}={}){
    canDeploy:!['worker-file','worker-image'].includes(target),
   })))}};
 }
-function fixtures(fetcher){
+function fixtures(fetcher,extras={}){
  const ids=new Map(),hits=[],scheduled=[];
  const document={getElementById(id){if(!ids.has(id))ids.set(id,node());return ids.get(id);},createElement:node};
  function node(tag){
@@ -29,10 +29,10 @@ function fixtures(fetcher){
   return {tag,children:[],attrs:{},dataset:{},className:'',textContent:'',value:'',hidden:false,disabled:false,
    append(...xs){this.children.push(...xs);},replaceChildren(...xs){this.children=xs;},
    setAttribute(k,v){this.attrs[k]=v;},addEventListener(name,f){events.set(name,f);},
-   fire(name,event){events.get(name)?.(event);},focus(){document.activeElement=this;}};
+   fire(name,event){events.get(name)?.(event);},focus(){document.activeElement=this;},select(){this.selected=true;}};
  }
  runInNewContext(code,{document,Intl,fetch(...args){hits.push(args);return fetcher(...args);},
-  clearTimeout(){},setTimeout(f,delay){scheduled.push({f,delay});return scheduled.length;}});
+  clearTimeout(){},setTimeout(f,delay){scheduled.push({f,delay});return scheduled.length;},...extras});
  const of=id=>document.getElementById(id);
  const find=(root,condition)=>condition(root)?root:root.children.map(x=>find(x,condition)).find(Boolean);
  const row=target=>find(of('deploy-groups'),n=>n.dataset.deployTarget===target);
@@ -108,4 +108,27 @@ test('Space uses a fixed publication destination and unlinked Space cannot be de
  assert.equal(app.find(app.row('ngs-space'),n=>n.textContent==='자동 게시 미연결'),undefined);
  assert.ok(app.find(app.row('ngs-space'),n=>n.textContent==='배포 준비'));
  assert.equal(app.find(app.row('ngs-space'),n=>n.tag==='button').disabled,false);
+});
+
+test('verified Space thread handoff is manual only and keeps all deployment disabled',async()=>{
+ const model=data(),space=model.cycle.targets.find(x=>x.id==='ngs-space');
+ const url='https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef';
+ space.state='not_configured';space.canDeploy=false;
+ space.publication={provider:'chatgpt-sites',hostname:'vinus-npcgen.park-venus0518.chatgpt.site',handoff:{url,sha:a}};
+ const opens=[],copies=[];
+ const app=fixtures(async()=>Response.json(model),{window:{open(...args){opens.push(args)}},
+  navigator:{clipboard:{async writeText(text){copies.push(text)}}}});
+ await flush();
+ const button=app.find(app.row('ngs-space'),n=>n.tag==='button');
+ assert.equal(button.disabled,false);
+ assert.equal(button.textContent,'배포 스레드에 전달');
+ assert.equal(app.of('deploy-all').disabled,true);
+ button.fire('click');await flush();
+ assert.deepEqual(opens,[[url,'_blank','noopener,noreferrer']]);
+ assert.deepEqual(copies,['NGS Space를 pvenus/ngs-platform 커밋 '+a+'로 게시해 주세요. 게시 대상: vinus-npcgen.park-venus0518.chatgpt.site.']);
+ assert.match(app.of('deploy-status').textContent,/직접 전송/);
+ assert.equal(app.hits.length,1);
+ space.publication.handoff.url='https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef?redirect=https://example.com';
+ app.of('deploy-refresh').fire('click');await flush();
+ assert.equal(app.find(app.row('ngs-space'),n=>n.tag==='button').disabled,true);
 });

@@ -56,6 +56,26 @@ function compare(value,targets){
  }else compareNode.textContent='검증된 버전 비교를 확인할 수 없습니다.';
  return compareNode;
 }
+const threadUrlPattern=/^https:\/\/chatgpt\.com\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+function spaceHandoff(item){
+ const detail=item?.publication?.handoff;
+ if(item?.publication?.provider!=='chatgpt-sites'||item.publication.hostname!==spacePublicationHost||
+  typeof detail?.url!=='string'||detail.url.length!==58||!threadUrlPattern.test(detail.url)||
+  typeof detail.sha!=='string'||detail.sha.length!==40||!shaPattern.test(detail.sha))return null;
+ return {url:detail.url,sha:detail.sha};
+}
+async function openSpaceHandoff(handoff,fallback){
+ const text='NGS Space를 pvenus/ngs-platform 커밋 '+handoff.sha+'로 게시해 주세요. 게시 대상: '+spacePublicationHost+'.';
+ // Open in the click gesture; clipboard availability does not determine whether the thread opens.
+ window.open(handoff.url,'_blank','noopener,noreferrer');
+ try{
+  await navigator.clipboard.writeText(text);
+  status('배포 요청 문구를 복사했습니다. 열린 배포 스레드에서 붙여넣어 직접 전송해 주세요.');
+ }catch{
+  fallback.value=text;fallback.hidden=false;fallback.focus();fallback.select();
+  status('아래 요청 문구를 복사해 배포 스레드에서 직접 전송해 주세요.');
+ }
+}
 function groupSection(id,layout,value,targets){
  const section=node('section',undefined,'deploy-group');
  section.dataset.group=id;section.setAttribute('aria-labelledby','deploy-heading-'+id);
@@ -85,10 +105,16 @@ function groupSection(id,layout,value,targets){
    const recovery=failure.rollback==='restored'?' · 이전 버전 복구됨':failure.rollback==='failed'?' · 복구 확인 필요':'';
    stateCell.append(node('small',phase+' · '+failure.code+recovery));
   }
-  const action=node('td'),button=node('button','배포','deploy-row-action');button.type='button';
-  button.setAttribute('aria-label',label+' 배포');button.disabled=active||item?.canDeploy!==true||state==='running'||spaceUnlinked;
-  button.addEventListener('click',()=>void deploy(target,button));
+  const handoff=spaceUnlinked?spaceHandoff(item):null;
+  const action=node('td'),button=node('button',handoff?'배포 스레드에 전달':'배포','deploy-row-action');button.type='button';
+  button.setAttribute('aria-label',handoff?'배포 스레드에 전달 (직접 전송)':label+' 배포');
+  button.disabled=active||(!handoff&&(item?.canDeploy!==true||state==='running'||spaceUnlinked));
   rowButtons.set(target,button);action.append(button);
+  if(handoff){
+   const fallback=node('textarea');fallback.readOnly=true;fallback.hidden=true;
+   fallback.setAttribute('aria-label','복사할 배포 요청 문구');action.append(fallback);
+   button.addEventListener('click',()=>{if(!button.disabled)void openSpaceHandoff(handoff,fallback)});
+  }else button.addEventListener('click',()=>void deploy(target,button));
   row.append(name,stateCell,evidenceCell(item?.observed),action);body.append(row);
  }
  return section;
