@@ -151,3 +151,22 @@ test('thread identity alone opens native Codex and copies only the fixed request
   assert.equal(app.find(app.row('ngs-space'),n=>n.tag==='button').disabled,true);
  }
 });
+
+test('verified Dot thread ID without a provider URL copies without pretending to send',async()=>{
+ const model=data(),space=model.cycle.targets.find(x=>x.id==='ngs-space');
+ space.state='not_configured';space.canDeploy=false;
+ space.publication={provider:'chatgpt-sites',hostname:'vinus-npcgen.park-venus0518.chatgpt.site',
+  handoff:{threadId:'01234567-89ab-cdef-0123-456789abcdef',title:'비나리 스페이스 배포'},
+  live:{commitSha:null,state:'connected'}};
+ const copies=[];
+ const app=fixtures(async()=>Response.json(model),{window:{open(){throw Error('no verified URL')}},
+  navigator:{clipboard:{async writeText(text){copies.push(text)}}}});
+ await flush();
+ const row=app.row('ngs-space'),button=app.find(row,n=>n.tag==='button');
+ assert.equal(button.textContent,'배포 요청 복사');
+ assert.ok(app.find(row,n=>n.textContent==='NGS-MCP: 응답 확인 · 현재 커밋 미확인'));
+ button.fire('click');await flush();
+ assert.deepEqual(copies,['비나리 스페이스 최신 검증 버전을 배포해줘.']);
+ assert.match(app.of('deploy-status').textContent,/비나리 스페이스 배포/);
+ assert.equal(app.hits.length,1);
+});

@@ -77,6 +77,15 @@ def space_publication(path):
     return item
 
 
+def space_handoff(path):
+    item=optional(path/'handoff.json',1024)
+    if (not exact(item,'threadId','title') or type(item['threadId']) is not str or
+            not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',item['threadId']) or
+            item['title']!='비나리 스페이스 배포'):
+        return None
+    return item
+
+
 def persist(path,value):
     raw=(json.dumps(value,sort_keys=True,separators=(',',':'))+'\n').encode()
     fd, tmp=tempfile.mkstemp(prefix='.ops-cycle-',dir=path.parent)
@@ -254,6 +263,9 @@ class DeploymentCycle:
                 except (OSError,ValueError): publication=None
                 if publication:
                     row['publication']={'provider':publication['provider'],'hostname':publication['hostname']}
+                    try: handoff=space_handoff(self.root/'targets'/target)
+                    except (OSError,ValueError): handoff=None
+                    if handoff:row['publication']['handoff']=handoff
             if phase=='failed' and record is not None:
                 last=optional(self.root/'targets'/target/'last-result.json')
                 if last and last.get('attemptedSha')==record['sha'] and 'failure' in last:

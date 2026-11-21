@@ -228,7 +228,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(400,{'error':'INVALID_COOKIE'})
         try:
             if action=='status':
-                return self.send(200,control.status(sid))
+                state=control.status(sid)
+                # RS-MCP relays the hosted application's observed reply to the
+                # existing OPS API. Contact time is not provider publish time.
+                live=next((row for row in self.server.heartbeats.snapshot()['services']
+                           if row['serverName']=='ngs-space'),None)
+                if live:
+                    for row in state['cycle'].get('targets',[]):
+                        if row['id']=='ngs-space' and row.get('publication'):
+                            row['publication']['live']={key:live[key] for key in
+                                ('state','commitSha','lastReceivedAt') if key in live}
+                return self.send(200,state)
             sizes=self.headers.get_all('Content-Length',[])
             if (self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Encoding') or
                 self.headers.get_all('Content-Type')!=['application/json'] or len(sizes)!=1 or

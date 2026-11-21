@@ -96,3 +96,10 @@ SHA when the same contact did not establish the Git revision.
 OPS timestamps the receipt, clears obsolete SHA evidence when a later report
 omits it, and uses the ordinary in-memory heartbeat status rules without making
 any additional probes or writing the request database.
+
+For a manual space deployment handoff, `targets/ngs-space/handoff.json`
+contains only the verified thread ID and display title. If no provider-issued
+deep link is available, copy a fixed request and send it in that thread. A
+clipboard action never counts as a submitted/published operation. Live
+contact and the serving revision are projected from the existing NGS-MCP
+report relayed by RS-MCP, not a release receipt or publish timestamp.

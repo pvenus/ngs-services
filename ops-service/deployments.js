@@ -57,21 +57,23 @@ function compare(value,targets){
  return compareNode;
 }
 const threadUrlPattern=/^(?:https:\/\/chatgpt\.com\/c\/|codex:\/\/threads\/)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\s\S])/u;
+const threadIdPattern=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}(?![\s\S])/u;
 function spaceHandoff(item){
  const detail=item?.publication?.handoff;
- if(item?.publication?.provider!=='chatgpt-sites'||item.publication.hostname!==spacePublicationHost||
-  typeof detail?.url!=='string'||!threadUrlPattern.test(detail.url)||
+ if(item?.publication?.provider!=='chatgpt-sites'||item.publication.hostname!==spacePublicationHost||!detail||
   (Object.hasOwn(detail,'sha')&&(typeof detail.sha!=='string'||detail.sha.length!==40||!shaPattern.test(detail.sha))))return null;
- return {url:detail.url,sha:detail.sha};
+ if(Object.hasOwn(detail,'url')&&(typeof detail.url!=='string'||!threadUrlPattern.test(detail.url)))return null;
+ if(!detail.url&&(typeof detail.threadId!=='string'||!threadIdPattern.test(detail.threadId)||detail.title!=='비나리 스페이스 배포'))return null;
+ return {url:detail.url,sha:detail.sha,title:detail.title==='비나리 스페이스 배포'?detail.title:'배포 스레드'};
 }
 async function openSpaceHandoff(handoff,fallback){
  const text=handoff.sha?'NGS Space를 pvenus/ngs-platform 커밋 '+handoff.sha+'로 게시해 주세요. 게시 대상: '+spacePublicationHost+'.':
   '비나리 스페이스 최신 검증 버전을 배포해줘.';
  // Open in the click gesture; clipboard availability does not determine whether the thread opens.
- window.open(handoff.url,'_blank','noopener,noreferrer');
+ if(handoff.url)window.open(handoff.url,'_blank','noopener,noreferrer');
  try{
   await navigator.clipboard.writeText(text);
-  status('배포 요청 문구를 복사했습니다. 열린 배포 스레드에서 붙여넣어 직접 전송해 주세요.');
+  status('배포 요청 문구를 복사했습니다. '+handoff.title+'에서 붙여넣어 직접 전송해 주세요.');
  }catch{
   fallback.value=text;fallback.hidden=false;fallback.focus();fallback.select();
   status('아래 요청 문구를 복사해 배포 스레드에서 직접 전송해 주세요.');
@@ -97,6 +99,14 @@ function groupSection(id,layout,value,targets){
    const host=item?.publication?.provider==='chatgpt-sites'&&item.publication.hostname===spacePublicationHost?
     item.publication.hostname:spacePublicationHost;
    name.append(node('small','게시 대상: '+host));
+   const live=item?.publication?.live;
+   if(live){
+    const liveState={connected:'응답 확인',warning:'응답 지연',stop:'응답 없음'}[live.state];
+    if(typeof liveState==='string'){
+     const commit=typeof live.commitSha==='string'&&live.commitSha.length===40&&shaPattern.test(live.commitSha)?live.commitSha.slice(0,12):'미확인';
+     name.append(node('small','NGS-MCP: '+liveState+' · 현재 커밋 '+commit));
+    }
+   }
   }
   const stateCell=node('td'),badge=node('span',spaceUnlinked?'자동 게시 미연결':stateLabels[state],'deploy-state');stateCell.append(badge);
   const failure=item?.failure;
@@ -107,11 +117,12 @@ function groupSection(id,layout,value,targets){
    stateCell.append(node('small',phase+' · '+failure.code+recovery));
   }
   const handoff=spaceUnlinked?spaceHandoff(item):null;
-  const action=node('td'),button=node('button',handoff?'배포 스레드에 전달':'배포','deploy-row-action');button.type='button';
+  const action=node('td'),button=node('button',handoff?(handoff.url?'배포 스레드에 전달':'배포 요청 복사'):'배포','deploy-row-action');button.type='button';
   button.setAttribute('aria-label',handoff?'배포 스레드에 전달 (직접 전송)':label+' 배포');
   button.disabled=active||(!handoff&&(item?.canDeploy!==true||state==='running'||spaceUnlinked));
   rowButtons.set(target,button);action.append(button);
   if(handoff){
+   if(!handoff.url)action.append(node('small','전송 대상: '+handoff.title));
    const fallback=node('textarea');fallback.readOnly=true;fallback.hidden=true;
    fallback.setAttribute('aria-label','복사할 배포 요청 문구');action.append(fallback);
    button.addEventListener('click',()=>{if(!button.disabled)void openSpaceHandoff(handoff,fallback)});
