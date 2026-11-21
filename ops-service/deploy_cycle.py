@@ -41,6 +41,9 @@ ERROR_CODES=frozenset((
   'TARGET_PRIVATE_INPUT_INVALID TARGET_APPLY_REFUSED'
 ).split())
 TERMINAL='ops.deploy-target-result.v1'
+SPACE_PUBLICATION_SCHEMA='ops.ngs-space-publication.v1'
+SPACE_SITE='appgprj_6abcee8b33688191bed4fec75f26b91f'
+SPACE_HOST='vinus-npcgen.park-venus0518.chatgpt.site'
 ACTIVE='ops.deploy-cycle-active.v1'
 
 
@@ -63,6 +66,15 @@ def sha256(value):
 def optional(path,size=4096):
     try:return json.loads(bounded_private(path,size))
     except FileNotFoundError:return None
+
+
+def space_publication(path):
+    item=optional(path/'publication.json',1024)
+    if item is None:return None
+    check(item=={'schemaVersion':SPACE_PUBLICATION_SCHEMA,'provider':'chatgpt-sites',
+          'projectId':SPACE_SITE,'hostname':SPACE_HOST,'accessMode':'custom'},
+          'OPS_SPACE_PUBLICATION_INVALID')
+    return item
 
 
 def persist(path,value):
@@ -195,6 +207,8 @@ class DeploymentCycle:
                 check(result and result['sha']==state['attemptedSha'],'OPS_TARGET_RESULT_INVALID')
             if result and (initial is None or result['deployedAt']>=initial['deployedAt']):
                 initial=result
+        if target=='ngs-space' and space_publication(path) is None:
+            return (None,initial,'not_configured')
         record=optional(path/'ready.json')
         if record is not None:
             check(exact(record,'schemaVersion','target','sha','verifiedAt','artifactSha256','runnerSha256') and
@@ -235,6 +249,11 @@ class DeploymentCycle:
                  'candidateSha':record['sha'] if record else None,'observed':initial,
                  'ready':phase in ('ready','current') and not locked and not unknown,
                  'canDeploy':phase=='ready' and not (locked or journal)}
+            if target=='ngs-space' and configured:
+                try: publication=space_publication(self.root/'targets'/target)
+                except (OSError,ValueError): publication=None
+                if publication:
+                    row['publication']={'provider':publication['provider'],'hostname':publication['hostname']}
             if phase=='failed' and record is not None:
                 last=optional(self.root/'targets'/target/'last-result.json')
                 if last and last.get('attemptedSha')==record['sha'] and 'failure' in last:

@@ -61,7 +61,14 @@ publishing `ready.json`. The fixed Local NGS bridge reads the independently
 prepared exact SHA/digest and uses the existing Mac executor and its durable
 health receipt. Space remains unavailable until an unattended publisher
 that preserves the site's audience and proves its deployed SHA is present.
-A prepared Space bundle is not a deployed Space version.
+A prepared Space bundle is not a deployed Space version. Its owner-private
+`targets/ngs-space/publication.json` pins the exact existing ChatGPT Sites
+project ID, hostname, and custom audience mode. That configuration is
+publication identity only, not a credential, and it does not make the
+deployment button actionable. The Site's application MCP and runtime
+variables cannot authorize native hosting operations. Only an authorized
+native Sites publisher preserving the configured existing audience may
+produce a deploy receipt.
 
 The status API displays independently verified last deployment SHA and time,
 not build time, or no observation. For a verified preexisting NGS baseline

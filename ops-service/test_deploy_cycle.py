@@ -26,6 +26,9 @@ class Cycle(unittest.TestCase):
     def stage(self,id,sha=A,source=SOURCE):
         t=self.root/'targets'/id
         t.mkdir(mode=0o700,exist_ok=True)
+        if id=='ngs-space':
+            C.persist(t/'publication.json',{'schemaVersion':C.SPACE_PUBLICATION_SCHEMA,
+             'provider':'chatgpt-sites','projectId':C.SPACE_SITE,'hostname':C.SPACE_HOST,'accessMode':'custom'})
         path=t/'run-once';path.write_bytes(source);path.chmod(0o700)
         C.persist(t/'ready.json',{'schemaVersion':C.READY,'target':id,'sha':sha,
          'runnerSha256':hashlib.sha256(source).hexdigest(),'artifactSha256':HASH,'verifiedAt':STAMP})
@@ -148,3 +151,16 @@ class Cycle(unittest.TestCase):
         self.assertFalse(self.target(c,'rs-mcp')['canDeploy'])
         with self.assertRaisesRegex(ValueError,'OPS_TARGET_ERROR_INVALID'):
             C.safe_failure({**data,'code':'/private/credentials'})
+    def test_space_is_a_fixed_site_not_a_local_path_or_implicit_permission(self):
+        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        target=self.stage('ngs-space')
+        config=target/'publication.json'
+        row=self.target(c,'ngs-space')
+        self.assertEqual(row['publication'],{'provider':'chatgpt-sites','hostname':C.SPACE_HOST})
+        self.assertNotIn(C.SPACE_SITE,json.dumps(row))
+        config.unlink()
+        self.assertEqual(self.target(c,'ngs-space')['state'],'not_configured')
+        with self.assertRaises(Rejected):c.trigger('ngs-space')
+        C.persist(config,{'provider':'chatgpt-sites','projectId':'another','hostname':C.SPACE_HOST})
+        self.assertFalse(self.target(c,'ngs-space')['canDeploy'])
+        self.assertEqual(self.hits,[])

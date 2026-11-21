@@ -72,7 +72,11 @@ function groupSection(id,layout,value,targets){
   const row=node('tr');row.dataset.deployTarget=target;row.dataset.deployState=state;
   const name=node('th',label);name.scope='row';if(target==='backend-stack')name.append(node('small','PDS와 연결된 백엔드 서비스가 함께 교체됩니다.'));
   const spaceUnlinked=target==='ngs-space'&&spacePublicationUnlinked(item);
-  if(target==='ngs-space')name.append(node('small','게시 대상: '+spacePublicationHost));
+  if(target==='ngs-space'){
+   const host=item?.publication?.provider==='chatgpt-sites'&&item.publication.hostname===spacePublicationHost?
+    item.publication.hostname:spacePublicationHost;
+   name.append(node('small','게시 대상: '+host));
+  }
   const stateCell=node('td'),badge=node('span',spaceUnlinked?'자동 게시 미연결':stateLabels[state],'deploy-state');stateCell.append(badge);
   const failure=item?.failure;
   if(state==='failed'&&typeof failure?.code==='string'&&/^TARGET_[A-Z_]+$/u.test(failure.code)&&failure.code.length<60){
