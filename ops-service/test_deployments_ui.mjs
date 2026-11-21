@@ -132,3 +132,22 @@ test('verified Space thread handoff is manual only and keeps all deployment disa
  app.of('deploy-refresh').fire('click');await flush();
  assert.equal(app.find(app.row('ngs-space'),n=>n.tag==='button').disabled,true);
 });
+
+test('thread identity alone opens native Codex and copies only the fixed request',async()=>{
+ const model=data(),space=model.cycle.targets.find(x=>x.id==='ngs-space');
+ const url='codex://threads/01234567-89ab-cdef-0123-456789abcdef';
+ space.state='not_configured';space.canDeploy=false;
+ space.publication={provider:'chatgpt-sites',hostname:'vinus-npcgen.park-venus0518.chatgpt.site',handoff:{url}};
+ const opens=[],copies=[];
+ const app=fixtures(async()=>Response.json(model),{window:{open(...args){opens.push(args)}},
+  navigator:{clipboard:{async writeText(text){copies.push(text)}}}});
+ await flush();
+ app.find(app.row('ngs-space'),n=>n.tag==='button').fire('click');await flush();
+ assert.deepEqual(opens,[[url,'_blank','noopener,noreferrer']]);
+ assert.deepEqual(copies,['비나리 스페이스 최신 검증 버전을 배포해줘.']);
+ assert.equal(app.hits.length,1);
+ for(const handoff of [{url:url+'\n'},{url:url+'/extra'},{url,sha:'abc'}]){
+  space.publication.handoff=handoff;app.of('deploy-refresh').fire('click');await flush();
+  assert.equal(app.find(app.row('ngs-space'),n=>n.tag==='button').disabled,true);
+ }
+});

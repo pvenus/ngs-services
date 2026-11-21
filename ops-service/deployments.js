@@ -56,16 +56,17 @@ function compare(value,targets){
  }else compareNode.textContent='검증된 버전 비교를 확인할 수 없습니다.';
  return compareNode;
 }
-const threadUrlPattern=/^https:\/\/chatgpt\.com\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const threadUrlPattern=/^(?:https:\/\/chatgpt\.com\/c\/|codex:\/\/threads\/)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\s\S])/u;
 function spaceHandoff(item){
  const detail=item?.publication?.handoff;
  if(item?.publication?.provider!=='chatgpt-sites'||item.publication.hostname!==spacePublicationHost||
-  typeof detail?.url!=='string'||detail.url.length!==58||!threadUrlPattern.test(detail.url)||
-  typeof detail.sha!=='string'||detail.sha.length!==40||!shaPattern.test(detail.sha))return null;
+  typeof detail?.url!=='string'||!threadUrlPattern.test(detail.url)||
+  (Object.hasOwn(detail,'sha')&&(typeof detail.sha!=='string'||detail.sha.length!==40||!shaPattern.test(detail.sha))))return null;
  return {url:detail.url,sha:detail.sha};
 }
 async function openSpaceHandoff(handoff,fallback){
- const text='NGS Space를 pvenus/ngs-platform 커밋 '+handoff.sha+'로 게시해 주세요. 게시 대상: '+spacePublicationHost+'.';
+ const text=handoff.sha?'NGS Space를 pvenus/ngs-platform 커밋 '+handoff.sha+'로 게시해 주세요. 게시 대상: '+spacePublicationHost+'.':
+  '비나리 스페이스 최신 검증 버전을 배포해줘.';
  // Open in the click gesture; clipboard availability does not determine whether the thread opens.
  window.open(handoff.url,'_blank','noopener,noreferrer');
  try{
