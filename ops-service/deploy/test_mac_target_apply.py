@@ -61,6 +61,11 @@ class TargetTests(unittest.TestCase):
         selector.parent.mkdir(mode=0o700, parents=True)
         env = {'X':'same'}
         wd = old / Path(item.entry).parent
+        if target == 'worker-animation':
+            (old / 'native-wan').mkdir(mode=0o700, parents=True)
+            (release / 'native-wan').mkdir(mode=0o700)
+            env.update(WORKFLOW_WAN_RELEASE=str(old/'native-wan'), WORKFLOW_WAN_PYTHON='/test/private/python',
+                       WORKFLOW_WAN_BINDING='/test/private/wan-binding.json')
         if target == 'workflow-planner':
             old_entry = old / item.entry
             old_entry.parent.mkdir(parents=True)
@@ -102,9 +107,34 @@ class TargetTests(unittest.TestCase):
                     self.assertEqual(selected['WorkingDirectory'], str(entry.parents[3]))
                 else:
                     self.assertEqual(selected['ProgramArguments'][3], '/test/same-ledger')
-                self.assertEqual(selected['EnvironmentVariables'], original['EnvironmentVariables'])
+                expected_env=original['EnvironmentVariables'].copy()
+                if name == 'worker-animation':
+                    expected_env['WORKFLOW_WAN_RELEASE']=str(entry.parents[1]/'native-wan')
+                self.assertEqual(selected['EnvironmentVariables'],expected_env)
                 self.assertEqual(receipt['health'], 'verified')
                 self.assertEqual([x[0] for x in host.events], ['remove', 'start', 'health'])
+
+    def test_animation_is_only_exact_vendor_code_pin_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as path:
+            home=Path(path).resolve()
+            _,_,prior,entry=self.make(home,'worker-animation')
+            catalog=apply.TARGETS['worker-animation']
+            release=entry.parents[1]
+            for value in ('/unrelated/model','/unexpected',None):
+                data=plistlib.loads(prior)
+                data['EnvironmentVariables']['WORKFLOW_WAN_RELEASE']=value if value else '/missing/native-wan'
+                with self.assertRaisesRegex(ValueError,'TARGET_ANIMATION_WAN_RELEASE'):
+                    apply.validate_and_rewrite(plistlib.dumps(data),release,catalog,home/'Workspaces')
+            (release/'native-wan').rename(release/'other')
+            (release/'native-wan').symlink_to(release/'other',target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'TARGET_ANIMATION_WAN_RELEASE'):
+                apply.validate_and_rewrite(prior,release,catalog,home/'Workspaces')
+            bad=plistlib.loads(prior)
+            bad['EnvironmentVariables']['UNRELATED_OLD_RELEASE']=str(entry.parent).replace('a'*40,'1234567')
+            (release/'native-wan').unlink()
+            (release/'other').rename(release/'native-wan')
+            with self.assertRaisesRegex(ValueError,'TARGET_UNHANDLED_RELEASE_REFERENCE'):
+                apply.validate_and_rewrite(plistlib.dumps(bad),release,catalog,home/'Workspaces')
 
     def test_planner_same_database_and_old_no_revision_rollback(self):
         for fail in (False, True):

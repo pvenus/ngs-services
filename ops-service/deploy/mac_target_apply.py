@@ -74,6 +74,16 @@ def validate_and_rewrite(prior, release, catalog, base):
              and isinstance(env.get('NGS_SPACE_MACHINE_CREDENTIALS_FILE'), str)
              and Path(env['NGS_SPACE_MACHINE_CREDENTIALS_FILE']).is_absolute()
              and env.get('NGS_SPACE_REQUEST_RELAY_ENABLED') == '1', 'TARGET_RS_MCP_SELECTOR')
+    if catalog.heartbeat == 'animation-worker':
+        # WORKFLOW_WAN_RELEASE is the vendored code root for this worker,
+        # not its model binding, Python, preset, or other private settings.
+        env = v.get('EnvironmentVariables')
+        prior_wan, next_wan = old / 'native-wan', release / 'native-wan'
+        need(isinstance(env, dict) and env.get('WORKFLOW_WAN_RELEASE') == str(prior_wan)
+             and prior_wan.is_dir() and prior_wan.resolve() == prior_wan
+             and next_wan.is_dir() and next_wan.resolve() == next_wan,
+             'TARGET_ANIMATION_WAN_RELEASE')
+        env['WORKFLOW_WAN_RELEASE'] = str(next_wan)
     if catalog.heartbeat == 'audio-worker':
         adapter = 'candidate-audio-resident/adapters/load.mjs'
         need(args.count('--adapter-module') == 1 and args.index('--adapter-module') + 1 < len(args)
