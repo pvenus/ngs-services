@@ -131,3 +131,8 @@ class Cycle(unittest.TestCase):
             os.fchmod(h.fileno(),0o600);fcntl.flock(h,fcntl.LOCK_EX)
             self.assertEqual(R.cycle(self.control)['state'],'busy')
         self.assertEqual(self.effects,[])
+    def test_macos_lsof_descriptor_lines_do_not_hide_the_verified_process(self):
+        for records in (b'p7795', b'p7795\nf3', b'p7795\nf3\np7795\nf8'):
+            self.assertEqual(R.listener_pid(records),7795)
+        for records in (b'', b'f3', b'p7795\nf3\np123\nf7', b'p0', b'p7795\nxprivate'):
+            self.assertIsNone(R.listener_pid(records))

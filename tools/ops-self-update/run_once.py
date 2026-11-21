@@ -179,9 +179,20 @@ def await_(condition,seconds,code):
     raise RuntimeError(code)
 
 
+def listener_pid(fields):
+    pids=set()
+    for row in fields.splitlines():
+        if row.startswith(b'f'):  # lsof appends file-descriptor records even for -Fp.
+            if not re.fullmatch(rb'f[0-9]+',row):return None
+            continue
+        if not re.fullmatch(rb'p[1-9][0-9]*',row):return None
+        pids.add(int(row[1:]))
+    return next(iter(pids)) if len(pids)==1 else None
+
+
 def health(path, *, new_ui):
     pid=live(path)
-    if not pid or port_listening().splitlines()!=[b'p'+str(pid).encode()]:return None
+    if not pid or listener_pid(port_listening())!=pid:return None
     for route in ('/requests','/services','/alarms','/api/official-requests?limit=1','/api/service-status','/api/alarms')+(
         ('/deployments',) if new_ui else ()):
         conn=http.client.HTTPConnection('127.0.0.1',PORT,timeout=3)
@@ -364,8 +375,10 @@ def cycle(root=SUPPORT):
         try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:return result('busy')
         try:out=apply_cycle(root)
-        except Exception:
-            out=result('failed')
+        except Exception as error:
+            msg=str(error)
+            safe=msg if type(error) is RuntimeError and re.fullmatch(r'[A-Z][A-Z_0-9]{3,63}',msg) else 'OPS_SELF_UPDATE_FAILED'
+            out={**result('failed'),'reason':safe}
         write_json(root/'status.json',out)
         return out
 
