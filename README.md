@@ -36,7 +36,7 @@ python3.12 -B tests/smoke_stack.py --storage-root "$HOME/NGS-backend-smoke-new" 
 
 No generated images, audio, video, models, DBs, caches, logs or authentication files are included. Keep them outside source. NGS holds requests and copies; Data service owns canonical records.
 
-Set NGS_PORTRAIT_CACHE for image-reference cache and NGS_KNOWLEDGE_SEED for optional knowledge seeds. Export these variables in your shell; .env.example is documentation and is not auto-loaded.
+Set NGS_PORTRAIT_CACHE for the image-reference cache. Export these variables in your shell; .env.example is documentation and is not auto-loaded.
 
 ## Optional models
 

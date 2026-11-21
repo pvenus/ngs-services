@@ -48,3 +48,13 @@ externally configured; do not apply sample compose settings to live instances.
    residency, OPS official request summaries and worker heartbeat names.
    Restore the previous known-good LaunchAgent source paths if verification
    fails. No new business request is required.
+
+## Narrow unused-source cleanup
+
+The unconnected experimental pinned-file export and the retired standalone
+SQLite knowledge-catalog implementation are not build or runtime entrypoints.
+The unused legacy knowledge seed environment example is no longer advertised.
+This does not remove a PDS route, Filex data, a migration script, or a worker.
+In particular, the legacy Workflow service (8060) still uses the execution,
+file, and video-alpha APIs (8032, 8041, and 8050); retain those services and
+their endpoint contracts.

@@ -27,7 +27,6 @@ MAX_BODY = 512 * 1024
 MAX_STORY_BODY = 2 * 1024 * 1024
 MAX_PORTRAIT_BODY = 16 * 1024 * 1024
 PORTRAIT_ROOT = ROOT / "assets" / "portraits"
-KNOWLEDGE_SEED = Path(os.environ.get("NGS_KNOWLEDGE_SEED", str(Path.home() / ".local/share/ngs/catalog.json")))
 LOCK = threading.Lock()
 ALLOWED_STATUS = {"source", "proposal", "open", "confirmed"}
 ASSETS = {
