@@ -1,10 +1,12 @@
 """Owner-local request viewer and service heartbeat receiver."""
 import http.client
 import json
+from http.cookies import SimpleCookie, CookieError
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
+from deploy_control import COOKIE, TTL, KEY, Rejected, from_environment, is_sha
 from heartbeat import Heartbeats, MCP_TOOL, SERVER_NAME_PATTERN
 from request_progress import ProgressUnavailable, query_id, read_alarms, read_progress
 
@@ -17,6 +19,8 @@ ASSETS = {'/': ('index.html','text/html; charset=utf-8'),
           '/requests': ('index.html','text/html; charset=utf-8'),
           '/services': ('services.html','text/html; charset=utf-8'),
           '/alarms': ('alarms.html','text/html; charset=utf-8'),
+          '/deployments': ('deployments.html','text/html; charset=utf-8'),
+          '/deployments.js': ('deployments.js','text/javascript; charset=utf-8'),
           '/app.js': ('app.js','text/javascript; charset=utf-8'),
           '/style.css': ('style.css','text/css; charset=utf-8')}
 
@@ -110,7 +114,7 @@ def name_from(value):
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*_): pass
 
-    def send(self,status,body,media='application/json'):
+    def send(self,status,body,media='application/json',*,cookie=None):
         if not isinstance(body,bytes):
             body=json.dumps(body,ensure_ascii=False).encode()
         self.send_response(status)
@@ -118,6 +122,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length',str(len(body)))
         self.send_header('Cache-Control','no-store')
         self.send_header('X-Content-Type-Options','nosniff')
+        if cookie is not None:
+            self.send_header('Set-Cookie',cookie)
         self.send_header('Content-Security-Policy',"default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         self.end_headers()
         try: self.wfile.write(body)
@@ -133,6 +139,9 @@ class Handler(BaseHTTPRequestHandler):
             url=urlsplit(self.path)
             if url.netloc or url.scheme or len(self.path)>4096: raise ValueError()
         except ValueError: return self.send(400,{'error':'INVALID_QUERY'})
+        if url.path=='/api/deployments':
+            if url.query or self.path!='/api/deployments':return self.send(400,{'error':'INVALID_QUERY'})
+            return self.deploy_api('status')
         if url.path=='/api/service-status' and not url.query:
             return self.send(200,self.server.heartbeats.snapshot())
         if url.path=='/api/alarms':
@@ -160,6 +169,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200,(Path(__file__).parent/name).read_bytes(),media)
 
     def do_POST(self):
+        if self.path in ('/api/deployments','/api/deployments/session'):
+            return self.deploy_api('session' if self.path.endswith('/session') else 'apply')
         if self.path not in ('/mcp','/api/service-heartbeat'):
             return self.send(405,{'error':'READ_ONLY'})
         host=f'{HOST}:{self.server.server_port}'
@@ -183,6 +194,58 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self.send(400,{'error':'INVALID_HEARTBEAT'})
         return self.send(200,{'ok':True})
+
+    def deploy_api(self, action):
+        host=f'{HOST}:{self.server.server_port}'
+        origins=self.headers.get_all('Origin',[])
+        if (self.client_address[0]!=HOST or self.headers.get_all('Host')!=[host] or
+            self.headers.get_all('Sec-Fetch-Site',[])!=['same-origin'] or
+            (origins not in ([],['http://'+host]) if action=='status' else origins!=['http://'+host])):
+            return self.send(403,{'error':'LOCAL_ORIGIN_REQUIRED'})
+        control=self.server.deploy_control
+        if control is None:
+            return self.send(503,{'error':'OPS_DEPLOY_NOT_CONFIGURED'})
+        sid=None
+        cookie=self.headers.get_all('Cookie',[])
+        if len(cookie)>1:
+            return self.send(400,{'error':'INVALID_COOKIE'})
+        if cookie:
+            try:
+                parsed=SimpleCookie();parsed.load(cookie[0])
+                if COOKIE in parsed and KEY.fullmatch(parsed[COOKIE].value):
+                    sid=parsed[COOKIE].value
+            except CookieError:
+                return self.send(400,{'error':'INVALID_COOKIE'})
+        try:
+            if action=='status':
+                return self.send(200,control.status(sid))
+            sizes=self.headers.get_all('Content-Length',[])
+            if (self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Encoding') or
+                self.headers.get_all('Content-Type')!=['application/json'] or len(sizes)!=1 or
+                not re.fullmatch(r'[1-9][0-9]{0,2}',sizes[0]) or int(sizes[0])>512):
+                raise ValueError('INVALID_BODY')
+            def unique(pairs):
+                result=dict(pairs)
+                if len(result)!=len(pairs):raise ValueError('DUPLICATE_FIELD')
+                return result
+            self.connection.settimeout(3)
+            raw=self.rfile.read(int(sizes[0]))
+            if len(raw)!=int(sizes[0]):raise ValueError('INCOMPLETE_BODY')
+            value=json.loads(raw.decode('utf-8'),object_pairs_hook=unique)
+            if not isinstance(value,dict):raise ValueError('INVALID_BODY')
+            if action=='session' and set(value)=={'ownerKey'}:
+                session=control.begin(value['ownerKey'])
+                return self.send(200,{'ok':True},cookie=f'{COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/api/deployments; Max-Age={TTL}')
+            if action=='apply' and set(value)=={'sha','action'} and value['action']=='deploy' and is_sha(value['sha']):
+                token=self.headers.get_all('X-OPS-Deploy-CSRF',[])
+                if len(token)!=1 or not KEY.fullmatch(token[0]):
+                    return self.send(403,{'error':'OPS_DEPLOY_CSRF_DENIED'})
+                return self.send(202,control.request(sid,token[0],value['sha']))
+            raise ValueError('INVALID_BODY')
+        except Rejected as exc:
+            return self.send(exc.status,{'error':exc.code})
+        except (OSError,ValueError):
+            return self.send(400,{'error':'INVALID_BODY'})
 
     def handle_mcp(self,value):
         def reply(key,body):
@@ -220,14 +283,15 @@ class Handler(BaseHTTPRequestHandler):
                                'content':[{'type':'text','text':'{"ok":true}'}]})
 
 
-def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress=read_progress,alarms=read_alarms):
+def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress=read_progress,alarms=read_alarms,deploy_control=None):
     http=ThreadingHTTPServer((HOST,port),Handler)
     http.list_requests=list_requests
     http.request_progress=request_progress
     http.alarms=alarms
+    http.deploy_control=deploy_control
     http.heartbeats=heartbeats if heartbeats is not None else Heartbeats()
     return http
 
 
 if __name__=='__main__':
-    with server() as app: app.serve_forever()
+    with server(deploy_control=from_environment()) as app: app.serve_forever()

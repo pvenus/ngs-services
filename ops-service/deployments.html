@@ -1,0 +1,22 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OPS · NGS 배포</title><link rel="stylesheet" href="/style.css"><script defer src="/deployments.js"></script>
+<main>
+<header><div><span class="brand">OPS</span><h1>NGS 배포</h1><p>검증을 마친 GitHub 커밋만 배포할 수 있습니다.</p></div><div class="actions"><button id="deploy-refresh" type="button">새로고침</button></div></header>
+<nav class="ops-tabs" aria-label="OPS 화면"><a href="/requests">요청 상태</a><a href="/services">서비스 상태</a><a href="/alarms">알람</a><a href="/deployments" aria-current="page">NGS 배포</a></nav>
+<p id="deploy-status" role="status" aria-live="polite">배포 상태를 확인 중입니다.</p>
+<section id="deploy-gate" hidden>
+ <p><label for="deploy-owner-key">Mac 소유자 확인 코드</label>
+ <input id="deploy-owner-key" type="password" inputmode="text" autocomplete="off" spellcheck="false" maxlength="64">
+ <button id="deploy-unlock" type="button">잠금 해제</button></p>
+</section>
+<section id="deploy-details" hidden aria-label="배포 대상">
+ <dl>
+  <dt>GitHub 커밋</dt><dd><code id="deploy-sha"></code></dd>
+  <dt>검증 시각</dt><dd id="deploy-verified"></dd>
+  <dt>Mac</dt><dd id="deploy-mac"></dd>
+  <dt>Space</dt><dd id="deploy-space"></dd>
+ </dl>
+ <p><button id="deploy-apply" type="button" disabled>Mac에 배포</button></p>
+ <p>Mac 배포가 완료되어도 Space에 자동 게시되지 않습니다.</p>
+</section>
+</main></html>
