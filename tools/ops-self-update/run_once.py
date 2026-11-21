@@ -1,4 +1,5 @@
 """Fixed Mac OPS-only release cycle; no arbitrary targets, args, shell or Git credentials."""
+from contextlib import contextmanager
 import datetime
 import fcntl
 import hashlib
@@ -21,6 +22,7 @@ REPO='pvenus/ngs-services'
 REMOTE='https://github.com/'+REPO+'.git'
 WORKFLOW='.github/workflows/prepare-ops-release.yml'
 SUPPORT=Path.home()/'Workspaces/NGS/runtime/ops-self-update'
+DEPLOY_CONTROL=Path.home()/'Workspaces/NGS/runtime/deploy-control'
 RELEASES=Path.home()/'Workspaces/BackendServices/code/releases'
 LABEL='com.vinus.npcgen.ops'
 PLIST=Path.home()/'Library/LaunchAgents'/(LABEL+'.plist')
@@ -266,6 +268,35 @@ def result(status,sha=None):
             'checkedAt':datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}
 
 
+@contextmanager
+def cycle_fence(control=None):
+    """Avoid replacing an OPS process while it owns another target's apply."""
+    control=DEPLOY_CONTROL if control is None else control
+    try:
+        parent=control.lstat()
+    except FileNotFoundError:
+        yield True
+        return
+    require(control.resolve()==control and stat.S_ISDIR(parent.st_mode) and
+            parent.st_uid==os.getuid() and stat.S_IMODE(parent.st_mode)==0o700,
+            'OPS_DEPLOY_CONTROL_UNTRUSTED')
+    lock=control/'cycle.lock'
+    fd=os.open(lock,os.O_CREAT|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_RDWR,0o600)
+    try:
+        st=os.fstat(fd)
+        require(stat.S_ISREG(st.st_mode) and st.st_uid==os.getuid() and st.st_nlink==1 and
+                stat.S_IMODE(st.st_mode)==0o600 and lock.lstat().st_ino==st.st_ino,
+                'OPS_DEPLOY_CONTROL_LOCK_UNTRUSTED')
+        try:
+            fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
 def apply_cycle(root):
     try:
         prior_attempt=transaction_receipt(read_json(root/'transaction.json'))
@@ -273,7 +304,9 @@ def apply_cycle(root):
         prior_attempt=None
     if prior_attempt and prior_attempt['phase']=='switching':
         # A crashed cycle does not launch a second deployment before reconciliation.
-        return settle_transaction(root,prior_attempt)
+        with cycle_fence() as acquired:
+            if not acquired:return result('busy',prior_attempt['old']['sha'])
+            return settle_transaction(root,prior_attempt)
     previous_state=state(read_json(root/'installed.json'))
     previous=read(PLIST)
     mode=stat.S_IMODE(PLIST.lstat().st_mode)
@@ -304,17 +337,19 @@ def apply_cycle(root):
         # Recheck the exact canonical head just before launchd mutation.
         remote=command(['/usr/bin/git','ls-remote','--exit-code',REMOTE,'refs/heads/main'],timeout=15).stdout
         require(remote==os.fsencode(candidate['sha']+'\trefs/heads/main\n'),'CANONICAL_HEAD_MOVED')
-        require(read(PLIST)==previous and health(old_dir/'server.py',new_ui=False)==pid,'OPS_BASELINE_MOVED')
-        durable(root/'prior.plist',previous);durable(root/'candidate.plist',selected)
-        txn={'old':previous_state,'new':selected_state,'mode':mode,'phase':'switching','provenance':candidate}
-        write_json(root/'transaction.json',txn)
-        try:
-            stop(pid);durable(PLIST,selected,mode)
-            start(dst/'ops-service/server.py',True)
-            require(read(PLIST)==selected,'OPS_POST_APPLY_BYTES_DRIFT')
-            return settle_transaction(root,txn)
-        except Exception:
-            return settle_transaction(root,txn,prefer_previous=True)
+        with cycle_fence() as acquired:
+            if not acquired:return result('busy',previous_state['sha'])
+            require(read(PLIST)==previous and health(old_dir/'server.py',new_ui=False)==pid,'OPS_BASELINE_MOVED')
+            durable(root/'prior.plist',previous);durable(root/'candidate.plist',selected)
+            txn={'old':previous_state,'new':selected_state,'mode':mode,'phase':'switching','provenance':candidate}
+            write_json(root/'transaction.json',txn)
+            try:
+                stop(pid);durable(PLIST,selected,mode)
+                start(dst/'ops-service/server.py',True)
+                require(read(PLIST)==selected,'OPS_POST_APPLY_BYTES_DRIFT')
+                return settle_transaction(root,txn)
+            except Exception:
+                return settle_transaction(root,txn,prefer_previous=True)
 
 
 def cycle(root=SUPPORT):
@@ -336,8 +371,7 @@ def cycle(root=SUPPORT):
 
 
 if __name__=='__main__':
-    # launchd StartInterval and an eventual authorized immediate button invoke
-    # the same no-argument binary. There is no second eligibility/apply policy.
+    # launchd invokes this detached no-argument job only for OPS itself.
     if len(sys.argv)!=1:raise SystemExit(64)
     try:out=cycle()
     except Exception:out=result('failed')

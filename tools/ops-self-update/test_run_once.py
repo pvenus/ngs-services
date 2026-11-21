@@ -123,3 +123,11 @@ class Cycle(unittest.TestCase):
             os.fchmod(h.fileno(),0o600);fcntl.flock(h,fcntl.LOCK_EX)
             self.assertEqual(R.cycle(self.control)['state'],'busy')
         self.assertEqual(self.effects,[])
+    def test_ops_restart_waits_for_non_ops_cycle(self):
+        import fcntl
+        deploy=self.control/'other-targets'
+        deploy.mkdir(mode=0o700)
+        with (deploy/'cycle.lock').open('wb') as h, patch.object(R,'DEPLOY_CONTROL',deploy):
+            os.fchmod(h.fileno(),0o600);fcntl.flock(h,fcntl.LOCK_EX)
+            self.assertEqual(R.cycle(self.control)['state'],'busy')
+        self.assertEqual(self.effects,[])

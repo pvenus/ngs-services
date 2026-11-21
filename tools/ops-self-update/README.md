@@ -35,7 +35,8 @@ No bootstrap value is guessed or written by the updater. Later installs use
 commit with the same OPS tree never restarts OPS. Only the fixed
 `com.vinus.npcgen.ops` plist launch script and working directory may change.
 Other launch jobs, NGS/Space, Request/Workflow/PDS/RS/workers, and data are
-never restart/copy/provision targets. One private lock prevents overlap.
+never restart/copy/provision targets. One private lock prevents overlapping OPS updates. A second lock shared
+with the OPS deploy cycle defers an OPS restart while a target is applying.
 
 The journal keeps exact previous/candidate plist bytes and release IDs. If
 a health check fails, the prior OPS plist is restored and its existing

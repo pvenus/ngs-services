@@ -42,7 +42,7 @@ function compare(value,targets){
  compareNode.setAttribute('aria-live','polite');
  const localRow=targets.get('ngs-local'),spaceRow=targets.get('ngs-space');
  const local=evidence(localRow?.observed),space=evidence(spaceRow?.observed);
- const inProgress=[localRow,spaceRow].some(row=>['running','queued'].includes(row?.state));
+ const inProgress=[localRow,spaceRow].some(row=>['running','queued','failed','unknown'].includes(row?.state));
  const comparison=value.comparison===null&&!inProgress&&local&&space?
   (local.sha===space.sha?'match':'mismatch'):value.comparison;
  if(!local||!space||!['match','mismatch'].includes(comparison)){
