@@ -14,6 +14,8 @@ import sys
 import time
 import urllib.request
 
+from planner_cutover import ENTRY, HEARTBEAT, LABEL, REVISION, loaded_selector, planner_identity, wait_planner
+
 from prepare_ngs_release import (
     DIGEST, SHA, atomic_write, digest, json_load, matches, need, private_directory,
     private_file, shape, tree_sha,
@@ -44,6 +46,7 @@ TARGETS = {
                               'request-service/request-service.mjs', 'rs'),
     'rs-mcp': Target('com.vinus.ngs.rs-mcp', 'NGS', 'project-page-github-',
                      'sites/npcgen/build/rs-mcp.mjs', 'rs-mcp'),
+    'workflow-planner': Target(LABEL, 'BackendServices', 'ngs-services-github-', ENTRY, HEARTBEAT),
     'backend-stack': Target('com.projectbs.backend-stack', 'BackendServices', 'ngs-services-github-',
                             'runtime/stack.py', None),
 }
@@ -128,6 +131,11 @@ class LaunchHost:
                 return False
             time.sleep(.15)
 
+    def launch_report(self, label):
+        state = self.ctl('print', self.gui + '/' + label)
+        m = LABEL_PID.search(state.stdout) if state.returncode == 0 else None
+        return (int(m[1]), state.stdout) if m else (None, '')
+
     def remove(self, label):
         if not self.job(label)[0]:
             return  # rollback after a failed bootstrap need not unload anything
@@ -199,13 +207,37 @@ def apply_target(target, sha, archive_sha, directory, home, host):
     prior = selector.read_bytes()
     need(digest(prior) == m['expectedPriorPlistSha256'], 'TARGET_SELECTOR_CHANGED')
     desired = validate_and_rewrite(prior, release, catalog, base)
+    if target == 'workflow-planner':
+        original = plistlib.loads(prior)
+        prior_expected = planner_identity(original, home)
+        proposed = plistlib.loads(desired)
+        proposed.setdefault('EnvironmentVariables', {})[REVISION] = sha
+        desired = plistlib.dumps(proposed)
+        release_expected = planner_identity(proposed, home)
+        need(release_expected[2] == prior_expected[2], 'TARGET_PLANNER_DATABASE_IDENTITY')
+
+    def verify(since, old_pid, *, rollback=False):
+        if target == 'workflow-planner':
+            expected = prior_expected if rollback else release_expected
+            definition = original if rollback else proposed
+            return wait_planner(live=lambda: host.launch_report(catalog.label),
+                                status=lambda: json_load(host.get(8090, '/api/service-status'))['services'],
+                                expected=expected, since=since, previous_pid=old_pid,
+                                database_identity=lambda: planner_identity(definition, home)[2])
+        return host.wait_healthy(catalog, since, old_pid)
+
     lock_fd = os.open(directory / '.apply.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         private_file(directory / '.apply.lock', 0o600)
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         private_file(selector)
         need(selector.read_bytes() == prior, 'TARGET_SELECTOR_CHANGED')
-        pid = host.pid(catalog.label)
+        if target == 'workflow-planner':
+            pid, report = host.launch_report(catalog.label)
+            need(loaded_selector(report, *prior_expected[:2]), 'TARGET_PLANNER_PRIOR_NOT_LOADED')
+            need(planner_identity(original, home)[2] == prior_expected[2], 'TARGET_PLANNER_DATABASE_IDENTITY')
+        else:
+            pid = host.pid(catalog.label)
         need(pid is not None, 'TARGET_PRIOR_NOT_RUNNING')
         try:
             host.remove(catalog.label)
@@ -218,7 +250,7 @@ def apply_target(target, sha, archive_sha, directory, home, host):
             since = datetime.now(timezone.utc)
             host.start(catalog.label, selector)
             phase = 'health'
-            host.wait_healthy(catalog, since, pid)
+            verify(since, pid)
         except Exception as error:
             rollback = 'failed'
             try:
@@ -227,7 +259,7 @@ def apply_target(target, sha, archive_sha, directory, home, host):
                 atomic_write(selector, prior)
                 before = datetime.now(timezone.utc)
                 host.start(catalog.label, selector)
-                host.wait_healthy(catalog, before, failed_pid)
+                verify(before, failed_pid, rollback=True)
                 rollback = 'restored'
             except Exception:
                 pass
