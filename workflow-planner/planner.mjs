@@ -20,7 +20,10 @@ const identity=/^request\.official\.[a-f0-9]{64}$/;
 const ensure=(v,code)=>{if(!v)throw Error(code);};
 
 export function checkRow(row){
- ensure(exact(row,rowKeys)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType].includes(row.requestType)&&row.projectId==='binari'&&
+ const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
+  typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
+  row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
  const payload=(row.requestType===audioDeleteType?validateAudioDelete:

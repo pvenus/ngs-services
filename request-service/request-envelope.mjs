@@ -30,10 +30,10 @@ export function canonicalWorkflowPayload(body,projectId,type,schema){
  return known.validate(body,projectId);
 }
 
-export function validateOfficialSubmit(value){
+function validateSubmit(value,sourceId,allowedType){
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==fields.length||
-  !fields.every(k=>Object.hasOwn(value,k))||value.sourceId!=='local'||
-  !workflowFamilies.has(value.requestType)||!ident(value.idempotencyKey))throw Error('REQUEST_SUBMIT_INVALID');
+  !fields.every(k=>Object.hasOwn(value,k))||value.sourceId!==sourceId||
+  !allowedType(value.requestType)||!workflowFamilies.has(value.requestType)||!ident(value.idempotencyKey))throw Error('REQUEST_SUBMIT_INVALID');
  const projectId='binari',kind=value.requestType;
  // Preserve the legacy family-specific error for malformed NPC payloads.
  const payload=workflowFamilies.get(kind).validate(value.payload,projectId);
@@ -43,3 +43,6 @@ export function validateOfficialSubmit(value){
    {npcId:value.payload.character.npcId,npcSlug:value.payload.character.slug}:
    kind===conceptCategoryRequestType?{categoryId:value.payload.categoryId}:{})};
 }
+
+export const validateOfficialSubmit=value=>validateSubmit(value,'local',()=>true);
+export const validateVerifiedSpaceSubmit=value=>validateSubmit(value,'space',()=>true);

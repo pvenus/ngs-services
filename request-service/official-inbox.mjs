@@ -2,13 +2,14 @@
 import {closeSync,constants,lstatSync,mkdirSync,openSync,realpathSync} from 'node:fs';
 import {dirname,isAbsolute,join,resolve} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {canonical,oneStopSchemas,requestType,sha,validateCancel,validateStatusUpdate} from './one-stop-envelope.mjs';
+import {oneStopSchemas,requestType,validateCancel,validateStatusUpdate} from './one-stop-envelope.mjs';
 import {validateOfficialSubmit,workflowScopeSql} from './request-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema} from './concept-category-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema} from './audio-delete-envelope.mjs';
 import {audioRequestType,audioSchema} from './audio-generate-envelope.mjs';
 import {initializeOfficialSchema} from './official-inbox-schema.mjs';
-import {createRequestList,createWorkflowList} from './request-list.mjs';
+import {createRequestList,createWorkflowList,statuses} from './request-list.mjs';
+import {allowedWorkflowSourceSql,officialIdFor} from './space-intake.mjs';
 
 const error=()=>Error('OFFICIAL_REQUEST_INBOX_PRIVATE_REQUIRED');
 export function validateInboxPath(directory){
@@ -16,7 +17,7 @@ export function validateInboxPath(directory){
   throw error();
  return directory;
 }
-export function openOfficialInbox(directory,{now=Date.now}={}){
+export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
  validateInboxPath(directory);
  if(realpathSync(dirname(directory))!==dirname(directory))throw error();
  try{mkdirSync(directory,{mode:0o700});}catch(e){if(e.code!=='EEXIST')throw e;}
@@ -40,61 +41,78 @@ export function openOfficialInbox(directory,{now=Date.now}={}){
   WHERE project_id=? AND request_type=? AND schema_version=? AND state IN ('registered','planned')
   AND json_extract(payload_json,'$.categoryId')=? COLLATE NOCASE LIMIT 1`);
  const audioSource=db.prepare(`SELECT 1 FROM official_requests
-   WHERE official_request_id=? AND source_id='local' AND project_id=? AND request_type=? AND schema_version=? AND state='completed'
+   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id=? AND request_type=? AND schema_version=? AND state='completed'
     AND json_extract(payload_json,'$.kind')='bgm'`);
  const activeAudioDelete=db.prepare(`SELECT 1 FROM official_requests
-   WHERE source_id='local' AND project_id=? AND request_type=? AND schema_version=? AND state IN ('registered','planned')
+   WHERE ${allowedWorkflowSourceSql} AND project_id=? AND request_type=? AND schema_version=? AND state IN ('registered','planned')
     AND json_extract(payload_json,'$.officialRequestId')=?`);
  const insert=db.prepare(`INSERT INTO official_requests(
   official_request_id,source_id,project_id,idempotency_key,request_type,schema_version,
   payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,?,?)`);
  const ownedStatus=db.prepare(`SELECT state FROM official_requests
-  WHERE official_request_id=? AND source_id='local' AND project_id='binari'
+  WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
   AND ${workflowScopeSql}`);
+ const localOwnedStatus=db.prepare(`SELECT state FROM official_requests
+  WHERE official_request_id=? AND source_id='local' AND project_id='binari' AND ${workflowScopeSql}`);
  const cancelRow=db.prepare(`UPDATE official_requests SET state='cancelled'
   WHERE official_request_id=? AND source_id='local' AND project_id='binari'
    AND ${workflowScopeSql} AND state='registered'`);
  const transition=db.prepare(`UPDATE official_requests SET state=?
-  WHERE official_request_id=? AND source_id='local' AND project_id='binari'
+  WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
    AND ${workflowScopeSql} AND state=?`);
- return {
-  list:createRequestList(db),
-  workflowList:createWorkflowList(db),
-  register(value){
-   const {sourceId,projectId,requestType:kind,idempotencyKey,payload,payloadSha256,schemaVersion,npcId,npcSlug,categoryId}=validateOfficialSubmit(value);
-   const officialRequestId='request.official.'+sha(canonical(['request.official.v1',sourceId,projectId,idempotencyKey]));
+ function proof(prior,request){
+  if(!prior||prior.official_request_id!==officialIdFor(request)||prior.request_type!==request.requestType||
+     prior.schema_version!==request.schemaVersion||prior.payload_json!==request.payload||
+     prior.payload_sha256!==request.payloadSha256)return null;
+  if(!statuses.includes(prior.state)||!Number.isSafeInteger(prior.registered_at)||prior.registered_at<0)
+   throw Error('OFFICIAL_REQUEST_REGISTER_FAILED');
+  return {officialRequestId:prior.official_request_id,status:prior.state,registeredAt:prior.registered_at};
+ }
+ function register(request,isSite=false,raw){
+   const {sourceId,projectId,requestType:kind,idempotencyKey,payload,payloadSha256,schemaVersion,npcId,npcSlug,categoryId}=request;
+   const officialRequestId=officialIdFor(request);
+   let evidence;
    db.exec('BEGIN IMMEDIATE');
    try{
     const prior=original.get(sourceId,projectId,idempotencyKey);
     if(prior){
-     if(prior.official_request_id!==officialRequestId||prior.request_type!==kind||prior.schema_version!==schemaVersion||
-        prior.payload_json!==payload||prior.payload_sha256!==payloadSha256||prior.state!=='registered')
+     evidence=proof(prior,request);
+     if(!evidence||!isSite&&prior.state!=='registered')
       throw Error('OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT');
     }else{
-     if(kind===conceptCategoryRequestType&&(value.payload.operation==='replace'||
-        (value.payload.operation==='add'&&!Object.hasOwn(value.payload,'requiredSections'))))
-      throw Error('NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID');
+     if(kind===conceptCategoryRequestType){
+      const concept=raw?.payload??JSON.parse(payload);
+      if(concept.operation==='replace'||concept.operation==='add'&&!Object.hasOwn(concept,'requiredSections'))
+       throw Error('NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID');
+     }
      if(kind===requestType){
       if(target.get(projectId,...oneStopSchemas,npcId,npcSlug))throw Error('OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED');
      }else if(kind===conceptCategoryRequestType&&targetCategory.get(projectId,conceptCategoryRequestType,conceptCategorySchema,categoryId)){
       throw Error('OFFICIAL_REQUEST_CONCEPT_CATEGORY_ALREADY_REGISTERED');
      }
      if(kind===audioDeleteType){
-      const audioId=value.payload.officialRequestId;
+      const audioId=JSON.parse(payload).officialRequestId;
       if(!audioSource.get(audioId,projectId,audioRequestType,audioSchema))throw Error('OFFICIAL_AUDIO_DELETE_TARGET_NOT_COMPLETED');
       if(activeAudioDelete.get(projectId,audioDeleteType,audioDeleteSchema,audioId))throw Error('OFFICIAL_AUDIO_DELETE_ALREADY_REGISTERED');
      }
-     insert.run(officialRequestId,sourceId,projectId,idempotencyKey,kind,schemaVersion,payload,payloadSha256,'registered',now());
+     const registeredAt=now();
+     insert.run(officialRequestId,sourceId,projectId,idempotencyKey,kind,schemaVersion,payload,payloadSha256,'registered',registeredAt);
+     evidence={officialRequestId,status:'registered',registeredAt};
     }
     db.exec('COMMIT');
    }catch(error){db.exec('ROLLBACK');throw error;}
-   return {officialRequestId,status:'registered'};
-  },
+   return isSite?evidence:{officialRequestId,status:'registered'};
+ }
+ return {
+  list:createRequestList(db),
+  workflowList:createWorkflowList(db),
+  register:value=>register(validateOfficialSubmit(value),false,value),
+  registerSpace:typeof readSpaceRequest==='function'?request=>register(request,true):undefined,
   cancel(value){
    const {officialRequestId}=validateCancel(value);
    db.exec('BEGIN IMMEDIATE');
    try{
-    const prior=ownedStatus.get(officialRequestId);
+    const prior=localOwnedStatus.get(officialRequestId);
     if(!prior)throw Error('OFFICIAL_REQUEST_NOT_FOUND');
     if(prior.state!=='cancelled'&&(prior.state!=='registered'||cancelRow.run(officialRequestId).changes!==1))
      throw Error('OFFICIAL_REQUEST_CANCEL_CONFLICT');

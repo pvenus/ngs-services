@@ -6,6 +6,7 @@ import {npcPlanningUpdateType} from './npc-planning-update-envelope.mjs';
 import {npcPlanningAddType} from './npc-planning-add-envelope.mjs';
 import {audioRequestType} from './audio-generate-envelope.mjs';
 import {audioDeleteType} from './audio-delete-envelope.mjs';
+import {allowedWorkflowSourceSql} from './space-intake.mjs';
 export const listTool='request_list',workflowListTool='request_workflow_list';
 export const statuses=Object.freeze(['registered',...workflowStatuses,'cancelled']);
 export const defaultLimit=50,maxLimit=100,maxCursor=160;
@@ -38,17 +39,17 @@ const operatorFields=`${basic}, source_id AS sourceId,
    WHEN '${audioRequestType}' THEN json_extract(payload_json,'$.title')
    WHEN '${audioDeleteType}' THEN coalesce((SELECT json_extract(g.payload_json,'$.title') FROM official_requests g
       WHERE g.official_request_id=json_extract(official_requests.payload_json,'$.officialRequestId')
-       AND g.request_type='${audioRequestType}' AND g.source_id=official_requests.source_id AND g.project_id=official_requests.project_id),'BGM 삭제')
+       AND g.request_type='${audioRequestType}' AND g.project_id=official_requests.project_id),'BGM 삭제')
    ELSE json_extract(payload_json,'$.character.name') END AS targetName`;
-const workflowFields=`${basic}, payload_json AS payloadJson, payload_sha256 AS payloadSha256`;
+const workflowFields=`${basic}, payload_json AS payloadJson, payload_sha256 AS payloadSha256, source_id AS sourceId, idempotency_key AS sourceKey`;
 const commonKeys=['officialRequestId','projectId','requestType','schemaVersion'];
 function workflowProjection(r){
- const {payloadJson,payloadSha256,...rest}=r;
+ const {payloadJson,payloadSha256,sourceId,sourceKey,...rest}=r;
  try{
   const payload=JSON.parse(payloadJson);
   if(rest.status!=='registered'||canonicalWorkflowPayload(payload,rest.projectId,rest.requestType,rest.schemaVersion)!==payloadJson||
      sha(payloadJson)!==payloadSha256)throw Error();
-  return {...rest,payload,payloadSha256};
+  return {...rest,payload,payloadSha256,...(sourceId==='space'?{sourceId,sourceKey}: {})};
  }catch{throw Error('OFFICIAL_REQUEST_WORKFLOW_LIST_FAILED');}
 }
 
@@ -57,7 +58,7 @@ function createPage(db,workflow){
  const page=db.prepare(`SELECT ${workflow?workflowFields:operatorFields}
   FROM official_requests
   WHERE rowid<=? AND (? IS NULL OR state=?)
-   ${workflow?`AND source_id='local' AND project_id='binari' AND ${workflowScopeSql}`:""}
+   ${workflow?`AND ${allowedWorkflowSourceSql} AND project_id='binari' AND ${workflowScopeSql}`:""}
    AND (? IS NULL OR registered_at<? OR (registered_at=? AND rowid<?))
   ORDER BY registered_at DESC, rowid DESC LIMIT ?`);
  const invalid=()=>Error(workflow?'REQUEST_WORKFLOW_LIST_INVALID':'REQUEST_LIST_INVALID');

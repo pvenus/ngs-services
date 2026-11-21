@@ -98,3 +98,22 @@ destructive concept `replace` is denied; historical exact replay stays valid.
 Fresh add also requires an ordered, exact array of 1–16 distinct trimmed
 `requiredSections` labels, each 1–80 code points. Existing recorded add without
 this array keeps its historical payload and exact replay.
+
+### Opt-in Space request intake
+
+The existing `request_submit` remains local-only. A launcher supplying the
+independently owner-authenticated `readSpaceRequest(queueId)` callback to
+`createRequestService` enables exactly one additional loopback MCP tool:
+`request_submit_space({queueId})`. That callback must call `space_requests_get`
+on the configured owner Site and return the exact immutable object
+`{queueId, requestType, idempotencyKey: queueId, payload}`. The MCP caller
+cannot supply a payload, origin claim, alternate Site endpoint or key.
+
+RS enforces the same typed request validators for the approved Binari project,
+stamps `source_id=space`, and uses the exact queue ID as the source-scoped
+idempotency key. It returns only `{officialRequestId,status,registeredAt}`.
+The official ID commits to `['request.official.v1','space',projectId,queueId]`.
+An exact replay returns the same ID and original time even after state
+advances; a different payload for the same key is rejected. Cancel and other
+external tool permissions are not widened. Do not activate without a verified
+Site adapter and compatible Planner. Native CLI does not configure the reader.

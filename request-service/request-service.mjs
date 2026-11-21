@@ -8,10 +8,11 @@ export const host='127.0.0.1',port=8770;
 export function configuration(env){
  return {directory:validateInboxPath(env.REQUEST_OFFICIAL_INBOX_DIR)};
 }
-export function createRequestService({directory}){
- const inbox=openOfficialInbox(directory);
+export function createRequestService({directory,readSpaceRequest}){
+ if(readSpaceRequest!==undefined&&typeof readSpaceRequest!=='function')throw Error('REQUEST_SPACE_INVALID');
+ const inbox=openOfficialInbox(directory,{readSpaceRequest});
  const server=createServer({headersTimeout:15000,requestTimeout:15000},(req,res)=>{
-  void requestMcp(req,res,inbox).catch(()=>{
+  void requestMcp(req,res,inbox,{readSpaceRequest}).catch(()=>{
    if(res.headersSent)return res.destroy();
    const raw=JSON.stringify({error:'OFFICIAL_REQUEST_REGISTER_FAILED'});
    res.writeHead(503,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}).end(raw);

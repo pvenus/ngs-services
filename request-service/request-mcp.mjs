@@ -8,10 +8,12 @@ import {audioRequestType,audioSchema,audioKind,audioTitleLimit,audioBriefLimit,a
 import {audioDeleteType,audioDeleteSchema,audioOfficialIdPattern} from './audio-delete-envelope.mjs';
 import {defaultLimit,listTool,maxCursor,maxLimit,statuses,workflowListTool} from './request-list.mjs';
 
+import {spaceQueueIdPattern,verifiedSpaceRequest} from './space-intake.mjs';
+
 const version='2025-06-18';
 const maxBody=96*1024;
 const known={
- REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
+ REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
  NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID:400,NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID:400,NGS_AUDIO_GENERATE_PAYLOAD_INVALID:400,NGS_AUDIO_DELETE_PAYLOAD_INVALID:400,
  OFFICIAL_AUDIO_DELETE_TARGET_NOT_COMPLETED:404,OFFICIAL_AUDIO_DELETE_ALREADY_REGISTERED:409,
  OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT:409,OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED:409,
@@ -106,7 +108,7 @@ const workflowList={
   requests:{type:'array',items:{type:'object',properties:{
    ...Object.fromEntries(workflowFields.map(k=>[k,{type:'string'}])),
    payload:{type:'object'},payloadSha256:{type:'string',pattern:'^[a-f0-9]{64}$'},
-   status:{const:'registered'},registeredAt:{type:'integer',minimum:0},
+   status:{const:'registered'},registeredAt:{type:'integer',minimum:0},sourceId:{const:'space'},sourceKey:{type:'string',pattern:spaceQueueIdPattern},
   },required:workflowFields,additionalProperties:false}},
  }},
  annotations:list.annotations,
@@ -116,6 +118,14 @@ const updateStatus={
  inputSchema:{type:'object',properties:{officialRequestId:tool.outputSchema.properties.officialRequestId,
   status:{enum:workflowStatuses}},required:['officialRequestId','status'],additionalProperties:false},
  outputSchema:{...tool.outputSchema,properties:{...tool.outputSchema.properties,status:{enum:workflowStatuses}}},
+ annotations:tool.annotations,
+};
+const siteToolSchema={
+ name:'request_submit_space',description:'Verify one typed request via the configured owner Space MCP before local intake or exact replay.',
+ inputSchema:{type:'object',properties:{queueId:{type:'string',pattern:spaceQueueIdPattern}},
+  required:['queueId'],additionalProperties:false},
+ outputSchema:{...tool.outputSchema,properties:{...tool.outputSchema.properties,status:{enum:statuses},
+  registeredAt:{type:'integer',minimum:0}},required:['officialRequestId','status','registeredAt']},
  annotations:tool.annotations,
 };
 const toolBindings=new Map([
@@ -152,7 +162,7 @@ async function body(req){
  if(size!==Number(len))throw Error();
  return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,size)));
 }
-export async function requestMcp(req,res,inbox){
+export async function requestMcp(req,res,inbox,{readSpaceRequest}={}){
  if(!allowed(req,req.socket.localPort))return send(res,403,{error:'REQUEST_MCP_LOOPBACK_REQUIRED'});
  if(req.url!=='/mcp')return send(res,404,{error:'NOT_FOUND'});
  if(req.method!=='POST')return send(res,405,{error:'REQUEST_MCP_POST_ONLY'},{Allow:'POST'});
@@ -177,14 +187,16 @@ export async function requestMcp(req,res,inbox){
   return result(res,id,{protocolVersion:version,capabilities:{tools:{}},serverInfo:{name:'vinus-request-service',version:'1.0.0'}});
  }
  if(method==='ping'&&!Object.keys(params).length)return result(res,id,{});
- if(method==='tools/list'&&!Object.keys(params).length)return result(res,id,{tools:[tool,cancel,list,workflowList,updateStatus]});
+ if(method==='tools/list'&&!Object.keys(params).length)return result(res,id,{tools:[tool,cancel,list,workflowList,updateStatus,...(readSpaceRequest?[siteToolSchema]:[])]});
  if(method!=='tools/call')return rpcError(res,id,-32601,'Method not found');
- const binding=toolBindings.get(params.name);
+ const site=readSpaceRequest&&params.name===siteToolSchema.name;
+ const binding=site?['registerSpace','OFFICIAL_REQUEST_SPACE_FAILED']:toolBindings.get(params.name);
  if(!binding||!Object.hasOwn(params,'arguments')||
     Object.keys(params).some(k=>!['name','arguments','_meta'].includes(k)))
   return rpcError(res,id,-32602,'Unknown tool or invalid tool call');
  try{
-  const value=inbox[binding[0]](params.arguments);
+  const args=site?await verifiedSpaceRequest(params.arguments,readSpaceRequest):params.arguments;
+  const value=inbox[binding[0]](args);
   return result(res,id,{isError:false,content:text(value),structuredContent:value});
  }catch(err){
   const matched=Object.hasOwn(known,err?.message);

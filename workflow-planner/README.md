@@ -49,3 +49,13 @@ task; update creates one document overwrite task with no file deletion.
 Legacy replace is history only for new planning; its persisted graph is not rewritten.
 Migrate creates one deterministic document task; remove creates one
 scoped file task. Workers still acquire exact tasks themselves.
+
+### Space request provenance
+
+Local registered rows keep the original shape. Verified Space registered
+rows also carry `sourceId: "space"` and `sourceKey` (the immutable queue ID).
+Planner verifies that the official request ID commits to the source, Binari
+project and queue ID, then uses the same type-specific task graph. No SQLite
+migration or worker task/claim DTO change. Before rolling back to the old
+Planner, stop Space intake and drain any unplanned Space registrations;
+already materialized runs remain compatible.
