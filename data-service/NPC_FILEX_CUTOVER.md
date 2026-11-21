@@ -33,7 +33,13 @@ performed for this migration. NGS UI/deployment checks are tracked separately.
 
 ## Tests and operations
 
-`cd data-service && PYTHONPATH=.:../laya-service python3 -m unittest discover -s tests`
+`cd data-service && PYTHONPATH=.:../filex-writer python3 -m unittest discover -s tests`
+
+The historical Laya knowledge-routing cases in `test_filex_cas_integration.py`,
+`test_knowledge_catalog_http.py`, and `test_knowledge_category_removal.py`
+reference modules that were already absent from the tracked service. Those
+cases need independent fixtures before they can run; they are not part of
+the active `workflow-decision-service` smoke.
 `cd filex-writer && python3 -m unittest`
 
 The migration command defaults to read-only planning. `--apply` requires explicit

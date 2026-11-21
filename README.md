@@ -9,7 +9,7 @@ Integrated local backend for NGS requests, execution and canonical data. Fronten
 | data-service | Canonical data and revisions | 8030 |
 | catalog-service | Capability catalog | 8031 |
 | execution-service | Execution status and results | 8032 |
-| laya-service | Request routing and context selection | 8040 |
+| workflow-decision-service | Workflow decisions and compatibility routing | 8040 |
 | file-service | File access and delivery | 8041 |
 | video-alpha-service | Video alpha adapters | 8050 |
 | workflow-service | Request orchestration | 8060 |
