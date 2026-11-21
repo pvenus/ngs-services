@@ -183,6 +183,11 @@ class SpacePublishQueue:
         items = self._value()["items"]
         return self._public(items[0]) if items else None
 
+    def last_success(self):
+        for p in (self.root,self.path.parent,self.path):
+            secure_directory(p)
+        return next((t['result'] for t in self._value()['items'] if t['state']=='succeeded'), None)
+
     def for_thread(self, *, thread_id):
         for p in (self.root, self.path.parent, self.path):
             secure_directory(p)

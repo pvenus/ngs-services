@@ -103,3 +103,19 @@ deep link is available, copy a fixed request and send it in that thread. A
 clipboard action never counts as a submitted/published operation. Live
 contact and the serving revision are projected from the existing NGS-MCP
 report relayed by RS-MCP, not a release receipt or publish timestamp.
+
+### Space publication queue
+
+The owner-local Space button pins the exact GitHub main commit after the
+fixed `prepare-ngs-release.yml` CI run is verified. It only queues a
+request; it never starts a local deploy or publishes to Sites directly.
+The queue is available only with its private publisher capability file
+alongside the existing Site and dedicated thread identity, not with a Sites
+credential. The existing loopback `/mcp` supports authenticated
+`ops_space_publish_peek`, `ops_space_publish_claim`, and
+`ops_space_publish_finish`. Its capability permits the fixed queue only.
+The polling worker must claim a request exactly once and hand it to the
+designated authenticated Site thread. No uncertain publication may be
+re-sent automatically. A native success receipt is paired with the live
+NGS-MCP serving commit before the last publish time is shown. A click or
+the last observed response time never counts as an actual publication.

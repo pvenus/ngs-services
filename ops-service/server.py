@@ -10,6 +10,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from deploy_control import COOKIE, TTL, KEY, Rejected, from_environment
 from heartbeat import Heartbeats, MCP_TOOL, SERVER_NAME_PATTERN
+from space_publish_api import METHODS as SPACE_PUBLISH_TOOLS, SpacePublisher
+from space_publish_queue import QueueRejected
 from request_progress import ProgressUnavailable, query_id, read_alarms, read_progress
 
 HOST, PORT, MCP_PORT = '127.0.0.1', 8090, 8770
@@ -200,6 +202,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(400,{'error':'INVALID_HEARTBEAT'})
         return self.send(200,{'ok':True})
 
+    def active_control(self):
+        control=self.server.deploy_control
+        if control is None and self.server.native_deployment_discovery:
+            with self.server.deploy_initialization_lock:
+                if self.server.deploy_control is None:
+                    self.server.deploy_control=from_environment()
+                control=self.server.deploy_control
+        return control
+
+    def space_publisher(self, control):
+        with self.server.space_publisher_lock:
+            if self.server.current_space_publisher is None or self.server.current_space_publisher.control is not control:
+                self.server.current_space_publisher=SpacePublisher(control,self.server.space_candidate)
+            return self.server.current_space_publisher
+
     def deploy_api(self, action):
         host=f'{HOST}:{self.server.server_port}'
         origins=self.headers.get_all('Origin',[])
@@ -207,12 +224,7 @@ class Handler(BaseHTTPRequestHandler):
             self.headers.get_all('Sec-Fetch-Site',[])!=['same-origin'] or
             (origins not in ([],['http://'+host]) if action=='status' else origins!=['http://'+host])):
             return self.send(403,{'error':'LOCAL_ORIGIN_REQUIRED'})
-        control=self.server.deploy_control
-        if control is None and self.server.native_deployment_discovery:
-            with self.server.deploy_initialization_lock:
-                if self.server.deploy_control is None:
-                    self.server.deploy_control=from_environment()
-                control=self.server.deploy_control
+        control=self.active_control()
         if control is None:
             return self.send(503,{'error':'OPS_DEPLOY_NOT_CONFIGURED'})
         sid=None
@@ -233,11 +245,23 @@ class Handler(BaseHTTPRequestHandler):
                 # existing OPS API. Contact time is not provider publish time.
                 live=next((row for row in self.server.heartbeats.snapshot()['services']
                            if row['serverName']=='ngs-space'),None)
-                if live:
-                    for row in state['cycle'].get('targets',[]):
-                        if row['id']=='ngs-space' and row.get('publication'):
-                            row['publication']['live']={key:live[key] for key in
-                                ('state','commitSha','lastReceivedAt') if key in live}
+                for row in state['cycle'].get('targets',[]):
+                    if row['id']!='ngs-space' or not row.get('publication'):
+                        continue
+                    if live:
+                        row['publication']['live']={key:live[key] for key in
+                            ('state','commitSha','lastReceivedAt') if key in live}
+                    publisher=self.space_publisher(control)
+                    if publisher.available():
+                        try:
+                            row['publication'].update(publisher.status())
+                            observation=publisher.native_observation(live.get('commitSha') if live and live['state']=='connected' else None)
+                            if observation:
+                                row['observed']=observation
+                                local=next((r.get('observed') for r in state['cycle'].get('targets',[]) if r['id']=='ngs-local'),None)
+                                if local:state['cycle']['comparison']='match' if local['sha']==observation['sha'] else 'mismatch'
+                        except (Rejected,OSError,ValueError):
+                            row['publication'].update(canRequest=False,candidateSha=None)
                 return self.send(200,state)
             sizes=self.headers.get_all('Content-Length',[])
             if (self.headers.get_all('Transfer-Encoding') or self.headers.get_all('Content-Encoding') or
@@ -256,6 +280,11 @@ class Handler(BaseHTTPRequestHandler):
             if action=='session' and set(value)=={'ownerKey'}:
                 session=control.begin(value['ownerKey'])
                 return self.send(200,{'ok':True},cookie=f'{COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/api/deployments; Max-Age={TTL}')
+            if action=='wake' and set(value)=={'action','target','sha'} and value['action']=='queue-space' and value['target']=='ngs-space':
+                token=self.headers.get_all('X-OPS-Deploy-CSRF',[])
+                if len(token)!=1 or not KEY.fullmatch(token[0]):
+                    return self.send(403,{'error':'OPS_DEPLOY_CSRF_DENIED'})
+                return self.send(202,{'request':self.space_publisher(control).submit(sid,token[0],value['sha'])})
             if (action=='wake' and set(value)=={'action','target'} and value['action']=='wake' and
                     type(value['target']) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,40}',value['target'])):
                 token=self.headers.get_all('X-OPS-Deploy-CSRF',[])
@@ -263,7 +292,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(403,{'error':'OPS_DEPLOY_CSRF_DENIED'})
                 return self.send(202,control.wake(sid,token[0],value['target']))
             raise ValueError('INVALID_BODY')
-        except Rejected as exc:
+        except (Rejected,QueueRejected) as exc:
             return self.send(exc.status,{'error':exc.code})
         except (OSError,ValueError):
             return self.send(400,{'error':'INVALID_BODY'})
@@ -291,9 +320,33 @@ class Handler(BaseHTTPRequestHandler):
         if method=='ping':
             return reply('result',{})
         if method=='tools/list':
-            return reply('result',{'tools':[HEARTBEAT_TOOL]})
+            tools=[HEARTBEAT_TOOL]
+            tokens=self.headers.get_all('X-OPS-Space-Publisher',[])
+            if len(tokens)==1 and KEY.fullmatch(tokens[0]):
+                control=self.active_control()
+                if control and self.space_publisher(control).authenticated(tokens[0]):
+                    for name in SPACE_PUBLISH_TOOLS:
+                        props={} if name.endswith('_peek') else {'requestId':{'type':'string'}}
+                        if name.endswith('_finish'):props['report']={'type':'object'}
+                        tools.append({'name':name,'description':'Owner-approved fixed Space publication handoff',
+                                      'inputSchema':{'type':'object','properties':props,
+                                                     'required':list(props),'additionalProperties':False}})
+            return reply('result',{'tools':tools})
         if method!='tools/call':
             return reply('error',{'code':-32601,'message':'Method not found'})
+        if isinstance(params,dict) and params.get('name') in SPACE_PUBLISH_TOOLS:
+            keys=self.headers.get_all('X-OPS-Space-Publisher',[])
+            if len(keys)!=1 or not KEY.fullmatch(keys[0]):
+                return reply('error',{'code':-32001,'message':'SPACE_PUBLISH_AUTH_REQUIRED'})
+            control=self.active_control()
+            if not control:
+                return reply('error',{'code':-32002,'message':'SPACE_PUBLISH_NOT_CONFIGURED'})
+            try:
+                data=self.space_publisher(control).call(keys[0],params['name'],params.get('arguments'))
+                return reply('result',{'isError':False,'structuredContent':data,
+                                       'content':[{'type':'text','text':json.dumps(data,separators=(',',':'))}]})
+            except (Rejected,QueueRejected,OSError,ValueError) as exc:
+                return reply('error',{'code':-32003,'message':exc.code if isinstance(exc,(Rejected,QueueRejected)) else 'SPACE_PUBLISH_UNAVAILABLE'})
         try:
             if not isinstance(params,dict) or params.get('name')!=MCP_TOOL:
                 raise ValueError('INVALID_HEARTBEAT')
@@ -304,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
                                'content':[{'type':'text','text':'{"ok":true}'}]})
 
 
-def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress=read_progress,alarms=read_alarms,deploy_control=None,native_deployment_discovery=False):
+def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress=read_progress,alarms=read_alarms,deploy_control=None,native_deployment_discovery=False,space_candidate=None):
     http=ThreadingHTTPServer((HOST,port),Handler)
     http.list_requests=list_requests
     http.request_progress=request_progress
@@ -312,6 +365,9 @@ def server(port=PORT,list_requests=request_list,heartbeats=None,request_progress
     http.deploy_control=deploy_control
     http.native_deployment_discovery=native_deployment_discovery
     http.deploy_initialization_lock=threading.Lock()
+    http.space_publisher_lock=threading.Lock()
+    http.current_space_publisher=None
+    http.space_candidate=space_candidate
     http.heartbeats=heartbeats if heartbeats is not None else Heartbeats()
     return http
 
