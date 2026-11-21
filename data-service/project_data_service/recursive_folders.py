@@ -1,10 +1,11 @@
 """Read-only active canonical tree comparison. Not a filesystem snapshot."""
 import hashlib
+from collections import OrderedDict
 from contextlib import contextmanager
 import os
 import re
 import stat
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 from urllib.parse import parse_qs
 
 from .project_folders import DIR_FLAGS,FILE_FLAGS,FolderError,SHA
@@ -13,11 +14,17 @@ PREFIX='/v1/folders'
 MAX_ENTRIES=32768
 MAX_DIRS=8192
 MAX_BODY=16*1024*1024
-MAX_FILE=64*1024*1024
+# MCP uses interoperable exact JSON integers, not a product-level size cap.
+MAX_TRANSFER_INTEGER=2**53-1
+# The legacy HTTP whole-file route materializes its response in memory.
+MAX_LEGACY_BUFFERED_FILE=64*1024*1024
 MAX_PATH_BYTES=4096
 CHUNK=1024*1024
 _COMPARE=BoundedSemaphore(1)
 _FETCH=BoundedSemaphore(2)
+_HASH_CACHE=OrderedDict()
+_HASH_LOCK=Lock()
+_HASH_MAX=256
 
 
 def _bad(status=409,code='FOLDER_SOURCE_CHANGED'):
@@ -61,27 +68,56 @@ def _stat(s):
     return (s.st_dev,s.st_ino,s.st_mode,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_nlink)
 
 
+def _cached(pin,sha=None):
+    with _HASH_LOCK:
+        if sha is None:
+            found=_HASH_CACHE.get(pin)
+            if found is not None:_HASH_CACHE.move_to_end(pin)
+            return found
+        _HASH_CACHE[pin]=sha
+        _HASH_CACHE.move_to_end(pin)
+        if len(_HASH_CACHE)>_HASH_MAX:_HASH_CACHE.popitem(last=False)
+
+
 def _read(fd,name,initial,*,keep=False,window=None):
     with os.fdopen(os.open(name,FILE_FLAGS,dir_fd=fd),'rb')as stream:
         before=os.fstat(stream.fileno())
         if _stat(before)!=_stat(initial):_bad()
         if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1 or before.st_dev!=os.fstat(fd).st_dev:
             _bad(409,'FOLDER_SOURCE_UNSAFE')
-        if not 0<=before.st_size<=MAX_FILE:_bad(409,'FOLDER_FILE_LIMIT')
-        sha=hashlib.sha256();raw=bytearray() if keep else None;total=0
-        while data:=stream.read(CHUNK):
-            start=total
-            total+=len(data)
-            if total>before.st_size:_bad()
-            sha.update(data)
-            if raw is not None:
-                if window is None:raw.extend(data)
-                else:
-                    lo,hi=max(window[0],start),min(window[1],total)
-                    if lo<hi:raw.extend(memoryview(data)[lo-start:hi-start])
-        if (total!=before.st_size or _stat(os.fstat(stream.fileno()))!=_stat(before)
-                or _stat(os.stat(name,dir_fd=fd,follow_symlinks=False))!=_stat(before)):_bad()
-    return sha.hexdigest(),raw
+        pin=_stat(before)
+        if not 0<=before.st_size<=MAX_TRANSFER_INTEGER:_bad(409,'FOLDER_FILE_LIMIT')
+        if keep and window is None and before.st_size>MAX_LEGACY_BUFFERED_FILE:
+            _bad(409,'FOLDER_FILE_LIMIT')
+        # Reuse only a fully read SHA for the exact inode, device, size,
+        # timestamps and link count, with the same pre/post FD and path checks.
+        # Large-file chunking does not re-read all previous bytes one MiB at a time.
+        use_cache=before.st_size>MAX_LEGACY_BUFFERED_FILE and (not keep or window is not None)
+        digest=_cached(pin) if use_cache else None
+        raw=bytearray() if keep else None
+        if digest is None:
+            sha=hashlib.sha256();total=0
+            while data:=stream.read(CHUNK):
+                start=total
+                total+=len(data)
+                if total>before.st_size:_bad()
+                sha.update(data)
+                if raw is not None:
+                    if window is None:raw.extend(data)
+                    else:
+                        lo,hi=max(window[0],start),min(window[1],total)
+                        if lo<hi:raw.extend(memoryview(data)[lo-start:hi-start])
+            if total!=before.st_size:_bad()
+            digest=sha.hexdigest()
+        elif raw is not None:
+            stream.seek(window[0])
+            length=min(window[1],before.st_size)-window[0]
+            raw.extend(stream.read(length))
+            if len(raw)!=length:_bad()
+        if (_stat(os.fstat(stream.fileno()))!=pin
+                or _stat(os.stat(name,dir_fd=fd,follow_symlinks=False))!=pin):_bad()
+        if use_cache:_cached(pin,digest)
+    return digest,raw
 
 
 def _inventory(fd,*,hash_files,scope_depth):
@@ -106,7 +142,7 @@ def _inventory(fd,*,hash_files,scope_depth):
                     if _stat(os.fstat(child))!=_stat(item):_bad()
                     walk(child,path)
                 if _stat(os.stat(name,dir_fd=folder,follow_symlinks=False))!=_stat(item):_bad()
-            elif stat.S_ISREG(item.st_mode) and item.st_nlink==1 and 0<=item.st_size<=MAX_FILE:
+            elif stat.S_ISREG(item.st_mode) and item.st_nlink==1 and 0<=item.st_size<=MAX_TRANSFER_INTEGER:
                 files+=1
                 if files>MAX_ENTRIES:_bad(409,'FOLDER_TREE_LIMIT')
                 meta[path]=_stat(item)
@@ -216,8 +252,8 @@ def fetch(folders,scope,path,hash_):
 
 
 def fetch_chunk(folders,scope,path,hash_,offset):
-    """Hash the exact whole current file; retain only the requested window."""
-    if type(offset) is not int or not 0<=offset<=MAX_FILE:_bad(400,'FOLDER_OFFSET_INVALID')
+    """Read one bounded window against the SHA of the exact checked file identity."""
+    if type(offset) is not int or not 0<=offset<=MAX_TRANSFER_INTEGER:_bad(400,'FOLDER_OFFSET_INVALID')
     return _fetch(folders,scope,path,hash_,offset)
 
 

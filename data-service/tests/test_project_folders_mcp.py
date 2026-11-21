@@ -1,4 +1,5 @@
-import base64,hashlib,json,tempfile,threading,unittest
+import base64,hashlib,json,os,tempfile,threading,unittest
+from unittest.mock import patch
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request,urlopen
@@ -7,7 +8,8 @@ from http.server import ThreadingHTTPServer
 from project_data_service.http_server import Handler
 from project_data_service.project_folders import configured
 from project_data_service.project_folders_mcp import VERSION
-from project_data_service.recursive_folders import CHUNK
+from project_data_service import recursive_folders
+from project_data_service.recursive_folders import CHUNK,MAX_LEGACY_BUFFERED_FILE
 
 
 class Tests(unittest.TestCase):
@@ -88,6 +90,33 @@ class Tests(unittest.TestCase):
         self.file.write_bytes(self.data[:-1]+b'X')
         r=self.tool('npc_folder_file_chunk',**args,offset=CHUNK)
         self.assertTrue(r['isError']);self.assertEqual(json.loads(r['content'][0]['text'])['status'],409)
+
+    def test_large_sparse_file_comparison_and_pinned_chunks_beyond_former_limit(self):
+        size=MAX_LEGACY_BUFFERED_FILE+CHUNK+4
+        with self.file.open('wb') as stream:
+            stream.seek(size-4)
+            stream.write(b'tail')
+        digest=hashlib.sha256()
+        with self.file.open('rb') as stream:
+            while data:=stream.read(CHUNK):digest.update(data)
+        h=digest.hexdigest()
+        compare=self.value('npc_folders_compare',scope='binari',files=[])
+        large=next(row for group in compare['groups'] for row in group['files'] if row['path']=='guide.bin')
+        self.assertEqual(large,{'path':'guide.bin','sha256':h,'size':size})
+        args={'scope':'binari','path':'guide.bin','sha256':h}
+        with patch.object(recursive_folders.hashlib,'sha256',side_effect=AssertionError('file rehashed per chunk')):
+            head=self.value('npc_folder_file_chunk',**args,offset=0)
+            middle=self.value('npc_folder_file_chunk',**args,offset=MAX_LEGACY_BUFFERED_FILE)
+            tail=self.value('npc_folder_file_chunk',**args,offset=middle['nextOffset'])
+        self.assertEqual((len(base64.b64decode(head['base64'])),head['nextOffset']), (CHUNK,CHUNK))
+        self.assertEqual((tail['size'],base64.b64decode(tail['base64']),tail['nextOffset']), (size,b'tail',None))
+        pin=self.file.stat()
+        with self.file.open('r+b') as stream:
+            stream.seek(size-4);stream.write(b'edit')
+        # Even a preserved mtime cannot reuse a stale identity/pin.
+        os.utime(self.file,ns=(pin.st_atime_ns,pin.st_mtime_ns))
+        self.assertTrue(self.tool('npc_folder_file_chunk',**args,offset=size-4)['isError'])
+        self.assertEqual(json.loads(self.tool('npc_folder_file_chunk',**args,offset=size+1)['content'][0]['text'])['status'],416)
 
     def test_rejects_web_origins_and_unverified_inputs(self):
         empty={'jsonrpc':'2.0','id':7,'method':'tools/list'}

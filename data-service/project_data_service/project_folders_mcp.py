@@ -29,9 +29,9 @@ _ANNOTATIONS={'readOnlyHint':True,'destructiveHint':False,'idempotentHint':True,
 _LIST_ARGS=object_()
 _COMPARE_ARGS=object_(scope=_PATH,files=array(object_(path=_PATH,sha256=_HASH),files.MAX_ENTRIES))
 _COMPARE_ARGS['properties']['includeDeleted']={'type':'boolean','const':True}
-_COMPARE_OUT=object_(scope=_PATH,groups=array(object_(folder=_PATH,files=array(object_(path=_PATH,sha256=_HASH,size=integer(files.MAX_FILE))))))
+_COMPARE_OUT=object_(scope=_PATH,groups=array(object_(folder=_PATH,files=array(object_(path=_PATH,sha256=_HASH,size=integer(files.MAX_TRANSFER_INTEGER))))))
 _COMPARE_OUT['properties']['deleted']=array(object_(path=_PATH,sha256=_HASH),files.MAX_ENTRIES)
-_FILE_ARGS=object_(scope=_PATH,path=_PATH,sha256=_HASH,offset=integer(files.MAX_FILE))
+_FILE_ARGS=object_(scope=_PATH,path=_PATH,sha256=_HASH,offset=integer(files.MAX_TRANSFER_INTEGER))
 TOOLS=[
     {'name':_LIST,'description':'List active canonical project folders. Read only.',
      'inputSchema':_LIST_ARGS,'outputSchema':object_(projects=array(_TEXT)),'annotations':_ANNOTATIONS},
@@ -39,10 +39,10 @@ TOOLS=[
      'inputSchema':_COMPARE_ARGS,
      'outputSchema':_COMPARE_OUT,
      'annotations':_ANNOTATIONS},
-    {'name':_FILE,'description':'Read one hash-pinned canonical file chunk. Whole-file SHA is verified before returning up to 1 MiB. Read only.',
+    {'name':_FILE,'description':'Read one hash-pinned canonical file chunk. Whole-file SHA is pinned to the checked source identity; returns up to 1 MiB. Read only.',
      'inputSchema':_FILE_ARGS,
-     'outputSchema':object_(scope=_PATH,path=_PATH,sha256=_HASH,size=integer(files.MAX_FILE),
-                          offset=integer(files.MAX_FILE),nextOffset={'type':['integer','null']},base64=_TEXT),
+     'outputSchema':object_(scope=_PATH,path=_PATH,sha256=_HASH,size=integer(files.MAX_TRANSFER_INTEGER),
+                          offset=integer(files.MAX_TRANSFER_INTEGER),nextOffset={'type':['integer','null']},base64=_TEXT),
      'annotations':_ANNOTATIONS},
 ]
 
