@@ -202,7 +202,7 @@ def atomic_write(path, payload):
             pass
 
 
-def write_prepared(verified, control, installed, execution, prior_plist, stamp=None):
+def write_prepared(verified, control, installed, execution, prior_plist, *, expected_prior_sha256, stamp=None):
     head, proof = verified["head"], verified["evidence"]
     for directory in (control, installed, execution, control / "mac-releases"):
         private_directory(directory)
@@ -225,7 +225,13 @@ def write_prepared(verified, control, installed, execution, prior_plist, stamp=N
     private_file(lock)
     require_lock = json_load(lock.read_bytes())["packages"]["node_modules/miniflare"]["version"]
     need(json_load(pkg.read_bytes()).get("version") == require_lock, "INSTALLED_WORKERD_MISMATCH")
-    private_file(prior_plist)
+    need(matches(DIGEST, expected_prior_sha256), "PRIOR_PLIST_DIGEST_INVALID")
+
+    def require_original_plist():
+        private_file(prior_plist)
+        need(digest(prior_plist.read_bytes()) == expected_prior_sha256, "PRIOR_PLIST_CHANGED")
+
+    require_original_plist()
     now = stamp or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     need(matches(re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"), now), "VERIFIED_STAMP_INVALID")
     dt.datetime.strptime(now, "%Y-%m-%dT%H:%M:%SZ")
@@ -233,7 +239,8 @@ def write_prepared(verified, control, installed, execution, prior_plist, stamp=N
                 "workflow": {"headSha": head, "headBranch": "main", "conclusion": "success",
                              **{key: proof[key] for key in ("runId", "runAttempt", "artifactId")}},
                 "archiveSha256": proof["archiveSha256"], "treeSha256": tree_sha(installed),
-                "expectedPriorPlistSha256": digest(prior_plist.read_bytes())}
+                "expectedPriorPlistSha256": expected_prior_sha256}
+    require_original_plist()
     package = control / "mac-releases" / head
     package.mkdir(mode=0o700, exist_ok=True)
     private_directory(package)
@@ -246,6 +253,7 @@ def write_prepared(verified, control, installed, execution, prior_plist, stamp=N
     atomic_write(package / "manifest.json", json_bytes(manifest))
     record = {"schemaVersion": "ops.ngs-prepared-deploy.v1", "sha": head, "verifiedAt": now,
               "mac": {"ready": True}, "provenance": proof}
+    require_original_plist()
     atomic_write(control / "prepared.json", json_bytes(record))
     return record
 

@@ -94,16 +94,24 @@ class EvidenceFixture(unittest.TestCase):
                 path.write_bytes(content)
             prior = root / "com.vinus.ngs.local-mcp.plist"
             prior.write_bytes(b"prior fixture selector")
+            original = prep.digest(prior.read_bytes())
             with self.assertRaises(FileNotFoundError):
-                prep.write_prepared(verified, control, installed, execution, prior)
+                prep.write_prepared(verified, control, installed, execution, prior, expected_prior_sha256=original)
             self.assertFalse((control / "prepared.json").exists())
             dep = installed / "local-miniflare/node_modules/miniflare"
             dep.mkdir(mode=0o700, parents=True)
             (dep / "package.json").write_bytes(b'{"version":"test-locked"}')
-            record = prep.write_prepared(verified, control, installed, execution, prior, stamp="2026-11-22T00:00:01Z")
+            prior.write_bytes(b"intervening update")
+            with self.assertRaisesRegex(prep.Refused, "PRIOR_PLIST_CHANGED"):
+                prep.write_prepared(verified, control, installed, execution, prior, expected_prior_sha256=original)
+            self.assertFalse((control / "prepared.json").exists())
+            self.assertFalse((control / "mac-releases" / self.head).exists())
+            prior.write_bytes(b"prior fixture selector")
+            record = prep.write_prepared(verified, control, installed, execution, prior, expected_prior_sha256=original, stamp="2026-11-22T00:00:01Z")
             package = control / "mac-releases" / self.head
             self.assertEqual((package / prep.TAR).read_bytes(), verified["raw"])
             self.assertEqual(prep.json_load((package / "manifest.json").read_bytes())["treeSha256"], prep.tree_sha(installed))
+            self.assertEqual(prep.json_load((package / "manifest.json").read_bytes())["expectedPriorPlistSha256"], original)
             self.assertEqual(record, prep.json_load((control / "prepared.json").read_bytes()))
             self.assertEqual((control / "prepared.json").stat().st_mode & 0o777, 0o600)
 
