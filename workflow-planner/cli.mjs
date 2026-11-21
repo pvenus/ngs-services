@@ -3,6 +3,7 @@ import {basename,dirname,isAbsolute,resolve} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {PlannerStore,pollOnce} from './planner.mjs';
 import {createRSClient} from './rs.mjs';
+import {startPlannerHeartbeat} from './service-heartbeat.mjs';
 
 const args=process.argv.slice(2);
 if((args.length!==2&&args.length!==3)||args[0]!=='--db'||!isAbsolute(args[1])||(args.length===3&&args[2]!=='--once')){
@@ -29,6 +30,7 @@ const rs=createRSClient();
 let stop=false,waiting;
 function halt(){stop=true;waiting?.abort();}
 process.on('SIGINT',halt);process.on('SIGTERM',halt);
+const stopHeartbeat=args.length===2?startPlannerHeartbeat({revision:process.env.NGS_WORKFLOW_PLANNER_REVISION}):()=>{};
 try{
  do{
   const result=await pollOnce(store,rs);
@@ -39,4 +41,4 @@ try{
   if(!stop)await sleep(3000,undefined,{signal:waiting.signal}).catch(e=>{if(e.name!=='AbortError')throw e;});
  }while(!stop);
 }catch{console.error('WORKFLOW_PLANNER_RUN_FAILED');process.exitCode=1;}
-finally{store.close();}
+finally{stopHeartbeat();store.close();}
