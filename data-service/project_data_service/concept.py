@@ -2,6 +2,8 @@
 import hashlib,json,re
 from pathlib import Path
 from .database import DataError,RevisionConflict,utc_now
+from .concept_commit_preview import envelope,check_writer_expectation,expectation
+from .pds_publication_capability import publication_capability
 from .concept_validation.concept_content_v2 import validate as validate_v2
 from .concept_validation.legacy import validate_legacy
 ROOT=Path(__file__).parent/'concept_validation'
@@ -16,6 +18,18 @@ class ConceptModule:
    store.connection.execute('CREATE TABLE IF NOT EXISTS concept_receipts(operation_key TEXT PRIMARY KEY,request_hash TEXT NOT NULL,response_json TEXT NOT NULL,created_at TEXT NOT NULL)')
    store.connection.execute("CREATE TRIGGER IF NOT EXISTS concept_history_no_update BEFORE UPDATE ON concept_revisions BEGIN SELECT RAISE(ABORT,'concept history immutable'); END")
    store.connection.execute("CREATE TRIGGER IF NOT EXISTS concept_history_no_delete BEFORE DELETE ON concept_revisions BEGIN SELECT RAISE(ABORT,'concept history immutable'); END")
+ def publication_capability(self):return publication_capability()
+ def publication_preview(self,p):
+  if not isinstance(p,dict) or set(p)!={'expectedRevision','note','document'}:raise DataError('invalid publication preview fields')
+  document=validate(p['document'])
+  proof=expectation(p['expectedRevision'],p['note'],document)
+  with self.store.lock:
+   current=self.current()
+   if current is None or current['revision']!=p['expectedRevision']:raise RevisionConflict('concept revision conflict')
+   return {'schemaVersion':'pds-concept-publication-preview.v1','capability':publication_capability(),
+           'sourceProof':{'revision':current['revision'],'documentHash':digest(current['document'])},
+           'validatedDocumentHash':digest(document),'noteHash':digest(p['note'].strip()),
+           'writerExpectation':proof}
  def _envelope(self,r):return None if r is None else {'revision':r['revision'],'savedAt':r['saved_at'],'note':r['note'],'document':json.loads(r['document'])}
  def current(self):
   with self.store.lock:return self._envelope(self.store.connection.execute("SELECT * FROM concept_revisions WHERE project_id='ProjectBS' ORDER BY revision DESC LIMIT 1").fetchone())
@@ -46,7 +60,7 @@ class ConceptModule:
     return False
    c.executemany('INSERT INTO concept_revisions VALUES(?,?,?,?,?)',[('ProjectBS',*r) for r in rows]);return True
  def save(self,p):
-  if set(p)-{'expectedRevision','note','document','requestId','actor','operationHash'}:raise DataError('unknown concept fields')
+  if set(p)-{'expectedRevision','note','document','requestId','actor','operationHash','publicationExpectation'}:raise DataError('unknown concept fields')
   expected=p['expectedRevision'];note=p['note'];document=validate(p['document'])
   if type(expected) is not int or expected<1 or not isinstance(note,str) or not 3<=len(note.strip())<=300:raise DataError('invalid concept revision/reason')
   note=note.strip();request_hash=digest({'expectedRevision':expected,'note':note,'document':document})
@@ -60,10 +74,14 @@ class ConceptModule:
    c=self.store.connection;old=c.execute('SELECT request_hash,response_json FROM concept_receipts WHERE operation_key=?',(key,)).fetchone()
    if old:
     if old['request_hash']!=request_hash:raise DataError('concept operation key conflict')
-    return json.loads(old['response_json']),True
+    saved=json.loads(old['response_json'])
+    if 'publicationExpectation' in p:check_writer_expectation(saved,p['publicationExpectation'])
+    return saved,True
    current=self.current()
    if current is None or current['revision']!=expected:raise RevisionConflict('concept revision conflict')
-   e={'revision':expected+1,'savedAt':utc_now(),'note':note,'document':document}
+   # No caller-supplied timestamp. Exact serialization is checked before INSERT.
+   e=envelope(expected,note,document,utc_now())
+   if 'publicationExpectation' in p:check_writer_expectation(e,p['publicationExpectation'])
    c.execute('INSERT INTO concept_revisions VALUES(?,?,?,?,?)',('ProjectBS',e['revision'],e['savedAt'],note,json.dumps(document,ensure_ascii=False)))
    c.execute('INSERT INTO concept_receipts VALUES(?,?,?,?)',(key,request_hash,canonical(e),e['savedAt']))
    # Older compatibility clients have no actor: retain note and receipt, invent none.

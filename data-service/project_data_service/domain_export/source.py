@@ -115,7 +115,7 @@ class LegacySource:
         if not self._cohort_gate.acquire(blocking=False):
             raise MirrorError('CONCURRENT_READ_COHORT_DENIED')
         filenames = []
-        for filename in ('concept.sqlite3','story.sqlite3','npc.sqlite3','knowledge.sqlite3'):
+        for filename in ('concept.sqlite3','story.sqlite3','npc.sqlite3'):
             if filename=='concept.sqlite3':continue
             filenames.append(filename)
         self._cohort_reads = {}; self._cohort_paths = set(filenames); self._cohort_owner = threading.get_ident()
@@ -137,23 +137,6 @@ class LegacySource:
         from ..domain_contracts import legacy_http,npc_detail,combat_profile
         return {'server.py':legacy_http,'npc_detail.py':npc_detail,'combat_profile.py':combat_profile}[filename]
 
-    def knowledge_entry_revision(self, entry_id, version):
-        """Actual retained source body only; never synthesize a missing version.
-
-        Legacy update stores the PREVIOUS body under its previous version. Row
-        saved_at/note describe the history write, not that body's publication.
-        """
-        db=self.connect('knowledge.sqlite3')
-        try:
-            row=db.execute("SELECT r.version,r.saved_at,r.note,r.snapshot_json FROM entry_revisions r JOIN entries e ON e.id=r.entry_id JOIN categories c ON c.id=e.category_id WHERE r.entry_id=? AND r.version=? AND c.project_key=?",(entry_id,version,self.project)).fetchone()
-            if row is None: return None
-            entry=json.loads(row['snapshot_json'])
-            if not isinstance(entry,dict) or entry.get('id')!=entry_id or entry.get('version')!=version:
-                raise MirrorError('SOURCE_HISTORY_INVALID')
-            return {'entry':entry,'version':version,'historySavedAt':row['saved_at'],'historyNote':row['note'],
-                    'provenance':{'storage':'entry_revisions.snapshot_json','historyTimestampSemantics':'history row write time; not body publication time'}}
-        finally: db.close()
-
     def _capture(self):
         resources, vector, connections = {}, {}, []
         def document(identity, value):
@@ -173,27 +156,6 @@ class LegacySource:
                 document(identity + '.revisions', {'revisions': [{k: e[k] for k in ('revision', 'savedAt', 'note')} for e in envelopes[:100]]})
                 # All historic source JSON remains available for revision inspection.
                 for envelope in envelopes: document(identity + '.revision.' + str(envelope['revision']), envelope)
-            db = self.connect('knowledge.sqlite3'); connections.append(db)
-            # Import inspected source methods but bypass __init__ (schema/bootstrap/backfill writes).
-            from ..domain_contracts import knowledge_catalog as module
-            store = object.__new__(module.KnowledgeStore); store.connection = db
-            overview = store.overview(self.project)
-            if not overview: raise MirrorError('KNOWLEDGE_PROJECT_MISMATCH')
-            document('knowledge.overview', overview); vector['knowledge'] = overview['revision']
-            for category in db.execute('SELECT id FROM categories WHERE project_key=? ORDER BY sort_order,id', (self.project,)):
-                document('knowledge.category.' + category['id'], store.category(category['id']))
-                for entry in db.execute('SELECT id FROM entries WHERE category_id=? ORDER BY id', (category['id'],)):
-                    identity = entry['id']; value = store.entry(identity)
-                    document('knowledge.entry.' + identity, value)
-                    history=store.revisions(identity)
-                    retained={r['version'] for r in history}
-                    document('knowledge.entry-revisions.' + identity, {'revisions':[{**r,'bodyAvailability':'source_retained','bodyResourceId':'knowledge.entry-revision.'+identity+'.'+str(r['version'])} for r in history],'currentVersion':value['version'],'currentBodyAvailable':True,'unavailableHistoricalVersions':[v for v in range(1,value['version']) if v not in retained],'bodyPolicy':'Only retained source snapshot_json bodies are available; absent versions are unavailable.'})
-                    for revision in history:
-                        body=self.knowledge_entry_revision(identity,revision['version'])
-                        if body is None: raise MirrorError('SOURCE_HISTORY_CHANGED_DURING_CAPTURE')
-                        document('knowledge.entry-revision.'+identity+'.'+str(revision['version']),body)
-            document('knowledge.mcp-capabilities', {'capabilities': store.capabilities(self.project)})
-            document('knowledge.legacy-references', {'references': store.legacy_references(self.project)})
         finally:
             for db in connections: db.close()
         npc_envelope = json.loads(resources['npcs']['bytes'])
@@ -228,7 +190,6 @@ class LegacySource:
         return {'resources': resources, 'sourceRevisionVector': vector, 'consistency':{'database':'rollback-journal-read-cohort','static':'file-identity-and-repeated-hashes','globalAtomic':False,'history':'retained-source-bodies-only'}, 'gaps': [
             'Browser rendering and HTTP endpoint roundtrip not verified (service stopped).',
             'Rollback-journal DB cohort only: per-file identity/mtime/ctime/size checks and repeated full hashes detect observed static drift; no common static writer fence or global atomicity guarantee.',
-            'Knowledge historical bodies include only actual retained snapshot_json records; row timestamps are history-write times, not publication times.',
         ]}
 
     def capture(self):

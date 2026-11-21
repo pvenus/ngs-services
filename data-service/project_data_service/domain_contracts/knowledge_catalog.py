@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ALLOWED_ENTRY_STATUS = {"active", "draft", "legacy"}
+ALLOWED_ENTRY_STATUS = {"active", "draft", "legacy", "deleted"}
 ALLOWED_AUTHORITY = {"authoritative", "supporting", "reference"}
 
 

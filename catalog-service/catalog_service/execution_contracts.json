@@ -1,0 +1,149 @@
+{
+  "schemaVersion": "ngs.execution-contracts.v1",
+  "version": "1",
+  "contracts": [
+    {
+      "id": "action.video-alpha.compose",
+      "version": 1,
+      "purpose": "Codex가 처리 설정을 작성할 때의 최소 기준",
+      "content": {
+        "required": [
+          "sourceAssetId",
+          "alphaMethod",
+          "outputFormat"
+        ]
+      }
+    },
+    {
+      "id": "npc-planning.rules.v1",
+      "version": 1,
+      "purpose": "Read-only prompt review boundaries",
+      "content": {
+        "rules": [
+          "Do not execute workflow_start or generation during preparation",
+          "Read only allowed pinned sources",
+          "Require explicit registration request for the displayed prompt revision"
+        ]
+      }
+    },
+    {
+      "id": "npc-planning.workflow.v1",
+      "version": 2,
+      "purpose": "Determine required logical resources and permitted read tool",
+      "content": {
+        "featureId": "npc-settings-draft",
+        "features": {
+          "npc-settings-draft": {
+            "featureId": "npc-settings-draft",
+            "outputSchema": "npc-settings.v1",
+            "requiredBindings": [
+              "concept.main",
+              "story.current",
+              "npc.rules"
+            ],
+            "workflowVersion": "npc-settings-draft.v1"
+          },
+          "portrait.generate": {
+            "featureId": "portrait.generate",
+            "outputSchema": "npc-portrait-prompt.v1",
+            "requiredBindings": [
+              "concept.main",
+              "story.current",
+              "npc.rules"
+            ],
+            "workflowVersion": "portrait.generate.v1"
+          },
+          "portrait.register": {
+            "featureId": "portrait.register",
+            "outputSchema": "npc-portrait-prompt.v1",
+            "requiredBindings": [
+              "concept.main",
+              "story.current",
+              "npc.rules"
+            ],
+            "workflowVersion": "portrait.register.v1"
+          },
+          "portrait.replace": {
+            "featureId": "portrait.replace",
+            "outputSchema": "npc-portrait-prompt.v1",
+            "requiredBindings": [
+              "concept.main",
+              "story.current",
+              "npc.rules"
+            ],
+            "workflowVersion": "portrait.replace.v1"
+          }
+        },
+        "outputSchema": "npc-settings.v1",
+        "readCapability": {
+          "requestSchema": "npc-context.v1",
+          "responseSchema": "npc-resource.v1",
+          "toolName": "npc_context_read"
+        },
+        "requiredBindings": [
+          "concept.main",
+          "story.current",
+          "npc.rules"
+        ],
+        "workflowVersion": "npc-settings-draft.v1"
+      }
+    },
+    {
+      "id": "rule.execution.common",
+      "version": 1,
+      "purpose": "단계 실행의 공통 경계",
+      "content": {
+        "rules": [
+          "한 번에 다음 단계 하나만 실행",
+          "부족한 입력은 추측하지 않음",
+          "대형 결과는 Asset ID로 연결"
+        ]
+      }
+    },
+    {
+      "id": "rule.storage.files",
+      "version": 1,
+      "purpose": "이동 가능한 실제 파일 저장 규칙",
+      "content": {
+        "rules": [
+          "실제 파일은 관리 스토리지에 저장",
+          "DB에는 상대 경로와 해시 저장",
+          "외부에는 다운로드 링크 제공"
+        ]
+      }
+    },
+    {
+      "id": "service.video-alpha.fixed",
+      "version": 1,
+      "purpose": "비디오 알파 서비스의 불변 경계",
+      "content": {
+        "rules": [
+          "원본 보존",
+          "프레임과 RGBA 결과 분리",
+          "실행 전에 현재 Job 조회"
+        ]
+      }
+    },
+    {
+      "id": "template.processing-spec.contract",
+      "version": 1,
+      "purpose": "Codex 작성물의 역할",
+      "content": {
+        "artifactType": "processing-spec",
+        "policy": "구조화 슬롯과 제출 JSON을 함께 작성"
+      }
+    },
+    {
+      "id": "validation.processing-spec",
+      "version": 1,
+      "purpose": "실행 전 필수 검증",
+      "content": {
+        "checks": [
+          "필수 입력 존재",
+          "출처 연결",
+          "금지 행동 미포함"
+        ]
+      }
+    }
+  ]
+}

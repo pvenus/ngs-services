@@ -20,10 +20,10 @@ def start(app,payload,intent):
  if prior:
   if prior['session']['inputs']['visualInputHash']!=fingerprint:raise ValueError('VISUAL_WORKFLOW_REUSE_CONFLICT')
   return app._view(prior)
- selection=app.laya.request('POST','/v1/selections',{'intent':intent,'inputs':{'projectId':'binari','featureId':'episode.visual.asset','visualKind':spec['kind'],'target':plan['target'],**({'npcId':spec['identity']['npcId']}if spec['identity']else{})}})
- if selection.get('serviceId')!='npc-planning' or selection.get('actionId')!='npc-planning.prepare-context':raise ValueError('VISUAL_LAYA_ROUTE_MISMATCH')
+ selection=app.workflow_decision.request('POST','/v1/selections',{'intent':intent,'inputs':{'projectId':'binari','featureId':'episode.visual.asset','visualKind':spec['kind'],'target':plan['target'],**({'npcId':spec['identity']['npcId']}if spec['identity']else{})}})
+ if selection.get('serviceId')!='npc-planning' or selection.get('actionId')!='npc-planning.prepare-context':raise ValueError('VISUAL_WORKFLOW_ROUTE_MISMATCH')
  catalog=app.catalog.request('GET','/v1/catalog/execution-context/'+app.catalog.ident(selection['actionId']))
- if catalog.get('action',{}).get('permission')!='read_only' or catalog['action'].get('operation')!='npc_context_prepare' or [x.get('id')for x in catalog.get('knowledge',[])]!=selection.get('contextEntryIds'):raise ValueError('VISUAL_CATALOG_CONTEXT_MISMATCH')
+ if catalog.get('action',{}).get('permission')!='read_only' or catalog['action'].get('operation')!='npc_context_prepare' or [x.get('id')for x in catalog.get('executionContracts',[])]!=selection.get('contextEntryIds'):raise ValueError('VISUAL_CATALOG_CONTEXT_MISMATCH')
  refs=[]
  if spec['kind']=='portrait-variant':
   npc=next(n for n in sources['npcs']['document']['characters']if n['id']==spec['identity']['npcId']);asset=npc['activePortraitId'];entry=next(p for p in npc['portraits']if p['assetId']==asset)

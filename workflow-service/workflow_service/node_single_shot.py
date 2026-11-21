@@ -85,8 +85,8 @@ def compile_descriptor(packet, message, plan, review, selection, context):
     validate_plan(packet, message, plan, review)
     require(isinstance(selection, dict) and selection.get('serviceId') == 'npc-planning' and selection.get('actionId') == 'npc-planning.prepare-context', 'NODE_SHOT_SELECTED_ROUTE_REQUIRED')
     require(isinstance(context, dict) and context.get('action', {}).get('id') == selection['actionId'], 'NODE_SHOT_SELECTED_CONTEXT_MISMATCH')
-    require([k.get('id') for k in context.get('knowledge', [])] == selection.get('contextEntryIds') and len(set(selection['contextEntryIds'])) == len(selection['contextEntryIds']), 'NODE_SHOT_CATALOG_BINDING_INVALID')
-    require(context.get('instruction') or any(k.get('content') for k in context.get('knowledge', [])), 'NODE_SHOT_CATALOG_CONTEXT_REQUIRED')
+    require([k.get('id') for k in context.get('executionContracts', [])] == selection.get('contextEntryIds') and len(set(selection['contextEntryIds'])) == len(selection['contextEntryIds']), 'NODE_SHOT_CATALOG_BINDING_INVALID')
+    require(context.get('instruction') or any(k.get('content') for k in context.get('executionContracts', [])), 'NODE_SHOT_CATALOG_CONTEXT_REQUIRED')
     people = {c['data']['id']: c for c in packet['characters']}
     details = []
     for participant in plan['participants']:

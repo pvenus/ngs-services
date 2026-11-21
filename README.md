@@ -49,3 +49,9 @@ Initial independent snapshot from the running seven-service source at a368b4055d
 No blanket open-source license is granted at this time. Public visibility does not itself grant unrestricted redistribution or relicensing. Model and third-party dependency rights remain with their owners.
 
 Concept seed values and character-specific profile proposals have been removed; only empty structural templates are shipped.
+
+## Source-only active service release
+
+See [the active source and local deployment map](docs/active-local-services.md).
+Release source lives here; no live SQLite, artifacts, model weights, secrets,
+host mount definitions or LaunchAgent instances are included.

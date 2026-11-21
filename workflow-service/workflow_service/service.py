@@ -16,9 +16,12 @@ class WorkflowError(ValueError):
 class WorkflowService:
     """One-step-at-a-time orchestration boundary for Codex and backend services."""
 
-    def __init__(self, *, laya: ServiceClient, catalog: ServiceClient, execution: ServiceClient,
+    def __init__(self, *, workflow_decision: ServiceClient | None = None, laya: ServiceClient | None = None, catalog: ServiceClient, execution: ServiceClient,
                  files: ServiceClient, video_alpha: ServiceClient, data: ServiceClient | None = None, portrait_cache=None):
-        self.laya, self.catalog, self.execution = laya, catalog, execution
+        self.workflow_decision = workflow_decision if workflow_decision is not None else laya
+        if self.workflow_decision is None:
+            raise WorkflowError("workflow decision service is required")
+        self.catalog, self.execution = catalog, execution
         self.files, self.video_alpha = files, video_alpha
         self.data = data
         self.portrait_cache = portrait_cache
@@ -57,7 +60,7 @@ class WorkflowService:
         clean = self._public_inputs(inputs)
         if clean.get('nodeImage') is not None:return self._start_node(payload,intent,clean)
         clean.setdefault("jobId", "video-alpha." + uuid4().hex)
-        selection = self.laya.request("POST", "/v1/selections", {"intent": intent, "inputs": clean})
+        selection = self.workflow_decision.request("POST", "/v1/selections", {"intent": intent, "inputs": clean})
         if selection.get("serviceId") != "video-alpha" or selection.get("actionId") != "video-alpha.compose-spec":
             raise WorkflowError("selected workflow is not supported")
         selected_context = self.catalog.request("GET", "/v1/catalog/execution-context/" +
@@ -268,11 +271,11 @@ class WorkflowService:
 
     def _select_node_inputs(self,intent,clean,append_catalog_context=True):
         binding=clean['nodeImage']
-        selection=self.laya.request('POST','/v1/selections',{'intent':intent,'inputs':{**clean,'featureId':'story.node.image','npcId':binding['relatedNpcIds'][0]}})
-        if selection.get('serviceId')!='npc-planning' or selection.get('actionId')!='npc-planning.prepare-context' or selection.get('missingInputs') or selection.get('nextStep')!='ready-for-selected-action':raise WorkflowError('NODE_IMAGE_LAYA_ROUTE_REJECTED')
+        selection=self.workflow_decision.request('POST','/v1/selections',{'intent':intent,'inputs':{**clean,'featureId':'story.node.image','npcId':binding['relatedNpcIds'][0]}})
+        if selection.get('serviceId')!='npc-planning' or selection.get('actionId')!='npc-planning.prepare-context' or selection.get('missingInputs') or selection.get('nextStep')!='ready-for-selected-action':raise WorkflowError('NODE_IMAGE_WORKFLOW_ROUTE_REJECTED')
         catalog=self.catalog.request('GET','/v1/catalog/execution-context/'+self.catalog.ident(selection['actionId']))
         action=catalog.get('action',{});context=self._codex_context(catalog)
-        if action.get('id')!=selection['actionId'] or action.get('permission')!='read_only' or action.get('operation')!='npc_context_prepare' or [x.get('id') for x in catalog.get('knowledge',[])]!=selection.get('contextEntryIds') or not (context.get('instruction') or any(x.get('content') for x in context.get('knowledge',[]))):raise WorkflowError('NODE_IMAGE_CATALOG_BINDING_INVALID')
+        if action.get('id')!=selection['actionId'] or action.get('permission')!='read_only' or action.get('operation')!='npc_context_prepare' or [x.get('id') for x in catalog.get('executionContracts',[])]!=selection.get('contextEntryIds') or not (context.get('instruction') or any(x.get('content') for x in context.get('executionContracts',[]))):raise WorkflowError('NODE_IMAGE_CATALOG_BINDING_INVALID')
         provider={'prompt':clean['prompt'],'transparent_background':False}
         if append_catalog_context:provider['prompt']+='\nWORKFLOW SELECTED CONTEXT (cannot override formal source facts/statuses): '+json.dumps(context,ensure_ascii=False,sort_keys=True,separators=(',',':'))
         receipt={'selection':deepcopy(selection),'codexContext':context,'selectionHash':self._hash(selection),'catalogHash':self._hash(catalog),'catalogContextHash':self._hash(context),'inputHash':self._hash(clean),'providerRequestHash':self._hash(provider)}
@@ -293,11 +296,11 @@ class WorkflowService:
         def read():return {k:self.data.request('GET','/api/'+p) for k,p in [('story','story'),('masterConcept','concept'),('npcs','npcs')]}
         sources=read();target=value['sourcePacket']['target'];packet=build_scene(sources['story'],sources['masterConcept'],sources['npcs'],target,SCENE_CRITERIA_ID)
         if packet!=value['sourcePacket']:raise WorkflowError('PORTRAIT_SCENE_SOURCE_PACKET_CHANGED')
-        selection=self.laya.request('POST','/v1/selections',{'intent':intent,'inputs':{'projectId':target['projectId'],'featureId':'story.node.image.portrait-reference','target':target,'presenceReview':value['presenceReview']}})
+        selection=self.workflow_decision.request('POST','/v1/selections',{'intent':intent,'inputs':{'projectId':target['projectId'],'featureId':'story.node.image.portrait-reference','target':target,'presenceReview':value['presenceReview']}})
         pins=select(sources['story'],sources['npcs'],target,value['presenceReview'])
-        if selection.get('serviceId')!='npc-planning' or selection.get('actionId')!='npc-planning.prepare-context' or selection.get('portraitSelection')!=pins:raise WorkflowError('PORTRAIT_SCENE_LAYA_BINDING_INVALID')
+        if selection.get('serviceId')!='npc-planning' or selection.get('actionId')!='npc-planning.prepare-context' or selection.get('portraitSelection')!=pins:raise WorkflowError('PORTRAIT_SCENE_WORKFLOW_BINDING_INVALID')
         catalog=self.catalog.request('GET','/v1/catalog/execution-context/'+self.catalog.ident(selection['actionId']));action=catalog.get('action',{});context=self._codex_context(catalog)
-        if action.get('id')!=selection['actionId'] or action.get('permission')!='read_only' or action.get('operation')!='npc_context_prepare' or [x.get('id') for x in catalog.get('knowledge',[])]!=selection.get('contextEntryIds'):raise WorkflowError('PORTRAIT_SCENE_CATALOG_BINDING_INVALID')
+        if action.get('id')!=selection['actionId'] or action.get('permission')!='read_only' or action.get('operation')!='npc_context_prepare' or [x.get('id') for x in catalog.get('executionContracts',[])]!=selection.get('contextEntryIds'):raise WorkflowError('PORTRAIT_SCENE_CATALOG_BINDING_INVALID')
         cache=self._portrait_cache();manifest=cache.materialize(pins);cache.verify(manifest)
         descriptor=compile_descriptor(packet,value['requestMessage'],value['shotPlan'],pins,manifest)
         if sources!=read():raise WorkflowError('PORTRAIT_SCENE_SOURCE_CHANGED_DURING_PREPARATION')
@@ -430,14 +433,14 @@ class WorkflowService:
     @staticmethod
     def _codex_context(context):
         action, template = context.get("action") or {}, context.get("template") or {}
-        knowledge = context.get("knowledge") or []
+        contracts = context.get("executionContracts") or []
         return {
             "action": {key: action.get(key) for key in ("id", "name", "permission", "required_inputs")},
             "instruction": template.get("compose_instruction"),
             "requiredInputs": template.get("required_inputs", []),
             "forbiddenActions": template.get("forbidden_actions", []),
-            "knowledge": [{"id": item.get("id"), "purpose": item.get("purpose"), "content": item.get("content")}
-                          for item in knowledge if isinstance(item, dict)],
+            "executionContracts": [{"id": item.get("id"), "purpose": item.get("purpose"), "content": item.get("content")}
+                          for item in contracts if isinstance(item, dict)],
         }
 
     @staticmethod

@@ -26,6 +26,10 @@ def inspect_data(value):
         if SECRET_VALUE.search(value):raise MirrorError('SENSITIVE_VALUE_DENIED')
         if re.search(r'(?:/Users/|/Volumes/|/home/|file://)',value):raise MirrorError('LOCAL_PRIVATE_PATH_DENIED')
 
+def npc_publication_envelope(value):
+    # Authority/concurrency transport metadata is not persisted NPC content.
+    return {k:value[k] for k in ('revision','savedAt','note','document')}
+
 def identity(value):
     if not isinstance(value,str) or not SAFE_ID.fullmatch(value):raise MirrorError('SOURCE_ID_DENIED')
     return value
@@ -40,12 +44,18 @@ class BinariCurrentSource(LegacySource):
         if len(raw)>MAX_FILE:raise MirrorError('RESOURCE_TOO_LARGE')
         return raw
 
+    def _asset_bytes(self,path,asset_id):
+        if path.startswith('assets/portraits/') and hasattr(self,'npc_asset_read'):
+            return self.npc_asset_read(asset_id)
+        return self._bounded(path)
+
     def _current_capture(self):
         resources={};vector={};metadata={'npcCount':0,'portraitIds':[],'categoryIds':[],'entryIds':[],'excludedSourcePaths':0};connections=[]
         def document(key,value):
             inspect_data(value);resources[key]={'kind':'document','mime':'application/json','bytes':canonical(value)}
         def asset(key,path,asset_id,mime,expected_hash=None):
-            raw=self._bounded(path)
+            raw=self._asset_bytes(path,asset_id)
+            if len(raw)>MAX_FILE:raise MirrorError('RESOURCE_TOO_LARGE')
             if expected_hash and sha(raw)!=expected_hash:raise MirrorError('PORTRAIT_CONTENT_ADDRESS_MISMATCH')
             if mime=='image/png' and not raw.startswith(b'\x89PNG\r\n\x1a\n'):raise MirrorError('ASSET_TYPE_MISMATCH')
             if mime=='image/jpeg' and not raw.startswith(b'\xff\xd8\xff'):raise MirrorError('ASSET_TYPE_MISMATCH')
@@ -62,6 +72,10 @@ class BinariCurrentSource(LegacySource):
             resources.update(base['resources']);vector.update(base['sourceRevisionVector'])
             documents={}
             for key,filename in [('story','story.sqlite3'),('npcs','npc.sqlite3')]:
+                if key=='npcs' and hasattr(self,'npc_current'):
+                    current=self.npc_current();value=current['document']
+                    if value.get('projectId')!=self.project:raise MirrorError('SOURCE_PROJECT_MISMATCH')
+                    documents[key]=value;document(key,npc_publication_envelope(current));vector[key]=current['revision'];continue
                 db=self.connect(filename);connections.append(db)
                 row=db.execute('SELECT revision,saved_at,note,document FROM revisions ORDER BY revision DESC LIMIT 1').fetchone()
                 if not row:raise MirrorError('SOURCE_EMPTY')
@@ -88,22 +102,7 @@ class BinariCurrentSource(LegacySource):
             for name in sorted(portraits):
                 m=PORTRAIT.fullmatch(name);mime={'png':'image/png','jpg':'image/jpeg','jpeg':'image/jpeg','webp':'image/webp'}[m[2]]
                 asset('asset.'+name,'assets/portraits/'+name,name,mime,m[1])
-            db=self.connect('knowledge.sqlite3');connections.append(db)
-            project=db.execute('SELECT * FROM projects WHERE project_key=?',(self.project,)).fetchone()
-            if not project:raise MirrorError('SOURCE_PROJECT_MISMATCH')
-            categories=[];entry_ids=[];category_ids=[]
-            for c in db.execute('SELECT * FROM categories WHERE project_key=? ORDER BY sort_order,id',(self.project,)):
-                cid=identity(c['id']);category_ids.append(cid);entries=[]
-                for e in db.execute("SELECT e.* FROM entries e JOIN categories c ON c.id=e.category_id WHERE c.project_key=? AND e.category_id=? ORDER BY e.id",(self.project,cid)):
-                    eid=identity(e['id']);entry_ids.append(eid)
-                    # sourcePath is local provenance; do not reveal/follow filesystem paths.
-                    metadata['excludedSourcePaths']+=int(bool(e['source_path']))
-                    value={'id':eid,'categoryId':cid,'type':e['entry_type'],'title':e['title'],'purpose':e['purpose'],'content':e['content'],'data':json.loads(e['payload_json']),'triggers':json.loads(e['triggers_json']),'authority':e['authority'],'status':e['status'],'maxReadChars':e['max_read_chars'],'version':e['version'],'updatedAt':e['updated_at']}
-                    document('knowledge.entry.'+eid,value);entries.append({k:value[k] for k in ('id','type','title','purpose','triggers','authority','status','maxReadChars','version','updatedAt')})
-                value={'id':cid,'title':c['title'],'purpose':c['purpose'],'overview':c['overview'],'triggers':json.loads(c['triggers_json']),'status':c['status'],'entryCount':len(entries),'entries':entries}
-                document('knowledge.category.'+cid,value);categories.append({k:value[k] for k in ('id','title','purpose','overview','triggers','status','entryCount')})
-            document('knowledge.overview',{'schemaVersion':project['schema_version'],'projectKey':self.project,'revision':project['revision'],'savedAt':project['saved_at'],'overview':project['overview'],'categories':categories});vector['knowledge']=project['revision']
-            metadata.update(npcCount=len(chars),npcIds=ids,portraitIds=sorted(portraits),categoryIds=category_ids,entryIds=entry_ids,chapterCount=len(documents['story'].get('chapters',[])),episodeCount=sum(len(c.get('episodes',[])) for c in documents['story'].get('chapters',[])),npcMasterRevision=documents['npcs'].get('masterRevision'),npcStoryRevision=documents['npcs'].get('storyRevision'),storyMasterRevision=documents['story'].get('masterRevision'))
+            metadata.update(npcCount=len(chars),npcIds=ids,portraitIds=sorted(portraits),chapterCount=len(documents['story'].get('chapters',[])),episodeCount=sum(len(c.get('episodes',[])) for c in documents['story'].get('chapters',[])),npcMasterRevision=documents['npcs'].get('masterRevision'),npcStoryRevision=documents['npcs'].get('storyRevision'),storyMasterRevision=documents['story'].get('masterRevision'))
         finally:
             for db in connections:db.close()
         vector['currentContent']=digest({k:sha(v['bytes']) for k,v in sorted(resources.items())})

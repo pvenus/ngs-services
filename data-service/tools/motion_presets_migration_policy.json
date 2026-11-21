@@ -1,0 +1,46 @@
+[
+  {
+    "sourcePresetId": "sword-attack-single-cycle-8way",
+    "presetId": "sword-attack",
+    "label": "칼 공격",
+    "policy": {
+      "framingPolicy": {
+        "schemaVersion": "ngs.animation-motion-safe-frame.v1",
+        "maxHeightRatio": 0.6,
+        "maxWidthRatio": 0.6,
+        "offsetY": 0,
+        "allowUpscale": false
+      },
+      "equipmentPolicy": {
+        "heldItems": "one sword",
+        "weaponState": "drawn",
+        "excludedItems": [
+          "book"
+        ]
+      },
+      "motionInstruction": "Exactly one complete sword attack matching the driving MP4, no repeated attack."
+    }
+  },
+  {
+    "sourcePresetId": "run-single-cycle-8way",
+    "presetId": "run",
+    "label": "달리기",
+    "policy": {
+      "framingPolicy": {
+        "schemaVersion": "ngs.animation-motion-safe-frame.v1",
+        "maxHeightRatio": 0.72,
+        "maxWidthRatio": 0.6,
+        "offsetY": 0,
+        "allowUpscale": false
+      },
+      "equipmentPolicy": {
+        "heldItems": "none",
+        "weaponState": "sheathed",
+        "excludedItems": [
+          "book"
+        ]
+      },
+      "motionInstruction": "Exactly one complete running gait cycle matching the driving MP4, no repeated cycles."
+    }
+  }
+]

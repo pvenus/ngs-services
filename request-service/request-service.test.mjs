@@ -1,0 +1,559 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {request} from 'node:http';
+import {chmodSync,mkdirSync,mkdtempSync,realpathSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {configuration,createRequestService,host,port} from './request-service.mjs';
+import {openOfficialInbox} from './official-inbox.mjs';
+import {canonical,sha,validateOneStop} from './one-stop-envelope.mjs';
+
+const version='2025-06-18';
+const payload={schemaVersion:'ngs.npc-one-stop.v1',projectId:'binari',intent:'기획 요청 내용입니다',character:{
+ npcId:'npc.fixture',name:'기획 캐릭터',slug:'fixture',role:'마을 안내인',actId:'story.main.act01',chapterId:'chapter01'},
+ sourceRefs:['기획 근거'],includeCombat:false};
+const input=(key='submit-key',body=payload)=>({sourceId:'local',requestType:'npc.workflow',idempotencyKey:key,payload:body});
+
+function folder(t){
+ const parent=mkdtempSync(join(realpathSync(tmpdir()),'official-request-fixture-'));
+ t.after(()=>rmSync(parent,{recursive:true,force:true}));
+ const directory=join(parent,'official');
+ return {directory,path:join(directory,'official-requests.sqlite')};
+}
+function read(path,sql='SELECT * FROM official_requests'){
+ const db=new DatabaseSync(path,{readOnly:true});
+ try{return db.prepare(sql).all().map(r=>({...r}));}
+ finally{db.close();}
+}
+async function listener(t,directory){
+ const server=createRequestService(configuration({REQUEST_OFFICIAL_INBOX_DIR:directory}));
+ await new Promise(ok=>server.listen(0,host,ok));
+ t.after(()=>new Promise(ok=>server.close(ok)));
+ const origin='http://'+host+':'+server.address().port;
+ const headers={Accept:'application/json, text/event-stream','Content-Type':'application/json','MCP-Protocol-Version':version};
+ const post=(msg,{headers:custom={},path='/mcp'}={})=>fetch(origin+path,{method:'POST',headers:{...headers,...custom},body:JSON.stringify(msg)});
+ const rpc=async(method,params,id=1)=>await (await post({jsonrpc:'2.0',id,method,params})).json();
+ const submit=args=>rpc('tools/call',{name:'request_submit',arguments:args});
+ const cancel=args=>rpc('tools/call',{name:'request_cancel',arguments:args});
+ const list=args=>rpc('tools/call',{name:'request_list',arguments:args});
+ const workflow=args=>rpc('tools/call',{name:'request_workflow_list',arguments:args});
+ const update=arguments_=>rpc('tools/call',{name:'request_update_status',arguments:arguments_});
+ return {origin,post,rpc,submit,cancel,list,workflow,update,headers};
+}
+function seedLegacy({directory,path}){
+ mkdirSync(directory,{mode:0o700});writeFileSync(path,'',{mode:0o600});
+ const db=new DatabaseSync(path);
+ try{
+  db.exec(`CREATE TABLE official_npc_one_stop(
+   official_request_id TEXT NOT NULL UNIQUE, ngs_id TEXT NOT NULL, project_id TEXT NOT NULL,
+   source_request_id INTEGER NOT NULL CHECK(source_request_id>0), request_type TEXT NOT NULL,
+   schema_version TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL,
+   state TEXT NOT NULL CHECK(state='registered'), registered_at INTEGER NOT NULL,
+   PRIMARY KEY(ngs_id,project_id,source_request_id));`);
+  const body=canonical(payload);
+  db.prepare('INSERT INTO official_npc_one_stop VALUES(?,?,?,?,?,?,?,?,?,?)').run(
+   'request.npc.onestop.'+sha(canonical(['request.npc.onestop.v1','local','binari',1])).slice(0,40),
+   'local','binari',1,'npc.workflow',payload.schemaVersion,body,sha(body),'registered',77);
+ }finally{db.close();}
+}
+
+test('loopback config is fixed, dedicated DB path required and filesystem kept private',t=>{
+ const {directory,path}=folder(t);
+ assert.equal(host,'127.0.0.1');assert.equal(port,8770);
+ assert.throws(()=>configuration({}),/PRIVATE_REQUIRED/);
+ assert.throws(()=>configuration({REQUEST_OFFICIAL_INBOX_DIR:'relative'}),/PRIVATE_REQUIRED/);
+ const config=configuration({REQUEST_OFFICIAL_INBOX_DIR:directory,REQUEST_NGS_REGISTRY_FILE:'/not/read',NGS_REQUEST_POLL_SECONDS:'invalid'});
+ assert.deepEqual(config,{directory});
+ openOfficialInbox(directory).close();
+ chmodSync(path,0o644);
+ assert.throws(()=>openOfficialInbox(directory),/PRIVATE_REQUIRED/);
+ chmodSync(path,0o600);
+ symlinkSync(directory,directory+'-link');
+ assert.throws(()=>openOfficialInbox(directory+'-link'),/PRIVATE_REQUIRED/);
+});
+
+test('typed One-Stop input rejects unsafe expansions and permits the original combat fields',()=>{
+ for(const bad of [
+  {...payload,schemaVersion:'ngs.npc-one-stop.v2',fullRefresh:{confirmed:true}},
+  {...payload,operation:'run'},{...payload,projectId:'other'},
+  {...payload,character:{...payload.character,role:'  '}},{...payload,sourceRefs:[]},
+  {...payload,includeCombat:true},{...payload,combatMotionPresets:['sword']},
+  {...payload,motionPresets:{walk:'other',run:'run'}},
+ ])assert.throws(()=>validateOneStop(bad,'binari'),/PAYLOAD_INVALID/);
+ assert.doesNotThrow(()=>validateOneStop({...payload,includeCombat:true,combatMotionPresets:['sword-attack']},'binari'));
+});
+
+test('additive push ledger leaves exact prior table / rows untouched; deterministic replay survives restart',t=>{
+ const files=folder(t);
+ seedLegacy(files);
+ const before=read(files.path,'SELECT * FROM official_npc_one_stop');
+ const sql=read(files.path,"SELECT sql FROM sqlite_master WHERE name='official_npc_one_stop'");
+ let inbox=openOfficialInbox(files.directory,{now:()=>100});
+ const receipt=inbox.register(input('1'));
+ assert.equal(receipt.status,'registered');
+ assert.match(receipt.officialRequestId,/^request\.official\.[a-f0-9]{64}$/);
+ assert.notEqual(receipt.officialRequestId,before[0].official_request_id);
+ inbox.close();
+ inbox=openOfficialInbox(files.directory,{now:()=>200});
+ try{
+  assert.deepEqual(inbox.register(input('1')),receipt);
+  assert.throws(()=>inbox.register(input('1',{...payload,intent:'기획 수정 내용입니다'})),/IDEMPOTENCY_CONFLICT/);
+  assert.throws(()=>inbox.register(input('second',{...payload,character:{...payload.character,npcId:'npc.other',slug:'FIXTURE'}})),/NPC_ALREADY_REGISTERED/);
+  assert.throws(()=>inbox.register(input('other',{...payload,character:{...payload.character,slug:'other',npcId:'NPC.FIXTURE'}})),/NPC_ALREADY_REGISTERED/);
+  const row=read(files.path)[0];
+  assert.equal(read(files.path).length,1);assert.equal(row.registered_at,100);
+  assert.equal(row.payload_sha256,sha(canonical(payload)));
+  assert.deepEqual(read(files.path,'SELECT * FROM official_npc_one_stop'),before);
+  assert.deepEqual(read(files.path,"SELECT sql FROM sqlite_master WHERE name='official_npc_one_stop'"),sql);
+ }finally{inbox.close();}
+});
+
+test('tool discovery via genuine standard MCP, no registration by notification; HTTP receipt follows commit',async t=>{
+ const {directory,path}=folder(t);
+ const {origin,rpc,submit,post}=await listener(t,directory);
+ const init=await rpc('initialize',{protocolVersion:version,capabilities:{},clientInfo:{name:'fixture',version:'1'}});
+ assert.equal(init.result.protocolVersion,version);assert.deepEqual(init.result.capabilities,{tools:{}});
+ assert.equal((await post({jsonrpc:'2.0',method:'notifications/initialized'})).status,202);
+ const listing=await rpc('tools/list',{});
+ assert.deepEqual(listing.result.tools.map(r=>r.name),['request_submit','request_cancel','request_list','request_workflow_list','request_update_status']);
+ assert.equal((await fetch(origin+'/mcp')).status,405);
+ assert.equal((await fetch(origin+'/api/requests/pending')).status,404);
+ const before=await post({jsonrpc:'2.0',method:'tools/call',params:{name:'request_submit',arguments:input()}});
+ assert.equal(before.status,202);assert.deepEqual(read(path),[]);
+ const first=await submit(input());
+ const receipt=first.result.structuredContent;
+ assert.equal(first.result.isError,false);
+ assert.deepEqual(Object.keys(receipt).sort(),['officialRequestId','status']);
+ assert.deepEqual(JSON.parse(first.result.content[0].text),receipt);
+ assert.equal(receipt.status,'registered');
+ const row=read(path)[0];assert.equal(row.official_request_id,receipt.officialRequestId);
+ assert.equal(row.state,'registered');assert.equal(row.request_type,'npc.workflow');
+ assert.deepEqual((await submit(input())).result.structuredContent,receipt);
+ assert.equal(read(path).length,1);
+});
+
+test('scope, browser traffic, bad payload and conflicting retries fail without duplicate work',async t=>{
+ const {directory,path}=folder(t);
+ const {post,submit,origin}=await listener(t,directory);
+ const msg={jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'request_submit',arguments:input()}};
+ for(const headers of [{Origin:origin},{Cookie:'sid=fixture'},{'Sec-Fetch-Site':'same-origin'}, {'X-Forwarded-For':'127.0.0.1'}]){
+  assert.equal((await post(msg,{headers})).status,403);
+ }
+ const forged=await new Promise((resolve,reject)=>{
+  request(origin+'/mcp',{headers:{Host:'forged.local'}},r=>{r.resume();resolve(r.statusCode);}).on('error',reject).end();
+ });
+ assert.equal(forged,403);
+ assert.equal((await post(msg,{path:'/mcp?x=1'})).status,404);
+ assert.equal((await post(msg,{headers:{'MCP-Protocol-Version':'other'}})).status,400);
+ const bad=await submit({...input(),sourceId:'other'});
+ assert.equal(bad.result.isError,true);
+ assert.deepEqual(bad.result.structuredContent,{error:'REQUEST_SUBMIT_INVALID',status:400});
+ const badPayload=await submit(input('submit-key',{...payload,sourceRefs:[]}));
+ assert.deepEqual(badPayload.result.structuredContent,{error:'NGS_ONE_STOP_PAYLOAD_INVALID',status:400});
+ assert.deepEqual(read(path),[]);
+ const good=await submit(input());
+ assert.equal(good.result.isError,false);
+ const mismatch=await submit(input('submit-key',{...payload,intent:'다른 내용입니다'}));
+ assert.deepEqual(mismatch.result.structuredContent,{error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ assert.deepEqual((await submit(input('other-key'))).result.structuredContent,{error:'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED',status:409});
+ assert.equal(read(path).length,1);
+});
+
+
+function seedInstalledPush(path){
+ const db=new DatabaseSync(path);
+ try{
+  // Exact installed 13de45f table and indexes, before any cancellation exists.
+  db.exec(`CREATE TABLE IF NOT EXISTS official_requests(
+   official_request_id TEXT NOT NULL UNIQUE,
+   source_id TEXT NOT NULL,
+   project_id TEXT NOT NULL,
+   idempotency_key TEXT NOT NULL,
+   request_type TEXT NOT NULL,
+   schema_version TEXT NOT NULL,
+   payload_json TEXT NOT NULL,
+   payload_sha256 TEXT NOT NULL,
+   state TEXT NOT NULL CHECK(state='registered'),
+   registered_at INTEGER NOT NULL,
+   PRIMARY KEY(source_id,project_id,idempotency_key)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS official_requests_new_npc_id
+    ON official_requests(project_id,json_extract(payload_json,'$.character.npcId') COLLATE NOCASE)
+    WHERE request_type='npc.workflow' AND schema_version='ngs.npc-one-stop.v1';
+  CREATE UNIQUE INDEX IF NOT EXISTS official_requests_new_npc_slug
+    ON official_requests(project_id,json_extract(payload_json,'$.character.slug') COLLATE NOCASE)
+    WHERE request_type='npc.workflow' AND schema_version='ngs.npc-one-stop.v1';`);
+  const args=key=>['request.official.'+sha(canonical(['request.official.v1','local','binari',key])),
+   'local','binari',key,'npc.workflow',payload.schemaVersion];
+  const insert=db.prepare('INSERT INTO official_requests(rowid,official_request_id,source_id,project_id,idempotency_key,request_type,schema_version,payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)');
+  const raw=canonical(payload);
+  insert.run(11,...args('old-key'),raw,sha(raw),'registered',83);
+  const other=canonical({...payload,character:{...payload.character,slug:'other',npcId:'npc.other'}});
+  insert.run(27,...args('another-key'),other,sha(other),'registered',95);
+ }finally{db.close();}
+}
+
+test('installed 13de45f schema migrates atomically; exact official cancellation preserves independent rows',async t=>{
+ const files=folder(t);
+ seedLegacy(files);seedInstalledPush(files.path);
+ const sql='SELECT rowid,* FROM official_requests ORDER BY rowid';
+ const before=read(files.path,sql);
+ const legacy=read(files.path,'SELECT * FROM official_npc_one_stop');
+ const {post,cancel,submit,origin}=await listener(t,files.directory);
+ assert.deepEqual(read(files.path,sql),before);
+ assert.deepEqual(read(files.path,'SELECT * FROM official_npc_one_stop'),legacy);
+ const officialRequestId=before[0].official_request_id;
+ const ready={officialRequestId,status:'cancelled'};
+ const args={officialRequestId};
+ assert.equal((await post({jsonrpc:'2.0',method:'tools/call',params:{name:'request_cancel',arguments:args}})).status,202);
+ assert.deepEqual(read(files.path,sql),before);
+ const rpc={jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'request_cancel',arguments:args}};
+ assert.equal((await post(rpc,{headers:{Origin:origin}})).status,403);
+ assert.deepEqual((await cancel({...args,sourceId:'local'})).result.structuredContent,{error:'REQUEST_CANCEL_INVALID',status:400});
+ assert.deepEqual((await cancel({officialRequestId:'request.official.'+'a'.repeat(64)})).result.structuredContent,
+  {error:'OFFICIAL_REQUEST_NOT_FOUND',status:404});
+ assert.deepEqual((await cancel(args)).result.structuredContent,ready);
+ const after=[{...before[0],state:'cancelled'},before[1]];
+ assert.deepEqual(read(files.path,sql),after);
+ assert.deepEqual((await cancel(args)).result.structuredContent,ready);
+ assert.deepEqual(read(files.path,sql),after);
+ assert.deepEqual((await submit(input('old-key'))).result.structuredContent,
+  {error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ assert.deepEqual(read(files.path,sql),after);
+ const again=(await submit(input('new-key'))).result.structuredContent;
+ assert.equal(again.status,'registered');assert.notEqual(again.officialRequestId,officialRequestId);
+ assert.deepEqual((await cancel(args)).result.structuredContent,ready);
+ assert.equal(read(files.path,sql)[2].state,'registered');
+ assert.deepEqual(read(files.path,'SELECT * FROM official_npc_one_stop'),legacy);
+ // Opening selected schema a second time does not re-migrate or touch any state.
+ const afterReapply=read(files.path,sql);
+ openOfficialInbox(files.directory).close();
+ assert.deepEqual(read(files.path,sql),afterReapply);
+});
+
+test('unknown attached schema refuses the upgrade without altering old table or rows',t=>{
+ const files=folder(t);
+ seedLegacy(files);seedInstalledPush(files.path);
+ const db=new DatabaseSync(files.path);
+ db.exec('CREATE INDEX unexpected ON official_requests(state)');
+ db.close();
+ const readBefore=read(files.path,'SELECT rowid,* FROM official_requests');
+ const sql=read(files.path,"SELECT sql FROM sqlite_schema WHERE tbl_name='official_requests' ORDER BY name");
+ assert.throws(()=>openOfficialInbox(files.directory),/SCHEMA_UNSUPPORTED/);
+ assert.deepEqual(read(files.path,'SELECT rowid,* FROM official_requests'),readBefore);
+ assert.deepEqual(read(files.path,"SELECT sql FROM sqlite_schema WHERE tbl_name='official_requests' ORDER BY name"),sql);
+});
+
+const replacement=(npcId='npc.fixture-replacement',slug='fixture-replacement')=>({
+ ...payload,schemaVersion:'ngs.npc-one-stop.replace.v1',
+ character:{...payload.character,npcId,slug,name:'Test fixture'},
+});
+test('same-ID replacement is registered and cancellable through the same tools with no legacy action',async t=>{
+ const files=folder(t);
+ seedLegacy(files);seedInstalledPush(files.path);
+ openOfficialInbox(files.directory).close(); // Start from the deployed cancellation schema.
+ const schemas=()=>read(files.path,"SELECT type, name, sql FROM sqlite_schema ORDER BY name");
+ const initialSchema=schemas(),oldRows=read(files.path,'SELECT * FROM official_requests');
+ const {submit,cancel,rpc}=await listener(t,files.directory);
+ const list=await rpc('tools/list',{});
+ assert.deepEqual(list.result.tools.map(t=>t.name),['request_submit','request_cancel','request_list','request_workflow_list','request_update_status']);
+ assert.deepEqual(list.result.tools[0].inputSchema.oneOf[0].properties.payload.properties.schemaVersion.enum,[
+  'ngs.npc-one-stop.v1','ngs.npc-one-stop.replace.v1',
+ ]);
+ const body=replacement();
+ const {result}=await submit(input('replace-fixture',body));
+ assert.equal(result.isError,false);
+ const receipt=result.structuredContent;
+ assert.equal(receipt.status,'registered');
+ assert.deepEqual((await submit(input('replace-fixture',body))).result.structuredContent,receipt);
+ const rows=read(files.path,'SELECT * FROM official_requests ORDER BY rowid');
+ assert.deepEqual(rows.slice(0,2),oldRows);
+ assert.equal(rows[2].schema_version,'ngs.npc-one-stop.replace.v1');
+ assert.equal(JSON.parse(rows[2].payload_json).character.npcId,'npc.fixture-replacement');
+ assert.equal(JSON.parse(rows[2].payload_json).character.slug,'fixture-replacement');
+ assert.deepEqual(schemas(),initialSchema);
+ assert.deepEqual((await cancel({officialRequestId:receipt.officialRequestId})).result.structuredContent,{...receipt,status:'cancelled'});
+ assert.deepEqual((await submit(input('replace-fixture',body))).result.structuredContent,
+  {error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ assert.equal((await submit(input('replace-fixture-fresh',body))).result.structuredContent.status,'registered');
+});
+
+test('both intake directions enforce registered target uniqueness and exact replacement shape',async t=>{
+ const {directory,path}=folder(t);
+ const {submit}=await listener(t,directory);
+ const conflict={error:'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED',status:409};
+ const bad={error:'NGS_ONE_STOP_PAYLOAD_INVALID',status:400};
+ for(const body of [
+  replacement('other.seojin'),replacement('npc...seojin'),replacement('npc.fixture','../invalid'),
+  {...replacement(),fullRefresh:{confirmed:true}}, {...replacement(),projectId:'other'},
+ ])assert.deepEqual((await submit(input('bad',body))).result.structuredContent,bad);
+ assert.equal((await submit(input('new-one'))).result.structuredContent.status,'registered');
+ assert.deepEqual((await submit(input('replace-id',replacement('npc.fixture','elsewhere')))).result.structuredContent,conflict);
+ assert.deepEqual((await submit(input('replace-slug',replacement('character.old','FIXTURE')))).result.structuredContent,conflict);
+ assert.equal((await submit(input('replace-first',replacement('character.old','historic')))).result.structuredContent.status,'registered');
+ const other=(npcId,slug)=>({...payload,character:{...payload.character,npcId,slug}});
+ assert.deepEqual((await submit(input('new-id',other('character.old','different')))).result.structuredContent,conflict);
+ assert.deepEqual((await submit(input('new-slug',other('npc.another','Historic')))).result.structuredContent,conflict);
+ assert.deepEqual((await submit(input('new-one',{...payload,schemaVersion:'ngs.npc-one-stop.replace.v1'}))).result.structuredContent,
+  {error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ assert.equal(read(path).length,2);
+});
+
+test('request_list returns only the nine summary fields, reads both states, and supports status filters',async t=>{
+ const files=folder(t);
+ seedLegacy(files);
+ const inbox=openOfficialInbox(files.directory,{now:()=>1700000000000});
+ let first,second;
+ try{
+  first=inbox.register(input('first'));
+  second=inbox.register(input('second',replacement()));
+  inbox.cancel({officialRequestId:first.officialRequestId});
+ }finally{inbox.close();}
+ const before=read(files.path,'SELECT rowid,* FROM official_requests');
+ const schema=read(files.path,"SELECT type,name,sql FROM sqlite_schema ORDER BY name");
+ const {list,rpc,post,origin}=await listener(t,files.directory);
+ const tools=(await rpc('tools/list',{})).result.tools;
+ assert.equal(tools.find(t=>t.name==='request_list').annotations.readOnlyHint,true);
+ const out=(await list({})).result.structuredContent;
+ const summary=(receipt,body,status)=>({officialRequestId:receipt.officialRequestId,sourceId:'local',
+  projectId:'binari',requestType:'npc.workflow',schemaVersion:body.schemaVersion,
+  status,registeredAt:1700000000000,targetNpcId:body.character.npcId,targetName:body.character.name});
+ assert.deepEqual(out,{requests:[summary(second,replacement(),'registered'),summary(first,payload,'cancelled')],nextCursor:null});
+ assert.deepEqual((await list({status:'registered'})).result.structuredContent,{requests:[out.requests[0]],nextCursor:null});
+ assert.deepEqual((await list({status:'cancelled'})).result.structuredContent,{requests:[out.requests[1]],nextCursor:null});
+ assert.equal((await post({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'request_list',arguments:{}}},
+  {headers:{Origin:origin}})).status,403);
+ for(const args of [{status:'queued'},{status:null},{limit:0},{limit:101},{limit:1.1},{cursor:'not.a.cursor'},
+                    {cursor:null},{includePayload:true},null,[]]){
+  const result=(await list(args)).result;
+  assert.equal(result.isError,true);
+  assert.deepEqual(result.structuredContent,{error:'REQUEST_LIST_INVALID',status:400});
+ }
+ assert.deepEqual(read(files.path,'SELECT rowid,* FROM official_requests'),before);
+ assert.deepEqual(read(files.path,"SELECT type,name,sql FROM sqlite_schema ORDER BY name"),schema);
+});
+
+test('request_list keyset order stays stable across ties and excludes inserts after the first page',async t=>{
+ const {directory,path}=folder(t);
+ const targets=Array.from({length:53},(_,i)=>({
+  ...payload,character:{...payload.character,npcId:'npc.fixture'+i,slug:'fixture'+i,name:'Fixture '+i},
+ }));
+ let acceptAt=1700000000000;
+ const store=openOfficialInbox(directory,{now:()=>acceptAt});
+ const old=targets.map((body,i)=>store.register(input('fixture-key'+i,body)).officialRequestId);
+ store.close();
+ const {list}=await listener(t,directory);
+ const first=(await list({status:'registered'})).result.structuredContent;
+ assert.equal(first.requests.length,50);
+ assert.deepEqual(first.requests.map(row=>row.officialRequestId),[...old].reverse().slice(0,50));
+ assert.equal(typeof first.nextCursor,'string');
+ // A later insertion with a clock that moves backward would otherwise sneak into page two.
+ acceptAt--;
+ const later=openOfficialInbox(directory,{now:()=>acceptAt});
+ const added=later.register(input('after-horizon',replacement())).officialRequestId;
+ later.close();
+ const second=(await list({status:'registered',limit:100,cursor:first.nextCursor})).result.structuredContent;
+ assert.deepEqual(second.requests.map(row=>row.officialRequestId),[...old].reverse().slice(50));
+ assert.equal(second.nextCursor,null);
+ assert.deepEqual((await list({cursor:first.nextCursor})).result.structuredContent,{error:'REQUEST_LIST_INVALID',status:400});
+ const fresh=(await list({limit:100})).result.structuredContent;
+ assert.deepEqual(fresh.requests.map(row=>row.officialRequestId),[...old].reverse().concat(added));
+ assert.equal(read(path).length,54);
+});
+
+test('workflow list returns hash-verified registered payloads only; cursor has a separate scope',async t=>{
+ const {directory,path}=folder(t);
+ const inbox=openOfficialInbox(directory,{now:()=>1700000000000});
+ let first,second;
+ try{
+  first=inbox.register(input('planning-first'));
+  second=inbox.register(input('planning-second',replacement()));
+ }finally{inbox.close();}
+ const {workflow,list,update,rpc}=await listener(t,directory);
+ const before=read(path,'SELECT rowid,* FROM official_requests');
+ const tools=(await rpc('tools/list',{})).result.tools;
+ assert.equal(tools.find(t=>t.name==='request_workflow_list').annotations.readOnlyHint,true);
+ const head=(await workflow({limit:1})).result.structuredContent;
+ assert.deepEqual(head.requests,[{officialRequestId:second.officialRequestId,projectId:'binari',requestType:'npc.workflow',
+  schemaVersion:replacement().schemaVersion,payload:replacement(),payloadSha256:sha(canonical(replacement())),status:'registered',
+  registeredAt:1700000000000}]);
+ assert.equal(typeof head.nextCursor,'string');
+ const tail=(await workflow({cursor:head.nextCursor})).result.structuredContent;
+ assert.equal(tail.requests[0].officialRequestId,first.officialRequestId);
+ assert.equal(tail.nextCursor,null);
+ const wrong={error:'REQUEST_WORKFLOW_LIST_INVALID',status:400};
+ assert.deepEqual((await workflow({status:'registered'})).result.structuredContent,wrong);
+ assert.deepEqual((await list({cursor:head.nextCursor})).result.structuredContent,{error:'REQUEST_LIST_INVALID',status:400});
+ const ops=(await list({limit:1})).result.structuredContent;
+ assert.deepEqual((await workflow({cursor:ops.nextCursor})).result.structuredContent,wrong);
+ assert.deepEqual(read(path,'SELECT rowid,* FROM official_requests'),before);
+ assert.equal((await update({officialRequestId:second.officialRequestId,status:'planned'})).result.structuredContent.status,'planned');
+ assert.deepEqual((await workflow({})).result.structuredContent.requests.map(r=>r.officialRequestId),[first.officialRequestId]);
+ const db=new DatabaseSync(path);
+ try{db.prepare("UPDATE official_requests SET payload_sha256=? WHERE official_request_id=?").run('a'.repeat(64),first.officialRequestId);}
+ finally{db.close();}
+ assert.deepEqual((await workflow({})).result.structuredContent,{error:'OFFICIAL_REQUEST_WORKFLOW_LIST_FAILED',status:503});
+});
+
+test('status changes are exact, idempotent and preserve active uniqueness and terminal records',async t=>{
+ const {directory,path}=folder(t);
+ const {submit,update,cancel,list,workflow}=await listener(t,directory);
+ const first=(await submit(input('first'))).result.structuredContent;
+ const id=first.officialRequestId;
+ const initial=read(path)[0],state=async status=>(await update({officialRequestId:id,status})).result.structuredContent;
+ const conflict={error:'OFFICIAL_REQUEST_STATUS_CONFLICT',status:409};
+ assert.deepEqual(await state('failed'),conflict);
+ assert.deepEqual(await state('completed'),conflict);
+ assert.deepEqual(await state('registered'),{error:'REQUEST_STATUS_UPDATE_INVALID',status:400});
+ assert.deepEqual(await state('planned'),{officialRequestId:id,status:'planned'});
+ assert.deepEqual(await state('planned'),{officialRequestId:id,status:'planned'});
+ assert.deepEqual(read(path)[0],{...initial,state:'planned'});
+ assert.deepEqual((await cancel({officialRequestId:id})).result.structuredContent,{error:'OFFICIAL_REQUEST_CANCEL_CONFLICT',status:409});
+ assert.deepEqual((await submit(input('second',replacement('npc.fixture','other')))).result.structuredContent,
+  {error:'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED',status:409});
+ assert.deepEqual(await state('completed'),{officialRequestId:id,status:'completed'});
+ assert.deepEqual(await state('completed'),{officialRequestId:id,status:'completed'});
+ assert.deepEqual(await state('failed'),conflict);
+ assert.deepEqual(await state('planned'),conflict);
+ const second=(await submit(input('second',replacement('npc.fixture','fixture')))).result.structuredContent;
+ assert.equal(second.status,'registered');
+ const next=status=>update({officialRequestId:second.officialRequestId,status});
+ assert.equal((await next('planned')).result.structuredContent.status,'planned');
+ assert.equal((await next('failed')).result.structuredContent.status,'failed');
+ assert.equal((await next('failed')).result.structuredContent.status,'failed');
+ assert.deepEqual((await next('completed')).result.structuredContent,conflict);
+ const third=(await submit(input('third'))).result.structuredContent;
+ await cancel({officialRequestId:third.officialRequestId});
+ assert.deepEqual((await update({officialRequestId:third.officialRequestId,status:'planned'})).result.structuredContent,conflict);
+ assert.deepEqual((await submit(input('third'))).result.structuredContent,{error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ const stored=read(path);
+ assert.deepEqual(stored.map(row=>row.state),['completed','failed','cancelled']);
+ for(const status of ['planned','completed','failed','cancelled']){
+  const rows=(await list({status})).result.structuredContent.requests;
+  assert.deepEqual(rows.map(r=>r.officialRequestId),stored.filter(r=>r.state===status).map(r=>r.official_request_id));
+ }
+ assert.deepEqual((await workflow({})).result.structuredContent,{requests:[],nextCursor:null});
+ const foreign='request.official.'+'e'.repeat(64);
+ const db=new DatabaseSync(path);
+ try{db.prepare("INSERT INTO official_requests VALUES(?,?,?,?,?,?,?,?,?,?)").run(foreign,'other','binari','foreign',
+      'other.type','foreign.schema','{}',sha('{}'),'registered',17);}
+ finally{db.close();}
+ assert.deepEqual((await update({officialRequestId:foreign,status:'planned'})).result.structuredContent,
+  {error:'OFFICIAL_REQUEST_NOT_FOUND',status:404});
+ assert.equal(read(path).at(-1).state,'registered');
+ assert.deepEqual((await workflow({})).result.structuredContent,{requests:[],nextCursor:null});
+});
+
+const conceptPayload={schemaVersion:'ngs.concept-category-workflow.v1',projectId:'binari',operation:'add',
+ categoryId:'category.add.'+'a'.repeat(32),groupId:'world',title:'기획 카테고리',outline:'범위와 목차',requirements:'지켜야 할 규칙',requiredSections:['범위','규칙']};
+const conceptInput=(key,body=conceptPayload)=>({sourceId:'local',requestType:'concept.category.workflow',idempotencyKey:key,payload:body});
+const {requiredSections:defaultSections,...legacyAddPayload}=conceptPayload;
+const conceptExisting=(operation,categoryId='concept.test-fixture')=>({...legacyAddPayload,operation,categoryId,groupId:null,
+ ...(['migrate','remove'].includes(operation)?{outline:'',requirements:''}:operation==='update'?{outline:''}:{})});
+
+test('exact concept envelopes reject mismatched families, unsafe placement, legacy extras and malformed text',async t=>{
+ const {directory,path}=folder(t),{submit,rpc}=await listener(t,directory);
+ const schema=(await rpc('tools/list',{})).result.tools[0].inputSchema;
+ assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete']);
+ assert.deepEqual(schema.oneOf[1].properties.payload.required,['schemaVersion','projectId','operation','categoryId','groupId','title','outline','requirements']);
+ const expected={error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400};
+ for(const bad of [
+  legacyAddPayload, {...conceptPayload,requiredSections:[]}, {...conceptPayload,requiredSections:['둘','둘']},
+  {...conceptPayload,requiredSections:[' 둘']}, {...conceptPayload,requiredSections:['A\nB']},
+  {...conceptPayload,requiredSections:['글'.repeat(81)]}, {...conceptExisting('update'),requiredSections:defaultSections},
+  {...conceptPayload,categoryId:'../world'}, {...conceptPayload,groupId:null}, {...conceptPayload,groupId:'../../group'},
+  {...conceptPayload,groupId:'world\n'}, {...conceptPayload,title:' title '}, {...conceptPayload,outline:''},
+  {...conceptPayload,requirements:'𠀋'.repeat(4001)}, {...conceptPayload,requirements:'\ud800'},
+  {...conceptPayload,operation:'delete'}, {...conceptPayload,schemaVersion:'ngs.npc-one-stop.v1'},
+  conceptExisting('replace'), {...conceptExisting('replace'),groupId:'world'}, {...conceptExisting('replace'),outline:'  '},
+  {...conceptExisting('update'),outline:'no'}, {...conceptExisting('update'),requirements:''}, {...conceptExisting('update'),groupId:'world'},
+  {...conceptExisting('migrate'),outline:'not permitted'}, {...conceptExisting('remove'),requirements:'not permitted'},
+  {...conceptExisting('remove'),directDelete:true}, {...conceptExisting('migrate'),categoryId:'world\n'},
+  {...conceptExisting('migrate'),categoryId:'world:extra'}, {...conceptPayload,title:'two\nlines'},
+  {...conceptPayload,outline:'unsafe\u0000text'},
+  payload,
+ ])assert.deepEqual((await submit(conceptInput('invalid',bad))).result.structuredContent,expected);
+ assert.deepEqual((await submit(input('cross',conceptPayload))).result.structuredContent,{error:'NGS_ONE_STOP_PAYLOAD_INVALID',status:400});
+ assert.deepEqual(read(path),[]);
+});
+
+test('concept and NPC share formal tools without crossing duplicate scope or changing the deployed schema',async t=>{
+ const {directory,path}=folder(t);
+ openOfficialInbox(directory).close();
+ const schemaSql="SELECT type,name,sql FROM sqlite_schema ORDER BY name";
+ const originalSchema=read(path,schemaSql),{submit,cancel,list,workflow,update}=await listener(t,directory);
+ const dup={error:'OFFICIAL_REQUEST_CONCEPT_CATEGORY_ALREADY_REGISTERED',status:409};
+ const add=(await submit(conceptInput('add'))).result.structuredContent;
+ assert.deepEqual((await submit(conceptInput('add',{...conceptPayload}))).result.structuredContent,add);
+ assert.deepEqual((await submit(conceptInput('different-add'))).result.structuredContent,dup);
+ assert.deepEqual((await submit(conceptInput('add',{...conceptPayload,title:'다른 제목'}))).result.structuredContent,
+  {error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ // An identical human-readable target does not collide across families.
+ const body=conceptExisting('update',payload.character.npcId);
+ const both=await Promise.all([submit(input('npc')),submit(conceptInput('category',body)),submit(conceptInput('competing',body))]);
+ const value=both.map(row=>row.result.structuredContent);
+ assert.equal(value[0].status,'registered');
+ assert.equal(value.slice(1).filter(v=>v.status==='registered').length,1);
+ assert.equal(value.slice(1).filter(v=>v.error===dup.error).length,1);
+ const replace=value.slice(1).find(v=>v.status==='registered');
+ const cursor=(await workflow({limit:1})).result.structuredContent;
+ const later=(await workflow({cursor:cursor.nextCursor})).result.structuredContent;
+ const feed=[...cursor.requests,...later.requests];
+ assert.equal(feed.length,3);
+ assert.deepEqual(feed.find(row=>row.officialRequestId===replace.officialRequestId).payload,body);
+ assert.equal(feed.find(row=>row.officialRequestId===replace.officialRequestId).payloadSha256,sha(canonical(body)));
+ const summary=(await list({})).result.structuredContent.requests.find(row=>row.officialRequestId===replace.officialRequestId);
+ assert.equal(summary.requestType,'concept.category.workflow');assert.equal(summary.targetNpcId,body.categoryId);
+ assert.equal(summary.targetName,body.title);assert.equal(Object.hasOwn(summary,'payload'),false);
+ assert.equal((await update({...replace,status:'planned'})).result.structuredContent.status,'planned');
+ assert.deepEqual((await submit(conceptInput('conflicting-remove',conceptExisting('remove',body.categoryId)))).result.structuredContent,dup);
+ assert.equal((await update({...replace,status:'completed'})).result.structuredContent.status,'completed');
+ const remove=(await submit(conceptInput('remove',conceptExisting('remove',body.categoryId)))).result.structuredContent;
+ assert.equal(remove.status,'registered');
+ assert.equal((await cancel({officialRequestId:remove.officialRequestId})).result.structuredContent.status,'cancelled');
+ const migrate=(await submit(conceptInput('migrate',conceptExisting('migrate',body.categoryId)))).result.structuredContent;
+ assert.equal(migrate.status,'registered');
+ assert.equal((await workflow({})).result.structuredContent.requests.some(row=>row.officialRequestId===remove.officialRequestId),false);
+ assert.deepEqual(read(path,schemaSql),originalSchema);
+ const fileRows=read(path);
+ assert.equal(fileRows.find(row=>row.official_request_id===remove.officialRequestId).state,'cancelled');
+ assert.equal(fileRows.find(row=>row.official_request_id===replace.officialRequestId).state,'completed');
+});
+
+test('exact historical registered replace replay and status are preserved, but fresh destructive admission is refused',async t=>{
+ const {directory,path}=folder(t);
+ openOfficialInbox(directory).close();
+ const body=conceptExisting('replace'),key='historical-replace',id='request.official.'+sha(canonical(['request.official.v1','local','binari',key]));
+ const raw=canonical(body), db=new DatabaseSync(path);
+ try{db.prepare(`INSERT INTO official_requests(official_request_id,source_id,project_id,idempotency_key,request_type,schema_version,
+  payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,'registered',?)`)
+  .run(id,'local','binari',key,'concept.category.workflow',body.schemaVersion,raw,sha(raw),1);}
+ finally{db.close();}
+ const {submit,workflow,update}=await listener(t,directory);
+ const result=async(p)=>(await p).result.structuredContent;
+ assert.deepEqual(await result(submit(conceptInput(key,body))),{officialRequestId:id,status:'registered'});
+ assert.deepEqual(await result(submit(conceptInput('new-destructive',body))),{error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400});
+ assert.equal((await result(workflow({}))).requests[0].payload.operation,'replace');
+ assert.equal((await result(update({officialRequestId:id,status:'planned'}))).status,'planned');
+ assert.equal((await result(update({officialRequestId:id,status:'completed'}))).status,'completed');
+ assert.equal(read(path).length,1);
+});
+
+test('historical exact add without section list remains replayable, listable and transitions unchanged',async t=>{
+ const {directory,path}=folder(t);
+ openOfficialInbox(directory).close();
+ const body=legacyAddPayload,key='historical-add',id='request.official.'+sha(canonical(['request.official.v1','local','binari',key]));
+ const raw=canonical(body), db=new DatabaseSync(path);
+ try{db.prepare(`INSERT INTO official_requests(official_request_id,source_id,project_id,idempotency_key,request_type,schema_version,
+  payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,'registered',?)`)
+  .run(id,'local','binari',key,'concept.category.workflow',body.schemaVersion,raw,sha(raw),1);}
+ finally{db.close();}
+ const {submit,workflow,update}=await listener(t,directory);
+ const out=async p=>(await p).result.structuredContent;
+ assert.deepEqual(await out(submit(conceptInput(key,body))),{officialRequestId:id,status:'registered'});
+ assert.deepEqual(await out(submit(conceptInput('fresh-without-sections',body))),{error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400});
+ assert.deepEqual((await out(workflow({}))).requests[0].payload,body);
+ assert.equal((await out(update({officialRequestId:id,status:'planned'}))).status,'planned');
+ assert.equal((await out(update({officialRequestId:id,status:'completed'}))).status,'completed');
+});

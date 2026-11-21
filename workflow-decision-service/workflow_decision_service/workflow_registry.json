@@ -1,0 +1,2007 @@
+{
+  "actions": [
+    {
+      "candidateCount": 0,
+      "dependsOn": [],
+      "description": "사용자가 명시한 이름·slug·직업과 막·장을 사용해 npc.standard v3의 빈 인물 개요·아트·대표 및 선택 포즈 기획 파일을 한 번 등록한다. 기획·성향·이미지는 생성하지 않고 모델 호출은 0회다. 직업을 추론하지 않는다. 승인된 정식 요청과 기존 local owner 권한 안에서만 실행하며 동일 요청 재개는 중복 생성하지 않는다. NPC-owned current-slot storage contract: workers create intermediate output only in their admitted private scratch workspace; all completed assets publish through authenticated local PDS to Filex. Other workers obtain pinned inputs by downloading through PDS, never by reading predecessor local paths. NPC-specific portraits, pixel source originals, directional pose images, animation videos and full/raw/alpha/processed frame assets belong to that NPC stable logical slots with content hashes as integrity metadata. A successful authorized regeneration atomically replaces only its specified current slot; do not create unrequested historical copies. Shared registered motion presets remain shared. Generation/lease guards reject stale or deleted NPC work. Preserve existing backups and other NPCs; no arbitrary filesystem mutation or bypass.",
+      "generationKind": "structure",
+      "id": "skeleton",
+      "inputs": [
+        "accepted request",
+        "character identity",
+        "explicit user-supplied role"
+      ],
+      "modelCalls": 0,
+      "outputPolicy": {
+        "apply": "register",
+        "count": 0,
+        "kind": "registration",
+        "selection": "none"
+      },
+      "outputs": [
+        "NPC incarnation",
+        "empty overview, art, representative and selected pose planning files"
+      ],
+      "presetId": "npc.standard",
+      "presetVersion": "3",
+      "provides": [
+        "npc.incarnation",
+        "npc.category-slots"
+      ],
+      "requiredUserFields": [
+        "role"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-lifecycle"
+    },
+    {
+      "candidateCount": 1,
+      "categoryRole": "overview",
+      "dependsOn": [
+        "skeleton"
+      ],
+      "description": "Write one character overview: identity, background, role. Not rendering details or personality scores Use the existing NPC basic-information role as authoritative when present. For existing NPCs with an empty role, continue from other available facts without requiring extra input, inventing an occupation, or changing the role field.",
+      "generationKind": "candidate",
+      "id": "overview",
+      "inputs": [
+        "request",
+        "common planning via PDS",
+        "target overview file",
+        "authoritative NPC basic-information role via PDS"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published overview"
+      ],
+      "provides": [
+        "npc.overview"
+      ],
+      "requires": [
+        "npc.incarnation",
+        "npc.category-slots"
+      ],
+      "variations": [],
+      "workerId": "npc-category"
+    },
+    {
+      "candidateCount": 1,
+      "categoryRole": "art",
+      "dependsOn": [
+        "skeleton"
+      ],
+      "description": "Write one unique portrait art design: stable appearance, clothing, hair. Common rendering style stays in shared data",
+      "generationKind": "candidate",
+      "id": "art",
+      "inputs": [
+        "request",
+        "common planning and art via PDS",
+        "target art file"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published character art"
+      ],
+      "provides": [
+        "npc.art"
+      ],
+      "requires": [
+        "npc.incarnation",
+        "npc.category-slots"
+      ],
+      "variations": [],
+      "workerId": "npc-category"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [
+        "overview",
+        "art"
+      ],
+      "description": "Generate one portrait from common visual art, matching pose planning, identity and current shared visual master read by worker through PDS Structured request.posePreset is the authoritative button selection (representative, combat, idle). request.intent is supplementary user direction, never a source for changing pose. New representative regeneration uses the registered representative-to-combat-to-idle cascade; combat and idle buttons use one matching single-slot request. Pixel-only keeps its chosen slot and existing normal portrait. Legacy saved requests remain replayable. Never infer a replacement pose from natural language or inject pose instructions into the user message. Formal npc.reprocess-pixel is a separate deterministic postprocess-only request using this existing single portrait executor. Structured posePreset selects representative/combat/idle; regeneratePixelOnly=true and reprocessPixelOnly=true are mandatory together. It pins retained native generated SD source bytes whose complete pipeline lineage and SHA256 match the current slot portrait and pixel assets. Apply the 384x384, 32-color, binary-alpha, padding3 postprocess profile; publish only the target pixel through current-source CAS, preserving its normal portrait and other poses. Never upscale the previous 128px final image or generate a new SD image as fallback. Missing native source, mismatched lineage or concurrent slot change fails. Actual image-model calls=0 for this request; Workflow selection is deterministic and makes no model call. Do not add modelCalls to this action execution shape: registered adapter does not have that field. Normal portrait generation and AI pixel regeneration remain distinct requests.",
+      "generationKind": "candidate",
+      "id": "portrait",
+      "inputs": [
+        "structured request and selected pose",
+        "common visual art and matching pose planning via PDS for image generation",
+        "current visual master",
+        "current-lineage native SD source for postprocess-only"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published portrait"
+      ],
+      "pixelPipeline": [
+        {
+          "dependsOn": [],
+          "id": "portrait"
+        },
+        {
+          "dependsOn": [
+            "portrait"
+          ],
+          "id": "pixel-source",
+          "kind": "image-generation",
+          "reference": "portrait",
+          "style": "slightly-sd-pixel-portrait"
+        },
+        {
+          "dependsOn": [
+            "pixel-source"
+          ],
+          "id": "pixel-postprocess",
+          "input": "pixel-source",
+          "kind": "pixel-postprocess"
+        }
+      ],
+      "poseDependencies": {
+        "combat": [
+          "representative"
+        ],
+        "idle": [
+          "representative"
+        ],
+        "representative": []
+      },
+      "provides": [
+        "npc.portrait"
+      ],
+      "referencePose": {
+        "combat": "representative",
+        "idle": "representative"
+      },
+      "requestVariants": {
+        "npc.reprocess-pixel": {
+          "fallback": "fail",
+          "imageModelCalls": 0,
+          "preserveNormalPortrait": true,
+          "profile": {
+            "alphaMode": "binary",
+            "colors": 32,
+            "height": 384,
+            "padding": 3,
+            "width": 384
+          },
+          "source": "current-lineage-native-sd"
+        }
+      },
+      "requires": [
+        "npc.incarnation",
+        "npc.overview",
+        "npc.art"
+      ],
+      "variations": [],
+      "workerId": "npc-portrait"
+    },
+    {
+      "candidateCount": 0,
+      "dependsOn": [],
+      "description": "Delete one explicitly selected existing NPC through the official request. Verify the complete NPC folder and referenced asset byte backup before committing deletion. Preserve unrelated NPCs and shared assets. Filex current-source deletion supports exactly one target per request. No content model or comparison alternatives. NPC-owned current-slot storage contract: workers create intermediate output only in their admitted private scratch workspace; all completed assets publish through authenticated local PDS to Filex. Other workers obtain pinned inputs by downloading through PDS, never by reading predecessor local paths. NPC-specific portraits, pixel source originals, directional pose images, animation videos and full/raw/alpha/processed frame assets belong to that NPC stable logical slots with content hashes as integrity metadata. A successful authorized regeneration atomically replaces only its specified current slot; do not create unrequested historical copies. Shared registered motion presets remain shared. Generation/lease guards reject stale or deleted NPC work. Preserve existing backups and other NPCs; no arbitrary filesystem mutation or bypass. Deletion uses dedicated lifecycle admission, not an ordinary active worker lease: stop new admissions, require no active work, verify whole NPC recovery backup including current binary slots, then commit the tombstone and current owner removal. External private workspace quarantine requires authoritative receipt, matching generation and explicit ownership inventory; preserve request audit history, shared presets and all old backups. Unknown ownership fails closed.",
+      "generationKind": "deterministic",
+      "id": "delete",
+      "inputs": [
+        "explicit npcIds",
+        "expectedRevision",
+        "expectedDocumentHash",
+        "authorized actor and project"
+      ],
+      "modelCalls": 0,
+      "outputPolicy": {
+        "apply": "authorized-delete-with-backup-and-cas",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 0,
+        "kind": "deterministic-operation",
+        "selection": "none"
+      },
+      "outputs": [
+        "recoverable backup receipt",
+        "official deletion publication receipt"
+      ],
+      "provides": [
+        "npc.deletion-receipt"
+      ],
+      "requestRequirements": {
+        "brief": {
+          "minLength": 5,
+          "type": "string"
+        },
+        "expectedDocumentHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "expectedRevision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "npcIds": {
+          "minItems": 1,
+          "type": "string-array",
+          "unique": true
+        },
+        "operation": {
+          "const": "delete",
+          "type": "string"
+        },
+        "projectId": {
+          "const": "binari",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": "npc-lifecycle-request.v1",
+          "type": "string"
+        },
+        "sourceRefs": {
+          "minItems": 1,
+          "type": "string-array"
+        }
+      },
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-lifecycle-delete"
+    },
+    {
+      "candidateCount": 1,
+      "categoryRole": "new-category",
+      "dependsOn": [],
+      "description": "Create exactly one new planning category file for an existing NPC, not filling or modifying an existing category. Read common planning and user occupation via PDS, generate one complete categoryName/content proposal with Codex and publish within authorized scope. Refuse duplicate names, stale revision and changed incarnation. No portrait or personality generation. Optional structured planningRole may be portrait.representative, portrait.combat or portrait.idle. It binds a planning file to its functional pose independently of its display title. category-add persists this immutable role on a new file; category-modify may bind a previously untyped existing category while preserving its title and complete content as requested. Role binding is an authorized supported modification, not a new unsupported workflow. The executor, not generated prose, persists the supplied role. Duplicate active roles, role reassignment and native-field binding are rejected. Ordinary modifications preserve an existing role. Portrait context selects common art and the matching role, not a display-name match. Full workflow planningPose passes the corresponding structured planningRole. Legacy untyped exact-title files remain readable.",
+      "generationKind": "candidate",
+      "id": "category-add",
+      "inputs": [
+        "accepted request intent",
+        "NPC identity and incarnation",
+        "PDS common.npc-planning",
+        "user-provided occupation"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one new planning category complete file",
+        "publication receipt"
+      ],
+      "provides": [
+        "npc.new-planning-category"
+      ],
+      "requires": [
+        "npc.incarnation"
+      ],
+      "variations": [],
+      "workerId": "npc-category-add"
+    },
+    {
+      "candidateCount": 0,
+      "dependsOn": [],
+      "description": "NPC 기획 카테고리 한 항목을 논리 제거한다. 본문과 자식 데이터는 현재 파일에 보존하고 목록 및 워커 읽기에서 제외한다. NPC 전체 제거나 지식 분류 제거가 아니다.",
+      "id": "category-delete",
+      "inputs": [
+        "projectId",
+        "npcId",
+        "categoryId",
+        "baseRevision"
+      ],
+      "modelCalls": 0,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "count": 0,
+        "kind": "deterministic",
+        "selection": "none"
+      },
+      "outputs": [
+        "logical-removal-receipt"
+      ],
+      "provides": [
+        "npc.category.removed"
+      ],
+      "requires": [],
+      "workerId": "npc-category-delete"
+    },
+    {
+      "candidateCount": 1,
+      "categoryRole": "existing-category",
+      "dependsOn": [],
+      "description": "Modify exactly one existing active non-preset planning category file. Preset overview and art retain dedicated workers. Read PDS common planning and target file, preserve ID, generate one complete content result and publish within authorized scope. Never add a category or image. Optional structured planningRole may be portrait.representative, portrait.combat or portrait.idle. It binds a planning file to its functional pose independently of its display title. category-add persists this immutable role on a new file; category-modify may bind a previously untyped existing category while preserving its title and complete content as requested. Role binding is an authorized supported modification, not a new unsupported workflow. The executor, not generated prose, persists the supplied role. Duplicate active roles, role reassignment and native-field binding are rejected. Ordinary modifications preserve an existing role. Portrait context selects common art and the matching role, not a display-name match. Full workflow planningPose passes the corresponding structured planningRole. Legacy untyped exact-title files remain readable.",
+      "generationKind": "candidate",
+      "id": "category-modify",
+      "inputs": [
+        "accepted request intent",
+        "NPC identity and incarnation",
+        "PDS common.npc-planning",
+        "user-provided occupation",
+        "one target category content via PDS"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one replaced target planning file",
+        "publication receipt"
+      ],
+      "provides": [
+        "npc.modified-planning-category"
+      ],
+      "requires": [
+        "npc.incarnation"
+      ],
+      "variations": [],
+      "workerId": "npc-category-modify"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [
+        "art",
+        "planning.representative"
+      ],
+      "description": "representative 포트레이트와 해당 픽셀 한 쌍. 선행 게시 완료 후 생성; 실제 대표 이미지 참조. Structured request.posePreset is the authoritative button selection (representative, combat, idle). request.intent is supplementary user direction, never a source for changing pose. New representative regeneration uses the registered representative-to-combat-to-idle cascade; combat and idle buttons use one matching single-slot request. Pixel-only keeps its chosen slot and existing normal portrait. Legacy saved requests remain replayable. Never infer a replacement pose from natural language or inject pose instructions into the user message.",
+      "generationKind": "candidate",
+      "id": "portrait.representative",
+      "inputs": [
+        "request",
+        "published overview",
+        "published art",
+        "shared art via PDS"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published portrait"
+      ],
+      "pixelPipeline": [
+        {
+          "dependsOn": [],
+          "id": "portrait"
+        },
+        {
+          "dependsOn": [
+            "portrait"
+          ],
+          "id": "pixel-source",
+          "kind": "image-generation",
+          "reference": "portrait",
+          "style": "slightly-sd-pixel-portrait"
+        },
+        {
+          "dependsOn": [
+            "pixel-source"
+          ],
+          "id": "pixel-postprocess",
+          "input": "pixel-source",
+          "kind": "pixel-postprocess"
+        }
+      ],
+      "poseDependencies": {
+        "combat": [
+          "representative"
+        ],
+        "idle": [
+          "representative",
+          "combat"
+        ],
+        "representative": []
+      },
+      "posePreset": "representative",
+      "provides": [
+        "portrait-pair.representative"
+      ],
+      "referencePose": {
+        "combat": "representative",
+        "idle": "representative"
+      },
+      "requires": [
+        "npc.incarnation",
+        "npc.overview",
+        "npc.art",
+        "pose-planning.representative"
+      ],
+      "variations": [],
+      "workerId": "npc-portrait"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [
+        "portrait.representative",
+        "planning.combat"
+      ],
+      "description": "combat 포트레이트와 해당 픽셀 한 쌍. 선행 게시 완료 후 생성; 실제 대표 이미지 참조. Structured request.posePreset is the authoritative button selection (representative, combat, idle). request.intent is supplementary user direction, never a source for changing pose. New representative regeneration uses the registered representative-to-combat-to-idle cascade; combat and idle buttons use one matching single-slot request. Pixel-only keeps its chosen slot and existing normal portrait. Legacy saved requests remain replayable. Never infer a replacement pose from natural language or inject pose instructions into the user message.",
+      "generationKind": "candidate",
+      "id": "portrait.combat",
+      "inputs": [
+        "request",
+        "published overview",
+        "published art",
+        "shared art via PDS"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published portrait"
+      ],
+      "pixelPipeline": [
+        {
+          "dependsOn": [],
+          "id": "portrait"
+        },
+        {
+          "dependsOn": [
+            "portrait"
+          ],
+          "id": "pixel-source",
+          "kind": "image-generation",
+          "reference": "portrait",
+          "style": "slightly-sd-pixel-portrait"
+        },
+        {
+          "dependsOn": [
+            "pixel-source"
+          ],
+          "id": "pixel-postprocess",
+          "input": "pixel-source",
+          "kind": "pixel-postprocess"
+        }
+      ],
+      "poseDependencies": {
+        "combat": [
+          "representative"
+        ],
+        "idle": [
+          "representative",
+          "combat"
+        ],
+        "representative": []
+      },
+      "posePreset": "combat",
+      "provides": [
+        "portrait-pair.combat"
+      ],
+      "referencePose": {
+        "combat": "representative",
+        "idle": "representative"
+      },
+      "referenceStage": "portrait.representative",
+      "requires": [
+        "portrait-pair.representative",
+        "pose-planning.combat"
+      ],
+      "variations": [],
+      "workerId": "npc-portrait"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [
+        "portrait.representative",
+        "portrait.combat",
+        "planning.idle"
+      ],
+      "description": "idle 포트레이트와 해당 픽셀 한 쌍. 선행 게시 완료 후 생성; 실제 대표 이미지 참조. Structured request.posePreset is the authoritative button selection (representative, combat, idle). request.intent is supplementary user direction, never a source for changing pose. New representative regeneration uses the registered representative-to-combat-to-idle cascade; combat and idle buttons use one matching single-slot request. Pixel-only keeps its chosen slot and existing normal portrait. Legacy saved requests remain replayable. Never infer a replacement pose from natural language or inject pose instructions into the user message.",
+      "generationKind": "candidate",
+      "id": "portrait.idle",
+      "inputs": [
+        "request",
+        "published overview",
+        "published art",
+        "shared art via PDS"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published portrait"
+      ],
+      "pixelPipeline": [
+        {
+          "dependsOn": [],
+          "id": "portrait"
+        },
+        {
+          "dependsOn": [
+            "portrait"
+          ],
+          "id": "pixel-source",
+          "kind": "image-generation",
+          "reference": "portrait",
+          "style": "slightly-sd-pixel-portrait"
+        },
+        {
+          "dependsOn": [
+            "pixel-source"
+          ],
+          "id": "pixel-postprocess",
+          "input": "pixel-source",
+          "kind": "pixel-postprocess"
+        }
+      ],
+      "poseDependencies": {
+        "combat": [
+          "representative"
+        ],
+        "idle": [
+          "representative",
+          "combat"
+        ],
+        "representative": []
+      },
+      "posePreset": "idle",
+      "provides": [
+        "portrait-pair.idle"
+      ],
+      "referencePose": {
+        "combat": "representative",
+        "idle": "representative"
+      },
+      "referenceStage": "portrait.representative",
+      "requires": [
+        "portrait-pair.representative",
+        "portrait-pair.combat",
+        "pose-planning.idle"
+      ],
+      "variations": [],
+      "workerId": "npc-portrait"
+    },
+    {
+      "candidateCount": 1,
+      "categoryRole": "new-category",
+      "dependsOn": [
+        "overview",
+        "art"
+      ],
+      "description": "representative 포즈 기획 파일 1개 추가. PDS 공용 및 인물 개요/아트 읽기. 확정 외형 보존.",
+      "generationKind": "candidate",
+      "id": "planning.representative",
+      "inputs": [
+        "accepted request intent",
+        "NPC identity and incarnation",
+        "PDS common.npc-planning",
+        "user-provided occupation"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one new planning category complete file",
+        "publication receipt"
+      ],
+      "planningPose": "representative",
+      "provides": [
+        "pose-planning.representative"
+      ],
+      "requires": [
+        "npc.overview",
+        "npc.art"
+      ],
+      "variations": [],
+      "workerId": "npc-category-add"
+    },
+    {
+      "candidateCount": 1,
+      "categoryRole": "new-category",
+      "dependsOn": [
+        "overview",
+        "art"
+      ],
+      "description": "combat 포즈 기획 파일 1개 추가. PDS 공용 및 인물 개요/아트 읽기. 확정 외형 보존.",
+      "generationKind": "candidate",
+      "id": "planning.combat",
+      "inputs": [
+        "accepted request intent",
+        "NPC identity and incarnation",
+        "PDS common.npc-planning",
+        "user-provided occupation"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one new planning category complete file",
+        "publication receipt"
+      ],
+      "planningPose": "combat",
+      "provides": [
+        "pose-planning.combat"
+      ],
+      "requires": [
+        "npc.overview",
+        "npc.art"
+      ],
+      "variations": [],
+      "workerId": "npc-category-add"
+    },
+    {
+      "candidateCount": 1,
+      "categoryRole": "new-category",
+      "dependsOn": [
+        "overview",
+        "art"
+      ],
+      "description": "idle 포즈 기획 파일 1개 추가. PDS 공용 및 인물 개요/아트 읽기. 확정 외형 보존.",
+      "generationKind": "candidate",
+      "id": "planning.idle",
+      "inputs": [
+        "accepted request intent",
+        "NPC identity and incarnation",
+        "PDS common.npc-planning",
+        "user-provided occupation"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one new planning category complete file",
+        "publication receipt"
+      ],
+      "planningPose": "idle",
+      "provides": [
+        "pose-planning.idle"
+      ],
+      "requires": [
+        "npc.overview",
+        "npc.art"
+      ],
+      "variations": [],
+      "workerId": "npc-category-add"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "Refresh existing NPC representative portrait and its generated SD pixel/postprocessed pair. Preserve existing planning and NPC identity. Complete predecessor refreshed pairs before proceeding. Structured request.posePreset is the authoritative button selection (representative, combat, idle). request.intent is supplementary user direction, never a source for changing pose. New representative regeneration uses the registered representative-to-combat-to-idle cascade; combat and idle buttons use one matching single-slot request. Pixel-only keeps its chosen slot and existing normal portrait. Legacy saved requests remain replayable. Never infer a replacement pose from natural language or inject pose instructions into the user message.",
+      "generationKind": "candidate",
+      "id": "portrait-refresh.representative",
+      "inputs": [
+        "request",
+        "published overview",
+        "published art",
+        "shared art via PDS"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published portrait"
+      ],
+      "pixelPipeline": [
+        {
+          "dependsOn": [],
+          "id": "portrait"
+        },
+        {
+          "dependsOn": [
+            "portrait"
+          ],
+          "id": "pixel-source",
+          "kind": "image-generation",
+          "reference": "portrait",
+          "style": "slightly-sd-pixel-portrait"
+        },
+        {
+          "dependsOn": [
+            "pixel-source"
+          ],
+          "id": "pixel-postprocess",
+          "input": "pixel-source",
+          "kind": "pixel-postprocess"
+        }
+      ],
+      "poseDependencies": {
+        "combat": [
+          "representative"
+        ],
+        "idle": [
+          "representative",
+          "combat"
+        ],
+        "representative": []
+      },
+      "posePreset": "representative",
+      "provides": [
+        "refreshed-pair.representative"
+      ],
+      "referencePose": {
+        "combat": "representative",
+        "idle": "representative"
+      },
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-portrait"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [
+        "portrait-refresh.representative"
+      ],
+      "description": "Refresh existing NPC combat portrait and its generated SD pixel/postprocessed pair. Preserve existing planning and NPC identity. Complete predecessor refreshed pairs before proceeding. Structured request.posePreset is the authoritative button selection (representative, combat, idle). request.intent is supplementary user direction, never a source for changing pose. New representative regeneration uses the registered representative-to-combat-to-idle cascade; combat and idle buttons use one matching single-slot request. Pixel-only keeps its chosen slot and existing normal portrait. Legacy saved requests remain replayable. Never infer a replacement pose from natural language or inject pose instructions into the user message.",
+      "generationKind": "candidate",
+      "id": "portrait-refresh.combat",
+      "inputs": [
+        "request",
+        "published overview",
+        "published art",
+        "shared art via PDS"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published portrait"
+      ],
+      "pixelPipeline": [
+        {
+          "dependsOn": [],
+          "id": "portrait"
+        },
+        {
+          "dependsOn": [
+            "portrait"
+          ],
+          "id": "pixel-source",
+          "kind": "image-generation",
+          "reference": "portrait",
+          "style": "slightly-sd-pixel-portrait"
+        },
+        {
+          "dependsOn": [
+            "pixel-source"
+          ],
+          "id": "pixel-postprocess",
+          "input": "pixel-source",
+          "kind": "pixel-postprocess"
+        }
+      ],
+      "poseDependencies": {
+        "combat": [
+          "representative"
+        ],
+        "idle": [
+          "representative",
+          "combat"
+        ],
+        "representative": []
+      },
+      "posePreset": "combat",
+      "provides": [
+        "refreshed-pair.combat"
+      ],
+      "referencePose": {
+        "combat": "representative",
+        "idle": "representative"
+      },
+      "referenceStage": "portrait-refresh.representative",
+      "requires": [
+        "refreshed-pair.representative"
+      ],
+      "variations": [],
+      "workerId": "npc-portrait"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [
+        "portrait-refresh.representative"
+      ],
+      "description": "Refresh existing NPC idle portrait and its generated SD pixel/postprocessed pair. Preserve existing planning and NPC identity. Complete predecessor refreshed pairs before proceeding. Structured request.posePreset is the authoritative button selection (representative, combat, idle). request.intent is supplementary user direction, never a source for changing pose. New representative regeneration uses the registered representative-to-combat-to-idle cascade; combat and idle buttons use one matching single-slot request. Pixel-only keeps its chosen slot and existing normal portrait. Legacy saved requests remain replayable. Never infer a replacement pose from natural language or inject pose instructions into the user message.",
+      "generationKind": "candidate",
+      "id": "portrait-refresh.idle",
+      "inputs": [
+        "request",
+        "published overview",
+        "published art",
+        "shared art via PDS"
+      ],
+      "outputPolicy": {
+        "aggregateApply": "preserve-existing-draft-workflow",
+        "apply": "after-generation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "published portrait"
+      ],
+      "pixelPipeline": [
+        {
+          "dependsOn": [],
+          "id": "portrait"
+        },
+        {
+          "dependsOn": [
+            "portrait"
+          ],
+          "id": "pixel-source",
+          "kind": "image-generation",
+          "reference": "portrait",
+          "style": "slightly-sd-pixel-portrait"
+        },
+        {
+          "dependsOn": [
+            "pixel-source"
+          ],
+          "id": "pixel-postprocess",
+          "input": "pixel-source",
+          "kind": "pixel-postprocess"
+        }
+      ],
+      "poseDependencies": {
+        "combat": [
+          "representative"
+        ],
+        "idle": [
+          "representative"
+        ],
+        "representative": []
+      },
+      "posePreset": "idle",
+      "provides": [
+        "refreshed-pair.idle"
+      ],
+      "referencePose": {
+        "combat": "representative",
+        "idle": "representative"
+      },
+      "referenceStage": "portrait-refresh.representative",
+      "requires": [
+        "refreshed-pair.representative"
+      ],
+      "variations": [],
+      "workerId": "npc-portrait"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "Modify only explicit existing common master fields. The user supplies intent and exact categoryId/itemId targets, not generated final prompts. Worker reads current target field values through PDS from Filex, invokes one tool-free Codex author to create complete replacement field values, validates target identity and preserves all unrelated fields, then publishes changed complete files through the PDS concept-only writer with stale-source rejection. No alternatives, character generation, direct database content edits, historical file backup or fallback. Normal portraits preserve standard adult identity/proportion rules; independently requested SD pixel portraits may use slight SD proportions while retaining canonical age, identity, clothing, colors and style. Character-specific exceptions and past proposal/workflow text do not belong in shared master. Unknown outcomes must inspect saved request/model/file receipt, never rerun blindly.",
+      "generationKind": "candidate",
+      "id": "concept.modify",
+      "inputs": [
+        "immutable authorized intent",
+        "explicit categoryId/itemId targets",
+        "current Filex master values through PDS",
+        "expectedRevision and documentHash"
+      ],
+      "modelCalls": 1,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one validated complete replacement per target field",
+        "Filex verified current-source receipt"
+      ],
+      "provides": [
+        "concept.modify.receipt"
+      ],
+      "requiredUserFields": [
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "concept-modify",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.concept-modify-request.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "New animation requests use referenceType=pixel exclusively. The UI and intake fix pixel as the only reference type; portrait is rejected for new animation generation/regeneration/batch requests, never silently coerced. Use the formally published pixel poseViews image for the same NPC, posePreset and direction, with current canonical pixel lineage and exact pinned image hash. Missing, stale or wrong-type pixel poseViews block before Wan execution; no portrait fallback, no implicit still-image generation and no front-image substitution. Preserve all existing portrait images, video results and already accepted requests; historical resume keeps the original pinned contract rather than rewriting its reference type. Motion preset IDs come from the PDS dynamic catalog, with pose compatibility and direction hashes verified by the worker. run and sword-attack are examples, not a closed enum. This is an input-reference policy, not an instruction to generate new content.\n\nLegacy historical action only. Do not choose for a new request: use animation.generate-from-pose or animation.regenerate-from-pose. Existing recorded executions may resume with their pinned contract. Only use this direct-video action when NOT (referenceType=pixel and direction is n/ne/nw). For those rear pixel cases choose animation.generate-rear instead, which has an image-then-postprocess-then-video dependency. Generate exactly one single-cycle MP4 for a single NPC pose/preset/direction/referenceType. Structured posePreset combat maps only to sword-attack, idle only to run. Direction n/ne/e/se/s/sw/w/nw; referenceType portrait or pixel. One requested direction, not all eight and not three variants. Requires the selected pose confirmed image, valid matching motion MP4, common art and selected visual master read through PDS. Worker prepares fresh Wan-Animate2 conditioning from actual image/motion references and composes its own prompt, never accepting full narrative as image prompt or inferring pose from prose. Sword attack 41 frames/24fps, run25 frames/24fps, cycleCount1. Local Wan execution and publication have been verified on one formal sample; this is not proof of every preset or direction. Missing references, unsupported combinations, low selection score, stale source or invalid media block rather than fallback. OPS owns persisted one-result execution and receipt-first publication; PDS writes Filex current slot, NGS refresh is manual. Preserve other poses and files. No character creation, portrait generation or Space deployment as a side effect. Animation PDS context uses workerId=npc-animation and exactly common.animation-rendering, unique.npc-identity, unique.npc-design. Rendering contains only styleBlock, lineHierarchy, palettePolicy and surfaceDetail; design contains only common visual art. Static pose body, world fields, narrative and history are excluded. posePreset binds actual image/motion and verifies role/hash in trace, not static pose prose in the prompt. Structured preset equipmentPolicy: run none/sheathed/book excluded; sword-attack one sword/drawn/book excluded. Motion and equipment state come from this preset policy, not image-generation pose instructions. Pixel reference requires at least 384 pixels from formal native-SD reprocessing; never upscale an old128 final. Motion-safe framing is down-only: run maxHeight0.72/maxWidth0.60, sword maxHeight0.60/maxWidth0.60. Optional seed is uint32 for controlled comparisons. Final-frame extraction and seamless looping are not yet guaranteed. This is the explicit single-direction child/legacy operation only. The normal pose/action generation request now uses direction=all and npc.animation.generate-eight-directions, not this action directly. Do not replace an all-direction request with one direction.",
+      "generationKind": "candidate",
+      "id": "animation.generate",
+      "inputs": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent",
+        "optional uint32 seed"
+      ],
+      "modelCalls": 1,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one single-cycle MP4",
+        "verified Filex animation slot receipt"
+      ],
+      "preconditions": [
+        "selected.pose.reference-image",
+        "selected.preset.direction.motion-mp4",
+        "current.common-art-and-selected-visual-master"
+      ],
+      "provides": [
+        "npc.animation.mp4"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "New animation requests use referenceType=pixel exclusively. The UI and intake fix pixel as the only reference type; portrait is rejected for new animation generation/regeneration/batch requests, never silently coerced. Use the formally published pixel poseViews image for the same NPC, posePreset and direction, with current canonical pixel lineage and exact pinned image hash. Missing, stale or wrong-type pixel poseViews block before Wan execution; no portrait fallback, no implicit still-image generation and no front-image substitution. Preserve all existing portrait images, video results and already accepted requests; historical resume keeps the original pinned contract rather than rewriting its reference type. Motion preset IDs come from the PDS dynamic catalog, with pose compatibility and direction hashes verified by the worker. run and sword-attack are examples, not a closed enum. This is an input-reference policy, not an instruction to generate new content.\n\nIsolated experimental eight-direction simultaneous run, not a normal portrait or animation slot. Exact schema ngs.npc-animation-experiment-request.v1; requestType npc.animation.experiment. Structured posePreset idle, experimentId eight-up-run-4x2 or eight-up-run-4x2-matched-reference and referenceType pixel only. One confirmed pixel reference of the same NPC, at least384 from formal native-SD reprocessing, drives eight copies in a 4-column2-row video. The prepared768x432 motion MP4 has25 frames,24fps,one cycle and directions top s/sw/w/nw then bottom n/ne/e/se. Validate motion preset bytes/hash and current pixel reference. Worker reads only animation visual master4keys, NPC identity and common visual art via PDS, excluding static pose body/world/history. Use down-only run framing and preset none-held/sheathed/no-book equipment state. One local Wan model invocation, one output MP4. This is an unvalidated multi-person experiment, not a guarantee of eight clean characters, seamless looping or usable final frames. OPS state/receipts and source CAS apply; persist separately under animationExperiments through PDS/Filex and leave normal portraitSets/animation slots unchanged. NGS manual refresh only. Missing source, conflicting lineage, unsupported contract or low Laya score blocks; no fallback generation, repeated invocation or Space deployment. The new matched-reference experiment uses referenceLayout=eight-up-4x2: deterministically place eight identical copies of the same current native-SD-reprocessed384 pixel reference into four columns and two rows, matching the person count and layout of the driving video. This reference preparation invokes no character/image generation model. All copies are the same view, not newly created eight-direction character assets. Nearest-neighbor down-only fit preserves alpha; no old128 upscale is allowed. The local Wan video model is still invoked once. Keep the original single-reference experiment artifact unchanged and publish the new experimentId separately. This is a controlled retry of multi-person conditioning, not a guarantee of correct directions, final framing, frame extraction or seamless animation.",
+      "experimentVariants": {
+        "eight-up-run-4x2": {
+          "referenceLayout": "single"
+        },
+        "eight-up-run-4x2-matched-reference": {
+          "referenceCopies": 8,
+          "referenceLayout": "eight-up-4x2",
+          "referencePreparationModelCalls": 0,
+          "sameViewCopies": true
+        }
+      },
+      "generationKind": "candidate",
+      "id": "animation.experiment",
+      "inputs": [
+        "projectId=binari",
+        "npcId",
+        "posePreset=idle",
+        "experimentId=eight-up-run-4x2|eight-up-run-4x2-matched-reference",
+        "referenceType=pixel",
+        "intent",
+        "optional uint32 seed"
+      ],
+      "modelCalls": 1,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one isolated experimental eight-person MP4",
+        "verified Filex animationExperiments receipt"
+      ],
+      "preconditions": [
+        "current idle native-SD-reprocessed pixel >=384",
+        "verified eight-person 4x2 motion preset"
+      ],
+      "provides": [
+        "npc.animation.experiment.mp4"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "experimentId",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation-experiment",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.npc-animation-experiment-request.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "New animation requests use referenceType=pixel exclusively. The UI and intake fix pixel as the only reference type; portrait is rejected for new animation generation/regeneration/batch requests, never silently coerced. Use the formally published pixel poseViews image for the same NPC, posePreset and direction, with current canonical pixel lineage and exact pinned image hash. Missing, stale or wrong-type pixel poseViews block before Wan execution; no portrait fallback, no implicit still-image generation and no front-image substitution. Preserve all existing portrait images, video results and already accepted requests; historical resume keeps the original pinned contract rather than rewriting its reference type. Motion preset IDs come from the PDS dynamic catalog, with pose compatibility and direction hashes verified by the worker. run and sword-attack are examples, not a closed enum. This is an input-reference policy, not an instruction to generate new content.\n\nOne formal pose/motion request owns eight sequential videos. Before any child video starts, require and pin all eight current poseViews for the same posePreset/referenceType and verify each lineage against the canonical center. The coordinator performs zero model calls; eight children each use animation.generate-from-pose and one Wan call, for eight video calls total and zero image calls. No automatic rear-image generation. Match direction images to directional one-cycle MP4s; persist a direction-to-reference hash map, shared canonical identity/context, per-stage status and receipts. Same-parent resume reuses completed outputs and refuses changed pose references. Missing/stale images block before model execution. Requests for still-image expansion use pose.expand-eight-directions instead. Preserve all canonical portraits, direction images and unrelated data. Validate actual direction/costume/weapon/loop quality separately from successful publication. Registered motion preset IDs are dynamic PDS catalog assets, not a hardcoded two-ID enum. run and sword-attack are existing examples, not the only allowed IDs. The executor validates catalog existence, matching posePreset, all required direction files and pinned hashes before generation. A newly registered valid preset uses this same workflow without a new adapter; unknown/missing IDs fail before model execution. Registration itself is the separate motion-preset.register action.",
+      "generationKind": "candidate",
+      "id": "animation.generate-eight-directions",
+      "inputs": [
+        "schema ngs.npc-animation-request.v1",
+        "projectId=binari",
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction=all",
+        "referenceType=pixel|portrait",
+        "intent",
+        "optional uint32 seed"
+      ],
+      "modelCalls": 0,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one durable parent with eight verified direction receipts",
+        "eight separate single-subject MP4 files"
+      ],
+      "preconditions": [
+        "all eight published poseViews present and current for the selected pose/type",
+        "same canonical lineage and visual context across the bundle",
+        "eight one-cycle directional MP4 presets ready"
+      ],
+      "provides": [
+        "npc.animation.eight-direction-bundle"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation-batch",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.npc-animation-request.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "New animation requests use referenceType=pixel exclusively. The UI and intake fix pixel as the only reference type; portrait is rejected for new animation generation/regeneration/batch requests, never silently coerced. Use the formally published pixel poseViews image for the same NPC, posePreset and direction, with current canonical pixel lineage and exact pinned image hash. Missing, stale or wrong-type pixel poseViews block before Wan execution; no portrait fallback, no implicit still-image generation and no front-image substitution. Preserve all existing portrait images, video results and already accepted requests; historical resume keeps the original pinned contract rather than rewriting its reference type. Motion preset IDs come from the PDS dynamic catalog, with pose compatibility and direction hashes verified by the worker. run and sword-attack are examples, not a closed enum. This is an input-reference policy, not an instruction to generate new content.\n\nLegacy historical action only. Do not choose for a new request: use animation.generate-from-pose or animation.regenerate-from-pose. Existing recorded executions may resume with their pinned contract. Only use this direct-video action when NOT (referenceType=pixel and direction is n/ne/nw). For those rear pixel cases choose animation.regenerate-rear instead, which has an image-then-postprocess-then-video dependency. Regenerate exactly one already produced direction, preserving the other seven directional slots and all portrait assets. This is distinct from default eight-direction generation and eight-up experiments. Request type npc.animation.regenerate-one, schema ngs.npc-animation-regeneration.v1, single direction only; direction=all is invalid. idle maps to run, combat to sword-attack. User request contains no seed. At formal acceptance the service allocates and persists a CSPRNG uint32 seed, excluding locally recorded previously used seeds for the same project/NPC/pose/preset/direction. New requests receive a new noncolliding seed; same idempotency-key retry or resume retains the stored seed and does not allocate another one. Original user input hash is separate from execution body including server seed. Collect seeds from the existing local intake ledger: explicit single-request seeds, requestId-derived single-request seeds, and existing eight-direction child seeds before allocation, and enforce target-seed uniqueness transactionally. This collision protection covers the local intake ledger, not unknown external jobs or deleted history. Laya uses this registered action, not a hardcoded bypass. Worker reads only current visual master4keys, identity/common art and verified chosen pose image; motion and equipment come from the matching directional preset. Static pose prose/world/history are excluded. One video model call produces one result, independent of the Laya selection call. Durable output/receipt recovery prevents duplicate model invocation after a completed generation. Verify current source/reference and CAS-update only the chosen directional slot through PDS/Filex; stale source or unknown outcome blocks instead of overwriting or blindly reexecuting. NGS manual refresh; no Space deployment. User requested this capability only after both eight-direction parent jobs completed. Registration and selection verification do not authorize unrequested extra generation.",
+      "generationKind": "candidate",
+      "id": "animation.regenerate-one",
+      "inputs": [
+        "schema ngs.npc-animation-regeneration.v1",
+        "projectId=binari",
+        "npcId",
+        "posePreset",
+        "presetId",
+        "one direction n/ne/e/se/s/sw/w/nw",
+        "referenceType=pixel|portrait",
+        "intent"
+      ],
+      "modelCalls": 1,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one regenerated directional MP4",
+        "verified target-slot publication receipt"
+      ],
+      "preconditions": [
+        "selected existing directional slot",
+        "verified selected pose reference",
+        "matching motion preset"
+      ],
+      "provides": [
+        "npc.animation.regenerated-direction"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "New animation requests use referenceType=pixel exclusively. The UI and intake fix pixel as the only reference type; portrait is rejected for new animation generation/regeneration/batch requests, never silently coerced. Use the formally published pixel poseViews image for the same NPC, posePreset and direction, with current canonical pixel lineage and exact pinned image hash. Missing, stale or wrong-type pixel poseViews block before Wan execution; no portrait fallback, no implicit still-image generation and no front-image substitution. Preserve all existing portrait images, video results and already accepted requests; historical resume keeps the original pinned contract rather than rewriting its reference type. Motion preset IDs come from the PDS dynamic catalog, with pose compatibility and direction hashes verified by the worker. run and sword-attack are examples, not a closed enum. This is an input-reference policy, not an instruction to generate new content.\n\nLegacy historical action only. Do not choose for a new request: use animation.generate-from-pose or animation.regenerate-from-pose. Existing recorded executions may resume with their pinned contract. For direction n/ne/nw with referenceType=pixel only. The worker reads the verified canonical pose pixel reference and current visual planning through PDS, generates one direction-specific slightly-SD rear appearance image, postprocesses that generated source to 384px/32-color pixel reference, and only then invokes Wan video generation with the matching one-cycle directional MP4. This is a strict dependency chain: rear-source-image generation (one image model call) -> pixel postprocess (zero model calls) -> Wan (one video model call); modelCalls=2 excludes separate Laya selection. Do not transform the front pixel by mirroring or merely changing prompt text. The derived reference is a separate request artifact: preserve canonical portraitSets and all unrelated animation directions. Persist original source asset/hash, derived image/pixel asset/hash and actual video reference in trace and PDS/Filex publication; source lineage must validate. A failed or missing prerequisite blocks downstream video generation, never silently fall back to the front reference. Request schema and short user intent remain unchanged; users need not supply full prompts or internal reference paths. Generation and publication are not proof of correct rear-facing clothes, weapon continuity, brightness or seamless looping: inspect actual outputs. Generate exactly one single-cycle MP4 for a single NPC pose/preset/direction/referenceType. Structured posePreset combat maps only to sword-attack, idle only to run. Direction n/ne/e/se/s/sw/w/nw; referenceType portrait or pixel. One requested direction, not all eight and not three variants. Requires the selected pose confirmed image, valid matching motion MP4, common art and selected visual master read through PDS. Worker prepares fresh Wan-Animate2 conditioning from actual image/motion references and composes its own prompt, never accepting full narrative as image prompt or inferring pose from prose. Sword attack 41 frames/24fps, run25 frames/24fps, cycleCount1. Local Wan execution and publication have been verified on one formal sample; this is not proof of every preset or direction. Missing references, unsupported combinations, low selection score, stale source or invalid media block rather than fallback. OPS owns persisted one-result execution and receipt-first publication; PDS writes Filex current slot, NGS refresh is manual. Preserve other poses and files. No character creation, canonical portrait replacement or Space deployment as a side effect. Animation PDS context uses workerId=npc-animation and exactly common.animation-rendering, unique.npc-identity, unique.npc-design. Rendering contains only styleBlock, lineHierarchy, palettePolicy and surfaceDetail; design contains only common visual art. Static pose body, world fields, narrative and history are excluded. posePreset binds actual image/motion and verifies role/hash in trace, not static pose prose in the prompt. Structured preset equipmentPolicy: run none/sheathed/book excluded; sword-attack one sword/drawn/book excluded. Motion and equipment state come from this preset policy, not image-generation pose instructions. Pixel reference requires at least 384 pixels from formal native-SD reprocessing; never upscale an old128 final. Motion-safe framing is down-only: run maxHeight0.72/maxWidth0.60, sword maxHeight0.60/maxWidth0.60. Optional seed is uint32 for controlled comparisons. Final-frame extraction and seamless looping are not yet guaranteed. This is the explicit single-direction child/legacy operation only. The normal pose/action generation request now uses direction=all and npc.animation.generate-eight-directions, not this action directly. Do not replace an all-direction request with one direction.",
+      "generationKind": "candidate",
+      "id": "animation.generate-rear",
+      "inputs": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent",
+        "optional uint32 seed"
+      ],
+      "modelCalls": 2,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one single-cycle MP4",
+        "verified Filex animation slot receipt",
+        "derived rear appearance reference and source lineage trace"
+      ],
+      "preconditions": [
+        "selected.pose.reference-image",
+        "selected.preset.direction.motion-mp4",
+        "current.common-art-and-selected-visual-master",
+        "canonical native pixel reference at least384",
+        "rear image generation capability available"
+      ],
+      "provides": [
+        "npc.animation.mp4"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "New animation requests use referenceType=pixel exclusively. The UI and intake fix pixel as the only reference type; portrait is rejected for new animation generation/regeneration/batch requests, never silently coerced. Use the formally published pixel poseViews image for the same NPC, posePreset and direction, with current canonical pixel lineage and exact pinned image hash. Missing, stale or wrong-type pixel poseViews block before Wan execution; no portrait fallback, no implicit still-image generation and no front-image substitution. Preserve all existing portrait images, video results and already accepted requests; historical resume keeps the original pinned contract rather than rewriting its reference type. Motion preset IDs come from the PDS dynamic catalog, with pose compatibility and direction hashes verified by the worker. run and sword-attack are examples, not a closed enum. This is an input-reference policy, not an instruction to generate new content.\n\nLegacy historical action only. Do not choose for a new request: use animation.generate-from-pose or animation.regenerate-from-pose. Existing recorded executions may resume with their pinned contract. For direction n/ne/nw with referenceType=pixel only. The worker reads the verified canonical pose pixel reference and current visual planning through PDS, generates one direction-specific slightly-SD rear appearance image, postprocesses that generated source to 384px/32-color pixel reference, and only then invokes Wan video generation with the matching one-cycle directional MP4. This is a strict dependency chain: rear-source-image generation (one image model call) -> pixel postprocess (zero model calls) -> Wan (one video model call); modelCalls=2 excludes separate Laya selection. Do not transform the front pixel by mirroring or merely changing prompt text. The derived reference is a separate request artifact: preserve canonical portraitSets and all unrelated animation directions. Persist original source asset/hash, derived image/pixel asset/hash and actual video reference in trace and PDS/Filex publication; source lineage must validate. A failed or missing prerequisite blocks downstream video generation, never silently fall back to the front reference. Request schema and short user intent remain unchanged; users need not supply full prompts or internal reference paths. Generation and publication are not proof of correct rear-facing clothes, weapon continuity, brightness or seamless looping: inspect actual outputs. Regenerate exactly one already produced direction, preserving the other seven directional slots and all portrait assets. This is distinct from default eight-direction generation and eight-up experiments. Request type npc.animation.regenerate-one, schema ngs.npc-animation-regeneration.v1, single direction only; direction=all is invalid. idle maps to run, combat to sword-attack. User request contains no seed. At formal acceptance the service allocates and persists a CSPRNG uint32 seed, excluding locally recorded previously used seeds for the same project/NPC/pose/preset/direction. New requests receive a new noncolliding seed; same idempotency-key retry or resume retains the stored seed and does not allocate another one. Original user input hash is separate from execution body including server seed. Collect seeds from the existing local intake ledger: explicit single-request seeds, requestId-derived single-request seeds, and existing eight-direction child seeds before allocation, and enforce target-seed uniqueness transactionally. This collision protection covers the local intake ledger, not unknown external jobs or deleted history. Laya uses this registered action, not a hardcoded bypass. Worker reads only current visual master4keys, identity/common art and verified chosen pose image; motion and equipment come from the matching directional preset. Static pose prose/world/history are excluded. The final Wan stage produces one result, independent of the Laya selection call. Durable output/receipt recovery prevents duplicate model invocation after a completed generation. Verify current source/reference and CAS-update only the chosen directional slot through PDS/Filex; stale source or unknown outcome blocks instead of overwriting or blindly reexecuting. NGS manual refresh; no Space deployment. User requested this capability only after both eight-direction parent jobs completed. Registration and selection verification do not authorize unrequested extra generation.",
+      "generationKind": "candidate",
+      "id": "animation.regenerate-rear",
+      "inputs": [
+        "schema ngs.npc-animation-regeneration.v1",
+        "projectId=binari",
+        "npcId",
+        "posePreset",
+        "presetId",
+        "one rear direction n/ne/nw",
+        "referenceType=pixel",
+        "intent"
+      ],
+      "modelCalls": 2,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one regenerated directional MP4",
+        "verified target-slot publication receipt",
+        "derived rear appearance reference and source lineage trace"
+      ],
+      "preconditions": [
+        "selected existing directional slot",
+        "verified selected pose reference",
+        "matching motion preset",
+        "canonical native pixel reference at least384",
+        "rear image generation capability available"
+      ],
+      "provides": [
+        "npc.animation.regenerated-direction"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation"
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "Expand an existing NPC pose image into eight separate rotated still images, NOT eight videos or eight alternative candidates. This is the portrait page central canonical pose plus surrounding compass image expansion. requestType npc.pose.expand-eight-directions and schema ngs.npc-pose-expansion-request.v1; structured posePreset and referenceType select the existing center image. User intent remains short and supplementary; never infer another pose from prose or inject detailed prompts into request text. Pin and verify the canonical center asset/hash and required visual planning read through PDS. Generate north first as the common rear appearance anchor, then generate the other seven directions against pinned common identity/rear appearance where applicable so unseen back clothes are not independently reinvented per direction. Eight sequential image-model calls yield one bundle (candidateCount1/modelCalls8); Laya selection is separate, deterministic pixel postprocess adds zero model calls. referenceType=pixel means generate a new slightly-SD image per direction then formal 384x384/32-color pixel postprocessing; never simply mirror or upscale the old front pixel. portrait uses matching portrait appearance. Preserve pose, clothing, hair, equipment, proportions and style across n/ne/e/se/s/sw/w/nw; back views must not copy face/front lapels onto the back. Unseen rear details are inferred and need visual review, not claimed ground truth. Persist each direction's source/derived hash, prompt, actual references, model execution and receipt. Checkpoint each completed direction and reuse it on the same request resume; unknown execution outcome must not blindly regenerate. A failed or missing prerequisite blocks subsequent work. Publish direction assets separately under poseViews[posePreset][referenceType][direction] through authorized PDS/Filex; preserve the canonical center portraitSets, other poses/types and existing animations. Reject stale canonical lineage at publication. These images are reusable assets for future matching-direction animation inputs, but this request itself does not generate or regenerate any video. Registration, Laya selection, image generation, Filex publication and NGS manual refresh are separate completion checks. No automatic comparison alternatives, NPC creation, canonical replacement, unrelated mutations, or Space deployment. Technical output-validation retry policy: the initial eight directions need at most eight image calls, one per direction. Only rejected output validation (for example non-transparent corner) may retry that failed direction with a fresh model claim, maximum three attempts per direction, up to twenty-four image calls total including at most sixteen technical retries. Retain rejected raw bytes, hash and provider proof; do not publish failed output or bypass validation. Resume preserves completed directions and the canonical center. These are bounded technical retries, not alternative candidates or three-way selection. Report actual calls separately from initial and retry limits.",
+      "generationKind": "candidate",
+      "id": "pose.expand-eight-directions",
+      "inputs": [
+        "schema ngs.npc-pose-expansion-request.v1",
+        "projectId",
+        "npcId",
+        "posePreset=representative|combat|idle",
+        "referenceType=portrait|pixel",
+        "intent"
+      ],
+      "modelCalls": 8,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one durable eight-direction still-image bundle",
+        "verified direction assets under poseViews with canonical source lineage",
+        "per-direction execution and publication evidence"
+      ],
+      "preconditions": [
+        "selected canonical pose image present and verified",
+        "current visual planning available through PDS",
+        "image-generation and pixel-postprocess capability ready"
+      ],
+      "provides": [
+        "npc.pose.eight-direction-images"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-pose-expansion",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.npc-pose-expansion-request.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string"
+        }
+      }
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "New animation requests use referenceType=pixel exclusively. The UI and intake fix pixel as the only reference type; portrait is rejected for new animation generation/regeneration/batch requests, never silently coerced. Use the formally published pixel poseViews image for the same NPC, posePreset and direction, with current canonical pixel lineage and exact pinned image hash. Missing, stale or wrong-type pixel poseViews block before Wan execution; no portrait fallback, no implicit still-image generation and no front-image substitution. Preserve all existing portrait images, video results and already accepted requests; historical resume keeps the original pinned contract rather than rewriting its reference type. Motion preset IDs come from the PDS dynamic catalog, with pose compatibility and direction hashes verified by the worker. run and sword-attack are examples, not a closed enum. This is an input-reference policy, not an instruction to generate new content.\n\nUse the previously generated and formally published poseViews image for exactly the requested posePreset, fixed pixel reference type and direction. This is video generation from a reusable eight-way still-image asset, not creation of new stills or candidate alternatives. Read canonical identity/visual planning and current directional pose-view lineage through PDS. The selected poseView sourceAssetId must match the current canonical pose image; pin its image hash, pose-view hash, NPC incarnation and visual context before execution. Missing, stale or mismatching direction data fails before the video model; never fall back silently to the front portrait and never generate a replacement rear appearance as a side effect. The actual Wan reference bytes and hash must be those of the matching stored direction image, paired with the matching one-cycle motion MP4. One video-model call, no image-model call; Laya selection is separate. Request remains short structured pose/type/preset/direction plus intent, with no internal asset path or detailed prompt injection. Persist source hashes, actual prompt and references, execution state and publication receipt. Resume the same request with its original pinned seed and output, without duplicate sampling. New regeneration seeds are internally random and collision-checked for that target. Preserve canonical portraits, poseViews, other animation directions and unrelated NPCs. Publication and successful loop playback do not establish correct facing, clothing, sword continuity, brightness stability or seamless looping; inspect the actual video. Generate the selected direction through the formal animation request. Registered motion preset IDs are dynamic PDS catalog assets, not a hardcoded two-ID enum. run and sword-attack are existing examples, not the only allowed IDs. The executor validates catalog existence, matching posePreset, all required direction files and pinned hashes before generation. A newly registered valid preset uses this same workflow without a new adapter; unknown/missing IDs fail before model execution. Registration itself is the separate motion-preset.register action.",
+      "generationKind": "candidate",
+      "id": "animation.generate-from-pose",
+      "inputs": [
+        "schema ngs.npc-animation-request.v1",
+        "projectId",
+        "npcId",
+        "posePreset=combat|idle",
+        "presetId=sword-attack|run",
+        "direction=n|ne|e|se|s|sw|w|nw",
+        "referenceType=pixel|portrait",
+        "intent"
+      ],
+      "modelCalls": 1,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one video in the specified animation direction slot",
+        "actual stored poseView reference hash and publication lineage evidence"
+      ],
+      "preconditions": [
+        "matching formally published direction poseView present and current",
+        "canonical pose lineage and current visual context verified",
+        "matching one-cycle motion preset available",
+        "video execution capability ready"
+      ],
+      "provides": [
+        "npc.animation.mp4"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.npc-animation-request.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "New animation requests use referenceType=pixel exclusively. The UI and intake fix pixel as the only reference type; portrait is rejected for new animation generation/regeneration/batch requests, never silently coerced. Use the formally published pixel poseViews image for the same NPC, posePreset and direction, with current canonical pixel lineage and exact pinned image hash. Missing, stale or wrong-type pixel poseViews block before Wan execution; no portrait fallback, no implicit still-image generation and no front-image substitution. Preserve all existing portrait images, video results and already accepted requests; historical resume keeps the original pinned contract rather than rewriting its reference type. Motion preset IDs come from the PDS dynamic catalog, with pose compatibility and direction hashes verified by the worker. run and sword-attack are examples, not a closed enum. This is an input-reference policy, not an instruction to generate new content.\n\nUse the previously generated and formally published poseViews image for exactly the requested posePreset, fixed pixel reference type and direction. This is video generation from a reusable eight-way still-image asset, not creation of new stills or candidate alternatives. Read canonical identity/visual planning and current directional pose-view lineage through PDS. The selected poseView sourceAssetId must match the current canonical pose image; pin its image hash, pose-view hash, NPC incarnation and visual context before execution. Missing, stale or mismatching direction data fails before the video model; never fall back silently to the front portrait and never generate a replacement rear appearance as a side effect. The actual Wan reference bytes and hash must be those of the matching stored direction image, paired with the matching one-cycle motion MP4. One video-model call, no image-model call; Laya selection is separate. Request remains short structured pose/type/preset/direction plus intent, with no internal asset path or detailed prompt injection. Persist source hashes, actual prompt and references, execution state and publication receipt. Resume the same request with its original pinned seed and output, without duplicate sampling. New regeneration seeds are internally random and collision-checked for that target. Preserve canonical portraits, poseViews, other animation directions and unrelated NPCs. Publication and successful loop playback do not establish correct facing, clothing, sword continuity, brightness stability or seamless looping; inspect the actual video. Regenerate only the existing selected direction through the formal regeneration request. Registered motion preset IDs are dynamic PDS catalog assets, not a hardcoded two-ID enum. run and sword-attack are existing examples, not the only allowed IDs. The executor validates catalog existence, matching posePreset, all required direction files and pinned hashes before generation. A newly registered valid preset uses this same workflow without a new adapter; unknown/missing IDs fail before model execution. Registration itself is the separate motion-preset.register action.",
+      "generationKind": "candidate",
+      "id": "animation.regenerate-from-pose",
+      "inputs": [
+        "schema ngs.npc-animation-regeneration.v1",
+        "projectId",
+        "npcId",
+        "posePreset=combat|idle",
+        "presetId=sword-attack|run",
+        "direction=n|ne|e|se|s|sw|w|nw",
+        "referenceType=pixel|portrait",
+        "intent"
+      ],
+      "modelCalls": 1,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one video in the specified animation direction slot",
+        "actual stored poseView reference hash and publication lineage evidence"
+      ],
+      "preconditions": [
+        "matching formally published direction poseView present and current",
+        "canonical pose lineage and current visual context verified",
+        "matching one-cycle motion preset available",
+        "video execution capability ready"
+      ],
+      "provides": [
+        "npc.animation.regenerated-direction"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "direction",
+        "referenceType",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.npc-animation-regeneration.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "Process EXISTING eight-direction animation videos into one complete frame-image set. This is NOT video generation, pose expansion, or sampling a subset. One request selects one NPC posePreset and motion presetId, reads the eight existing matching animationSlots through PDS, pins all video hashes and lineage, and extracts EVERY decoded frame in temporal order. Run the supported background-removal/segmentation pipeline; record alpha-model inference separately, because modelCalls=0 means no generative image/video model calls, not that segmentation uses no model. Preserve all raw frames and all processed pixel PNGs. Measure foreground min/max bounds across every frame of all eight directions, derive a single shared union crop/canvas with ten percent safety buffer on each side, and use the same transformation, scale, alignment and shared maximum-32-color palette for the whole set. Never resize or recenter each frame independently, which would introduce jitter or change relative body size. Preserve transparent background, hair, clothing, limbs and weapon; reject empty or invalid masks rather than silently publish damaged results. Maintain contiguous indices 0..N-1, original timing and source count for every direction, including first and last frames. NGS percentage output such as 80 percent is a later non-destructive evenly distributed subset of stored images, always including first and last; percentage is not a worker parameter and never reduces the preserved source set. Read only required source videos and processing configuration, not all NPC planning or a new generative prompt. Persist durable parent/stage/checkpoint state, source and output hashes, geometry, frame counts, mask/processing settings, receipts and failures. Resume the same request using verified completed outputs without repeated inference/extraction where checkpoints are valid. Missing directions, changed sources, insufficient capability, ambiguous execution or failed publication block safely. Publish animationFrameSets[posePreset+'/'+presetId] through PDS/Filex with source lineage and common-canvas metadata; preserve original videos, canonical portraits, poseViews, unrelated frame sets and other NPCs. Filex publication and NGS manual replica refresh are separately verified. No three alternatives, new animation sampling, unrelated mutation, or Space deployment. Optional structured scalePreset is full or half; omission remains backward-compatible full. A half request reprocesses the existing complete full frame set, NOT a new video generation or a new background-segmentation run. Require explicit sourceFrameSet={slotKey,requestId,inputHash,contentHash} for half. This pins the user-selected delivered full set, its publication receipt, its own original eight video hashes, cached RGBA/alpha hashes and segmentation model key. Never substitute the latest videos or a different full set. Reject any change to the pinned full-set identity/content. Current videos may differ: processing the selected older full set remains allowed, but record staleDirections and expose that distinction in NGS. Missing, stale or unverifiable full-set alpha cache must block, not silently call the segmentation model again. Resize the verified RGBA intermediate to 0.5 scale first, then requantize using the shared maximum-32-color palette across all directions and frames. Preserve every frame and shared canvas/alignment plus buffer. Publish the half set to a separate target, retaining the full set and original videos. This is spatial resolution, not the NGS frame-output percentage: 80 percent remains non-destructive temporal selection with first and last included. For half there are zero generative calls AND zero new segmentation-model calls; record deterministic reprocessing and verified cache lineage separately.",
+      "generationKind": "candidate",
+      "id": "animation.extract-frames",
+      "inputs": [
+        "schema ngs.npc-animation-frames-request.v1",
+        "projectId",
+        "npcId",
+        "posePreset=combat|idle",
+        "presetId=sword-attack|run",
+        "intent",
+        "optional scalePreset=full|half (omitted means full)",
+        "sourceFrameSet={slotKey,requestId,inputHash,contentHash} required for half"
+      ],
+      "modelCalls": 0,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one complete eight-direction full-frame image set",
+        "all raw and processed frames with contiguous indices and source timing",
+        "shared canvas/transform/palette and source/output hashes",
+        "PDS/Filex publication receipt",
+        "separate full/half target with preserved full frame set"
+      ],
+      "preconditions": [
+        "eight existing matching animation videos verified and pinned",
+        "background segmentation and pixel-processing capabilities ready",
+        "common canvas derived across all frames and directions",
+        "half requires pinned selected published full set and its own original source/model/hash-verified RGBA cache; current-video differences reported as staleDirections, no substitution or segmentation fallback"
+      ],
+      "provides": [
+        "npc.animation.full-frame-images"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "presetId",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-animation-frames",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.npc-animation-frames-request.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "Register exactly one new motion preset asset from eight owner-uploaded directional MP4 files. This is existing-media asset registration, NOT character animation generation, image generation, or eight candidate alternatives. Request schema ngs.motion-preset-registration.v1 contains projectId, presetId, label, posePreset combat or idle, short motion intent, cycleConfirmed=true and eight validated file metadata rows n/ne/e/se/s/sw/w/nw. Binary MP4 bodies stay in the request executor and are never sent to Laya. Each MP4 must contain one complete action cycle confirmed by the owner; container/frame inspection cannot prove semantic facing direction or a single cycle. Worker probes all original files, verifies hashes, supported frame/fps/size limits and equal timing/dimensions, and rejects missing, duplicate, malformed or inconsistent files before publication. Current supported frame count is 5..121 with 4n+1, fps4..60, dimensions64..2048, duration<=10sec and total uploaded bytes<=40MiB; no silent truncation/upscaling/reencoding. Preserve files exactly. Publish one canonical preset with all eight original assets via PDS/Filex, create-only with expectedHash=null; never replace a pre-existing preset implicitly. Durable parent and idempotency key preserve original file hashes and completed selection on resume; no additional image or video model calls. A completed registration makes the new ID available in PDS catalog for existing animation generate-eight-directions / generate-from-pose / regenerate-from-pose workflows. Do not run those workflows during registration. Preserve all existing NPCs, poses, animations and backups. No Space deployment. Fixed-source template materialization may instead retain cycleConfirmed=false with the exact pinned templateProof validated by admission (Walk_Loop, CC0 source hash, renderer hash, 0..32 single source range, 33 frames at 24 fps). This is not owner visual confirmation; visual quality remains requires-review-after-render. Uploaded media still strictly requires cycleConfirmed=true. Existing generated media is reused on same-request resume.",
+      "generationKind": "structure",
+      "id": "motion-preset.register",
+      "inputs": [
+        "owner registration intent",
+        "presetId and label",
+        "structured posePreset",
+        "eight hash-validated MP4 metadata rows",
+        "explicit owner one-cycle confirmation"
+      ],
+      "modelCalls": 0,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one registered eight-direction motion-preset asset",
+        "verified PDS/Filex publication receipt",
+        "media-probe evidence separated from owner semantic confirmation"
+      ],
+      "provides": [
+        "motion-preset.registered"
+      ],
+      "requiredUserFields": [
+        "presetId",
+        "label",
+        "posePreset",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "motion-preset-registration",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.motion-preset-registration.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    {
+      "candidateCount": 1,
+      "dependsOn": [],
+      "description": "Regenerate exactly one EXISTING directional still-image poseView, NOT an animation video, the center portrait, a new missing slot, all eight directions, or candidate alternatives. RequestType npc.pose.regenerate-one, schema ngs.npc-pose-regeneration-request.v1. Exact structured inputs projectId=binari,npcId,posePreset representative/combat/idle,referenceType pixel/portrait,direction n/ne/e/se/s/sw/w/nw,intent. New schema requires exactly one direction; legacy eight-direction expansion has no direction field and remains pose.expand-eight-directions. Use the same npc-pose-expansion implementation with one durable child step. Read canonical center of the requested type, identity and relevant visual planning through PDS; do not accept hidden prompt overrides or extra chat context. Pin current center hash/incarnation, target slot hash and planning; reject changed target/center/planning before model or publication. For NE/NW, require the existing N poseView with current matching center lineage, pin/read its exact image as an additional back-consistency reference; never regenerate N implicitly. Generate one transparent full-body rotation image from center and optional north reference. Pixel output uses separate formal384px pixel postprocess. Nominal image modelCalls1, no video model calls; bounded alpha-output technical retries require explicit same-request resume, maximum2 extra, and are recorded separately. Failed output/proof/publication leaves all prior normal files unchanged. Recover persisted claim/result/receipt on same parent rather than duplicate model execution. PDS/Filex CAS updates only the requested pose/type/direction, preserves the other seven images and every canonical portrait; manual NGS refresh displays the result. A new invocation uses a distinct provider claim; same-request resume retains its original claim and input. Laya confidence gate and actor ownership must pass. Do not silently substitute a different direction/type, generate a new missing slot, or generate animation. Existing videos are preserved and may become stale against the changed pose lineage; they require a separate authorized video request. Space deployment prohibited.",
+      "generationKind": "candidate",
+      "id": "pose.regenerate-one",
+      "inputs": [
+        "short regeneration intent",
+        "NPC identity",
+        "structured posePreset/referenceType/direction",
+        "existing target slot",
+        "current canonical center",
+        "current N reference for NE/NW",
+        "relevant PDS visual planning"
+      ],
+      "modelCalls": 1,
+      "outputPolicy": {
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 1,
+        "kind": "single-result",
+        "selection": "none"
+      },
+      "outputs": [
+        "one regenerated directional pose image",
+        "verified target-slot Filex publication receipt"
+      ],
+      "preconditions": [
+        "selected canonical pose image present and verified",
+        "current visual planning available through PDS",
+        "image-generation and pixel-postprocess capability ready"
+      ],
+      "provides": [
+        "npc.pose.direction.regenerated"
+      ],
+      "requiredUserFields": [
+        "npcId",
+        "posePreset",
+        "referenceType",
+        "direction",
+        "intent"
+      ],
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-pose-expansion",
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.npc-pose-regeneration-request.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 3
+        }
+      }
+    },
+    {
+      "candidateCount": 0,
+      "dependsOn": [],
+      "description": "Restore exactly one deleted NPC from a verified npc-owned whole-character backup. Validate authenticated deletion receipt, backup manifest hash, absent target and exact current source. Preserve all other NPCs and backups; restore under a fresh generation. Never treat legacy archive restore or arbitrary filesystem paths as this operation. No image/model generation. NPC-owned current-slot storage contract: workers create intermediate output only in their admitted private scratch workspace; all completed assets publish through authenticated local PDS to Filex. Other workers obtain pinned inputs by downloading through PDS, never by reading predecessor local paths. NPC-specific portraits, pixel source originals, directional pose images, animation videos and full/raw/alpha/processed frame assets belong to that NPC stable logical slots with content hashes as integrity metadata. A successful authorized regeneration atomically replaces only its specified current slot; do not create unrequested historical copies. Shared registered motion presets remain shared. Generation/lease guards reject stale or deleted NPC work. Preserve existing backups and other NPCs; no arbitrary filesystem mutation or bypass. Only npc-owned-backup.v1 with verified same-owner files is eligible. Legacy archive restore and pre-migration snapshots containing global assets/imports are not eligible. Reject existing targets and stale revision/hash; validate via PDS. A new restored generation retires old queued requests. Same parent retry reuses receipt rather than restoring twice. NGS refresh remains explicit.",
+      "generationKind": "deterministic",
+      "id": "restore-backup",
+      "inputs": [
+        "explicit npcId and owned backupId",
+        "authenticated deletionRequestId and backupManifestHash",
+        "expectedRevision and expectedDocumentHash",
+        "owner authorization"
+      ],
+      "modelCalls": 0,
+      "outputPolicy": {
+        "apply": "authorized-restore-with-backup-and-cas",
+        "authorization": "same-authorized-actor-target-and-action-or-fail",
+        "count": 0,
+        "kind": "deterministic-operation",
+        "selection": "none"
+      },
+      "outputs": [
+        "verified restoration receipt",
+        "fresh generation and canonical current-slot publication"
+      ],
+      "provides": [
+        "npc.restoration-receipt"
+      ],
+      "requestRequirements": {
+        "backupId": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "backupManifestHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "deletionRequestId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedDocumentHash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "expectedRevision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "intent": {
+          "minLength": 5,
+          "type": "string"
+        },
+        "npcId": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "type": "string"
+        },
+        "operation": {
+          "const": "restore-backup",
+          "type": "string"
+        },
+        "projectId": {
+          "const": "binari",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": "npc-restore-backup.v1",
+          "type": "string"
+        }
+      },
+      "requires": [],
+      "variations": [],
+      "workerId": "npc-lifecycle-restore-backup"
+    },
+    {
+      "id": "field-modify",
+      "workerId": "npc-field-edit",
+      "candidateCount": 1,
+      "modelCalls": 0,
+      "dependsOn": [],
+      "description": "Apply one explicit user-authored NPC field correction without inference or model generation. Validate actor/target, source revision, complete character hash and incarnation; change only the admitted field and preserve all unrelated data. Publish through PDS/Filex and verify readback. Same requestId must reuse the prior receipt, never reapply.",
+      "inputs": [
+        "explicit field/value and original user correction",
+        "current NPC revision, character hash and incarnation",
+        "authenticated actor and target authority"
+      ],
+      "outputs": [
+        "verified field correction and canonical publication receipt"
+      ],
+      "requires": [],
+      "provides": [
+        "npc.field-correction-receipt"
+      ],
+      "generationKind": "deterministic",
+      "variations": [],
+      "requiredUserFields": [
+        "requestId",
+        "npcId",
+        "field",
+        "value",
+        "incarnationId",
+        "userEvidence"
+      ],
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.npc-field-edit-request.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        },
+        "baseRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expectedCharacterHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "outputPolicy": {
+        "kind": "single-result",
+        "count": 1,
+        "selection": "none",
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail"
+      }
+    }
+  ],
+  "requestTypes": {
+    "concept.modify": {
+      "eligibleStageIds": [
+        "concept.modify"
+      ],
+      "stageIds": [
+        "concept.modify"
+      ]
+    },
+    "motion-preset.register": {
+      "eligibleStageIds": [
+        "motion-preset.register"
+      ],
+      "stageIds": [
+        "motion-preset.register"
+      ]
+    },
+    "npc.animation.experiment": {
+      "eligibleStageIds": [
+        "animation.experiment"
+      ],
+      "stageIds": [
+        "animation.experiment"
+      ]
+    },
+    "npc.animation.frames.generate": {
+      "eligibleStageIds": [
+        "animation.extract-frames"
+      ],
+      "stageIds": [
+        "animation.extract-frames"
+      ]
+    },
+    "npc.animation.generate": {
+      "eligibleStageIds": [
+        "animation.generate-from-pose"
+      ],
+      "stageIds": [
+        "animation.generate-from-pose"
+      ]
+    },
+    "npc.animation.generate-eight-directions": {
+      "eligibleStageIds": [
+        "animation.generate-eight-directions"
+      ],
+      "stageIds": [
+        "animation.generate-eight-directions"
+      ]
+    },
+    "npc.animation.regenerate-one": {
+      "eligibleStageIds": [
+        "animation.regenerate-from-pose"
+      ],
+      "stageIds": [
+        "animation.regenerate-from-pose"
+      ]
+    },
+    "npc.pose.expand-eight-directions": {
+      "eligibleStageIds": [
+        "pose.expand-eight-directions"
+      ],
+      "stageIds": [
+        "pose.expand-eight-directions"
+      ]
+    },
+    "npc.pose.regenerate-one": {
+      "eligibleStageIds": [
+        "pose.regenerate-one"
+      ],
+      "stageIds": [
+        "pose.regenerate-one"
+      ]
+    },
+    "npc.reprocess-pixel": {
+      "eligibleStageIds": [
+        "portrait"
+      ],
+      "stageIds": [
+        "portrait"
+      ],
+      "requestContract": {
+        "kind": "portrait",
+        "pixelOnly": true,
+        "reprocess": true
+      }
+    },
+    "npc.restore-backup": {
+      "eligibleStageIds": [
+        "restore-backup"
+      ],
+      "stageIds": [
+        "restore-backup"
+      ]
+    },
+    "npc.create-complete-portrait-pairs": {
+      "stageIds": [
+        "skeleton",
+        "overview",
+        "art",
+        "planning.representative",
+        "planning.combat",
+        "planning.idle",
+        "portrait.representative",
+        "portrait.combat",
+        "portrait.idle"
+      ]
+    },
+    "npc.create-overview": {
+      "stageIds": [
+        "overview"
+      ],
+      "requestContract": {
+        "kind": "category",
+        "mode": "modify"
+      }
+    },
+    "npc.add-category": {
+      "stageIds": [
+        "category-add"
+      ],
+      "requestContract": {
+        "kind": "category",
+        "mode": "add"
+      }
+    },
+    "npc.modify-category": {
+      "stageIds": [
+        "category-modify"
+      ],
+      "requestContract": {
+        "kind": "category",
+        "mode": "modify"
+      }
+    },
+    "npc.delete-category": {
+      "stageIds": [
+        "category-delete"
+      ],
+      "requestContract": {
+        "kind": "category-delete"
+      }
+    },
+    "npc.create-art": {
+      "stageIds": [
+        "art"
+      ],
+      "requestContract": {
+        "kind": "category",
+        "mode": "modify"
+      }
+    },
+    "npc.create-portrait": {
+      "stageIds": [
+        "portrait"
+      ],
+      "requestContract": {
+        "kind": "portrait",
+        "pixelOnly": false,
+        "reprocess": false
+      }
+    },
+    "npc.create-structure": {
+      "stageIds": [
+        "skeleton"
+      ]
+    },
+    "npc.regenerate-pixel": {
+      "stageIds": [
+        "portrait"
+      ],
+      "requestContract": {
+        "kind": "portrait",
+        "pixelOnly": true,
+        "reprocess": false
+      }
+    },
+    "npc.regenerate-portrait-set": {
+      "stageIds": [
+        "portrait-refresh.representative",
+        "portrait-refresh.combat",
+        "portrait-refresh.idle"
+      ],
+      "stageVariants": [
+        {
+          "when": {
+            "includeCombat": false
+          },
+          "stageIds": [
+            "portrait-refresh.representative",
+            "portrait-refresh.idle"
+          ]
+        }
+      ]
+    },
+    "npc.delete": {
+      "stageIds": [
+        "delete"
+      ]
+    },
+    "npc.field.modify": {
+      "stageIds": [
+        "field-modify"
+      ],
+      "eligibleStageIds": [
+        "field-modify"
+      ],
+      "requestContract": {
+        "kind": "npc-field-edit",
+        "allowedFields": [
+          "role"
+        ]
+      }
+    }
+  },
+  "schemaVersion": "ngs.worker-registry.v1",
+  "selectionPolicy": {
+    "candidateDuplicateRetryLimit": 0,
+    "executionContract": "worker-count.v1",
+    "minimumScore": 0.8,
+    "resultMode": "single-result-only",
+    "scoreBasis": "deterministic-registered-contract-not-probability"
+  },
+  "version": "ngs-workflows.v2"
+}

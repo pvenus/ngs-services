@@ -18,7 +18,6 @@ from .profile_model import TRAIT_GROUPS, validate_profile
 
 from .npc_detail import npc_detail, NpcDetailError
 from .combat_profile import combat_profile, encode_profile, etag_matches, CombatProfileError
-from .knowledge_catalog import KnowledgeError, KnowledgeStore
 
 ROOT = Path(__file__).resolve().parent
 SEED = ROOT / "seed.json"
@@ -61,9 +60,6 @@ ASSETS = {
     "/npcs.html": ("npcs.html", "text/html"),
     "/npcs.js": ("npcs.js", "text/javascript"),
     "/npcs.css": ("npcs.css", "text/css"),
-    "/knowledge.html": ("knowledge.html", "text/html"),
-    "/knowledge.js": ("knowledge.js", "text/javascript"),
-    "/knowledge.css": ("knowledge.css", "text/css"),
     "/assets/vinus-mark.png": ("assets/vinus-mark.png", "image/png"),
     "/assets/vinus-logo-original.png": ("assets/vinus-logo-original.png", "image/png"),
     "/docs/MasterConceptAuthoringGuide.md": ("docs/MasterConceptAuthoringGuide.md", "text/plain"),
@@ -154,7 +150,7 @@ NPC_TEXT_FIELDS = ("name", "kind", "role", "summary", "publicFace", "actualTruth
 NPC_TRAIT_GROUPS = TRAIT_GROUPS
 
 
-def validate_npcs(document: object) -> dict:
+def validate_npcs(document: object, asset_reader=None) -> dict:
     if not isinstance(document, dict) or document.get("schemaVersion") != 1 or document.get("projectId") != "ProjectBS" or document.get("actId") != "act01":
         raise ValueError("지원하지 않는 NPC 문서 형식입니다.")
     for key in ("masterRevision", "storyRevision"):
@@ -175,7 +171,7 @@ def validate_npcs(document: object) -> dict:
         for key in NPC_TEXT_FIELDS:
             if not isinstance(character.get(key), str) or len(character[key]) > 4000:
                 raise ValueError(f"{character['id']}의 {key} 항목을 확인하세요.")
-        if not character["name"].strip() or not character["role"].strip():
+        if not character["name"].strip() or (not character["role"].strip() and character.get("creationBasis",{}).get("profileState")!="uninitialized"):
             raise ValueError("NPC 이름과 서사 역할은 필수입니다.")
         chapters = character.get("chapters")
         if not isinstance(chapters, list) or len(chapters) > 5 or any(ch not in ("chapter01", "chapter02", "chapter03", "chapter04", "chapter05") for ch in chapters) or len(set(chapters)) != len(chapters):
@@ -193,7 +189,7 @@ def validate_npcs(document: object) -> dict:
         validate_profile(character)
         portraits = character.get("portraits")
         active = character.get("activePortraitId")
-        if not isinstance(portraits, list) or len(portraits) > 30:
+        if not isinstance(portraits, list):
             raise ValueError("포트레이트 목록을 확인하세요.")
         ids = set()
         for portrait in portraits:
@@ -202,11 +198,57 @@ def validate_npcs(document: object) -> dict:
             asset_id = portrait["assetId"]
             if not isinstance(asset_id, str) or not re.fullmatch(r"[0-9a-f]{64}\.(?:png|jpg|webp)", asset_id) or asset_id in ids:
                 raise ValueError("포트레이트 파일 ID를 확인하세요.")
-            if not (PORTRAIT_ROOT / asset_id).is_file():
+            if asset_reader is not None:
+                asset_reader(asset_id)
+            elif not (PORTRAIT_ROOT / asset_id).is_file():
                 raise ValueError("등록된 포트레이트 파일을 찾을 수 없습니다.")
             ids.add(asset_id)
             if any(not isinstance(portrait[key], str) or len(portrait[key]) > 300 for key in ("label", "sourceRef")) or not portrait["label"].strip():
                 raise ValueError("포트레이트 이름과 출처를 확인하세요.")
+        from project_data_service.npc_animations import validate_slots
+        validate_slots(character,asset_reader)
+        from project_data_service.npc_animation_experiments import validate_experiments
+        validate_experiments(character,asset_reader)
+        slots = character.get('portraitSets', {})
+        if not isinstance(slots, dict) or set(slots) - {'representative', 'combat', 'idle'}:
+            raise ValueError('NPC_PORTRAIT_SLOTS_INVALID')
+        for slot, pair in slots.items():
+            # A workflow-created representative or idle original need not have a pixel result.
+            # Combat and legacy paired results retain their full contract.
+            if slot in ('representative','idle') and isinstance(pair,dict) and set(pair)=={'portraitAssetId','requestId'}:
+                if (not isinstance(pair['portraitAssetId'],str) or not re.fullmatch(r'[a-f0-9]{64}\.png',pair['portraitAssetId'])
+                    or pair['portraitAssetId'] not in ids or (slot=='representative' and active!=pair['portraitAssetId'])
+                    or not isinstance(pair['requestId'],str) or not re.fullmatch(r'workflow\.task\.[a-f0-9]{64}',pair['requestId'])):
+                    raise ValueError('NPC_PORTRAIT_REPRESENTATIVE_INVALID')
+                continue
+            if not isinstance(pair, dict) or set(pair) - {'pixelProvenance', 'pixelSourceAssetId'} != {'portraitAssetId', 'pixelAssetId', 'referencePortraitAssetId', 'requestId'}:
+                raise ValueError('NPC_PORTRAIT_PAIR_INVALID')
+            if pair['portraitAssetId'] not in ids or pair['pixelAssetId'] not in ids or pair['portraitAssetId'] == pair['pixelAssetId']:
+                raise ValueError('NPC_PORTRAIT_PAIR_ASSETS_REQUIRED')
+            provenance=pair.get('pixelProvenance')
+            if provenance is not None:
+                if not isinstance(provenance,dict) or set(provenance)!={'pipeline','postprocess'} or not isinstance(provenance['pipeline'],dict) or not isinstance(provenance['postprocess'],dict):
+                    raise ValueError('NPC_PIXEL_PROVENANCE_INVALID')
+                proof=provenance['pipeline']
+                if proof.get('postprocessCompleted')is not True or proof.get('portraitSha256')!=pair['portraitAssetId'][:-4] or proof.get('referencePortraitSha256')!=pair['portraitAssetId'][:-4] or proof.get('pixelSha256')!=pair['pixelAssetId'][:-4] or proof.get('pixelSourceSha256')!=proof.get('postprocessInputSha256') or not isinstance(proof.get('pixelSourceSha256'),str) or not re.fullmatch('[a-f0-9]{64}',proof['pixelSourceSha256']):
+                    raise ValueError('NPC_PIXEL_PROVENANCE_HASH')
+            if 'pixelSourceAssetId' in pair:
+                source = pair['pixelSourceAssetId']
+                if not isinstance(source, str) or not re.fullmatch(r'[0-9a-f]{64}\.png', source):
+                    raise ValueError('NPC_PIXEL_SOURCE_ASSET_INVALID')
+                if provenance is not None and provenance['pipeline']['pixelSourceSha256'] != source[:-4]:
+                    raise ValueError('NPC_PIXEL_SOURCE_PROVENANCE_MISMATCH')
+                if asset_reader is not None:
+                    asset_reader(source)
+                elif not (PORTRAIT_ROOT / source).is_file():
+                    raise ValueError('NPC_PIXEL_SOURCE_ASSET_MISSING')
+            reference = pair['referencePortraitAssetId']
+            if slot == 'representative' and (reference is not None or active != pair['portraitAssetId']):
+                raise ValueError('NPC_PORTRAIT_REPRESENTATIVE_INVALID')
+            if slot != 'representative' and (not isinstance(reference, str) or not re.fullmatch(r'[0-9a-f]{64}\.png', reference)):
+                raise ValueError('NPC_PORTRAIT_REFERENCE_REQUIRED')
+            if not isinstance(pair['requestId'], str) or not pair['requestId']:
+                raise ValueError('NPC_PORTRAIT_PAIR_REQUEST_REQUIRED')
         if active is not None and active not in ids:
             raise ValueError("대표 포트레이트를 확인하세요.")
     return document
@@ -337,10 +379,13 @@ class Handler(BaseHTTPRequestHandler):
             asset_id = path.removeprefix("/assets/portraits/")
             if not re.fullmatch(r"[0-9a-f]{64}\.(?:png|jpg|webp)", asset_id):
                 return self.respond(404, {"error": "not_found"})
-            file = PORTRAIT_ROOT / asset_id
-            if not file.is_file():
-                return self.respond(404, {"error": "not_found"})
-            data = file.read_bytes()
+            if hasattr(self.server.npc_store, 'asset_get'):
+                data = self.server.npc_store.asset_get(asset_id)
+            else:
+                file = PORTRAIT_ROOT / asset_id
+                if not file.is_file():
+                    return self.respond(404, {"error": "not_found"})
+                data = file.read_bytes()
             mime = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}[asset_id.rsplit(".", 1)[1]]
             self.send_response(200)
             self.send_header("Content-Type", mime)
@@ -361,65 +406,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
             return
         if path == "/health" and self.command in ("GET", "HEAD"):
-            return self.respond(200, {"ok": True, "service": "npc-concept-studio", "knowledge": hasattr(self.server, "knowledge_store")})
-        if path == "/api/knowledge/overview" and self.command in ("GET", "HEAD"):
-            with LOCK:
-                value = self.server.knowledge_store.overview()
-            return self.respond(200, value) if value else self.respond(404, {"error": "project_not_found"})
-        if path == "/api/knowledge/mcp-capabilities" and self.command in ("GET", "HEAD"):
-            with LOCK:
-                return self.respond(200, {"capabilities": self.server.knowledge_store.capabilities()})
-        if path == "/api/knowledge/legacy-references" and self.command in ("GET", "HEAD"):
-            with LOCK:
-                return self.respond(200, {"references": self.server.knowledge_store.legacy_references()})
-        if path == "/api/knowledge/entries" and self.command == "POST":
-            length = self.headers.get("Content-Length", "")
-            if not length.isdecimal() or not 0 < int(length) <= MAX_BODY:
-                return self.respond(413, {"error": "invalid_body_size"})
-            if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
-                return self.respond(415, {"error": "json_required"})
-            try:
-                payload = json.loads(self.rfile.read(int(length)))
-                with LOCK:
-                    saved = self.server.knowledge_store.create_entry(payload["entry"], payload["note"])
-            except (KnowledgeError, ValueError, TypeError, KeyError, UnicodeDecodeError) as exc:
-                return self.respond(422, {"error": str(exc)})
-            return self.respond(201, saved)
-        category_match = re.fullmatch(r"/api/knowledge/categories/([^/]+)", path)
-        if category_match and self.command in ("GET", "HEAD"):
-            with LOCK:
-                value = self.server.knowledge_store.category(unquote(category_match.group(1)))
-            return self.respond(200, value) if value else self.respond(404, {"error": "category_not_found"})
-        entry_match = re.fullmatch(r"/api/knowledge/entries/([^/]+)", path)
-        if entry_match and self.command in ("GET", "HEAD"):
-            with LOCK:
-                value = self.server.knowledge_store.entry(unquote(entry_match.group(1)))
-            return self.respond(200, value) if value else self.respond(404, {"error": "entry_not_found"})
-        revision_match = re.fullmatch(r"/api/knowledge/entries/([^/]+)/revisions", path)
-        if revision_match and self.command in ("GET", "HEAD"):
-            entry_id = unquote(revision_match.group(1))
-            with LOCK:
-                if self.server.knowledge_store.entry(entry_id) is None:
-                    return self.respond(404, {"error": "entry_not_found"})
-                return self.respond(200, {"revisions": self.server.knowledge_store.revisions(entry_id)})
-        if entry_match and self.command == "PUT":
-            length = self.headers.get("Content-Length", "")
-            if not length.isdecimal() or not 0 < int(length) <= MAX_BODY:
-                return self.respond(413, {"error": "invalid_body_size"})
-            if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
-                return self.respond(415, {"error": "json_required"})
-            try:
-                payload = json.loads(self.rfile.read(int(length)))
-                expected = payload["expectedVersion"]
-                if type(expected) is not int:
-                    raise KnowledgeError("expectedVersion must be an integer")
-                with LOCK:
-                    saved = self.server.knowledge_store.update_entry(
-                        unquote(entry_match.group(1)), expected, payload["note"], payload["changes"]
-                    )
-            except (KnowledgeError, ValueError, TypeError, KeyError, UnicodeDecodeError) as exc:
-                return self.respond(422, {"error": str(exc)})
-            return self.respond(200, saved) if saved else self.respond(409, {"error": "knowledge_entry_conflict"})
+            return self.respond(200, {"ok": True, "service": "npc-concept-studio"})
+        if path in ('/api/knowledge','/v1/knowledge','/knowledge.html','/knowledge.js','/knowledge.css') or path.startswith(('/api/knowledge/','/v1/knowledge/')):
+            return self.respond(410, {'error':'knowledge_feature_removed'})
         if path == "/api/concept" and self.command in ("GET", "HEAD"):
             with LOCK:
                 return self.respond(200, self.server.store.current())
@@ -450,9 +439,12 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, KeyError, UnicodeDecodeError, binascii.Error) as exc:
                 return self.respond(422, {"error": str(exc)})
             asset_id = hashlib.sha256(data).hexdigest() + "." + ext
-            PORTRAIT_ROOT.mkdir(parents=True, exist_ok=True)
-            destination = PORTRAIT_ROOT / asset_id
-            if not destination.exists(): destination.write_bytes(data)
+            if hasattr(self.server.npc_store, 'asset_put'):
+                self.server.npc_store.asset_put(asset_id, data)
+            else:
+                PORTRAIT_ROOT.mkdir(parents=True, exist_ok=True)
+                destination = PORTRAIT_ROOT / asset_id
+                if not destination.exists(): destination.write_bytes(data)
             return self.respond(201, {"assetId": asset_id, "url": f"/assets/portraits/{asset_id}"})
         if path == "/api/npcs/revisions" and self.command in ("GET", "HEAD"):
             with LOCK:
@@ -524,6 +516,78 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(422, {"error": str(exc)})
             saved = self.server.story_store.save(expected, note.strip(), document)
             return self.respond(200, saved) if saved else self.respond(409, {"error": "다른 곳에서 먼저 수정했습니다. 새로고침 후 다시 편집하세요."})
+        if path == "/api/npcs/remove-category" and self.command == "POST":
+            if self.headers.get('Origin') is not None or self.client_address[0] != '127.0.0.1':
+                return self.respond(403, {'error': 'formal_server_only'})
+            from ..filex_npc_authority import FilexCurrentNPC
+            if not isinstance(self.server.npc_store, FilexCurrentNPC):
+                return self.respond(409, {'error':'npc_filex_authority_required'})
+            try:
+                from ..npc_category_removal import remove
+                length = int(self.headers['Content-Length'])
+                if not 0 < length <= 65536: raise ValueError('category removal size')
+                payload = json.loads(self.rfile.read(length))
+                if set(payload) != {'requestId','inputHash','characterId','categoryId','expectedRevision'}:
+                    raise ValueError('category removal contract')
+                if any(not isinstance(payload[k],str) or not payload[k] for k in ('requestId','inputHash','characterId','categoryId')):
+                    raise ValueError('category removal binding')
+                saved = remove(self.server.npc_store,payload['requestId'],payload['inputHash'],payload['characterId'],payload['categoryId'],payload['expectedRevision'])
+                return self.respond(200,saved) if saved else self.respond(409,{'error':'npc_source_changed'})
+            except (ValueError, KeyError, TypeError) as exc:
+                return self.respond(422,{'error':str(exc)})
+        if path == "/api/npcs/publish-portrait" and self.command == "POST":
+            if self.headers.get('Origin') is not None or self.client_address[0] != '127.0.0.1':
+                return self.respond(403, {'error':'formal_server_only'})
+            from ..filex_npc_authority import FilexCurrentNPC
+            if not isinstance(self.server.npc_store,FilexCurrentNPC):return self.respond(409, {'error':'npc_filex_authority_required'})
+            if self.headers.get('Content-Type','').split(';',1)[0]!='application/json':return self.respond(415, {'error':'json_required'})
+            try:
+                from ..npc_scoped_portrait import publish
+                length=self.headers.get('Content-Length','')
+                if not length.isdecimal()or not 0<int(length)<=MAX_STORY_BODY:return self.respond(413, {'error':'invalid_body_size'})
+                raw=self.rfile.read(int(length))
+                if len(raw)!=int(length):raise ValueError('NPC_PORTRAIT_BODY_INCOMPLETE')
+                return self.respond(200,publish(self.server.npc_store,json.loads(raw)))
+            except (ValueError,KeyError,TypeError,UnicodeDecodeError)as exc:
+                return self.respond(409 if str(exc)=='NPC_PORTRAIT_SOURCE_CHANGED'else 422, {'error':str(exc)})
+            except OSError:return self.respond(503, {'error':'NPC_PORTRAIT_OUTCOME_UNCERTAIN'})
+        if path == "/api/npcs/create-character" and self.command == "POST":
+            if self.headers.get('Origin') is not None or self.client_address[0] != '127.0.0.1':
+                return self.respond(403, {'error':'formal_server_only'})
+            from ..filex_npc_authority import FilexCurrentNPC
+            if not isinstance(self.server.npc_store,FilexCurrentNPC):
+                return self.respond(409, {'error':'npc_filex_authority_required'})
+            if self.headers.get('Content-Type','').split(';',1)[0]!='application/json':
+                return self.respond(415, {'error':'json_required'})
+            try:
+                from ..npc_scoped_create import create
+                length=self.headers.get('Content-Length','')
+                if not length.isdecimal() or not 0<int(length)<=MAX_STORY_BODY:
+                    return self.respond(413, {'error':'invalid_body_size'})
+                raw=self.rfile.read(int(length))
+                if len(raw)!=int(length):raise ValueError('NPC_CREATE_BODY_INCOMPLETE')
+                return self.respond(200,create(self.server.npc_store,json.loads(raw)))
+            except (ValueError,KeyError,TypeError,UnicodeDecodeError) as exc:
+                return self.respond(409 if str(exc)=='NPC_CREATE_SOURCE_CHANGED' else 422, {'error':str(exc)})
+            except OSError:
+                return self.respond(503, {'error':'NPC_CREATE_OUTCOME_UNCERTAIN'})
+        if path == "/api/npcs/delete-character" and self.command == "POST":
+            if self.headers.get('Origin') is not None or self.client_address[0] != '127.0.0.1':
+                return self.respond(403, {'error': 'formal_server_only'})
+            if not hasattr(self.server.npc_store, 'delete_character'):
+                return self.respond(409, {'error': 'npc_filex_authority_required'})
+            try:
+                length = int(self.headers['Content-Length'])
+                if length <= 0 or length > 65536: raise ValueError('delete contract size')
+                payload = json.loads(self.rfile.read(length))
+                if set(payload) != {'requestId','inputHash','characterId','expectedRevision'}:
+                    raise ValueError('delete contract')
+                if type(payload['expectedRevision']) is not int or any(not isinstance(payload[k],str) or not payload[k] for k in ('requestId','inputHash','characterId')):
+                    raise ValueError('delete binding')
+                saved = self.server.npc_store.delete_character(payload['requestId'],payload['inputHash'],payload['characterId'],payload['expectedRevision'])
+                return self.respond(200,saved) if saved else self.respond(409,{'error':'npc_source_changed'})
+            except (ValueError, KeyError, TypeError) as exc:
+                return self.respond(422, {'error': str(exc)})
         if path == "/api/npcs" and self.command == "PUT":
             length = self.headers.get("Content-Length", "")
             if not length.isdecimal() or not 0 < int(length) <= MAX_STORY_BODY:
@@ -535,7 +599,7 @@ class Handler(BaseHTTPRequestHandler):
                 expected, note = payload["expectedRevision"], payload["note"]
                 if type(expected) is not int or not isinstance(note, str) or not 3 <= len(note.strip()) <= 300:
                     raise ValueError("개정 번호와 변경 사유를 확인하세요.")
-                document = validate_npcs(payload["document"])
+                document = validate_npcs(payload["document"], getattr(self.server.npc_store, "asset_get", None))
             except (ValueError, TypeError, KeyError, UnicodeDecodeError) as exc:
                 return self.respond(422, {"error": str(exc)})
             saved = self.server.npc_store.save(expected, note.strip(), document)

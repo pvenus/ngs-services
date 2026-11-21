@@ -5,6 +5,7 @@ import re
 from dataclasses import fields
 from typing import Any, Callable
 
+from .execution_contracts import get as get_contract, entries as contract_entries
 from .models import ActionDefinition, CodexTemplate, KnowledgeEntry, ServiceDefinition
 from .service import CatalogNotFoundError, CatalogService, CatalogValidationError
 
@@ -12,7 +13,6 @@ from .service import CatalogNotFoundError, CatalogService, CatalogValidationErro
 MODEL_BY_PATH = {
     "/v1/catalog/services": ("services", ServiceDefinition),
     "/v1/catalog/actions": ("actions", ActionDefinition),
-    "/v1/catalog/knowledge": ("knowledge", KnowledgeEntry),
     "/v1/catalog/templates": ("templates", CodexTemplate),
 }
 
@@ -42,7 +42,11 @@ class CatalogApi:
         try:
             if path == "/health" and method == "GET":
                 return self._response(start_response, "200 OK", {"ok": True, "service": "project-catalog-service"})
-            if path == "/v1/catalog/knowledge/query" and method == "POST":
+            if path == "/v1/catalog/knowledge" or path.startswith("/v1/catalog/knowledge/"):
+                return self._response(start_response, "410 Gone", {"error":"knowledge_feature_removed"})
+            if path == "/v1/catalog/execution-contracts" and method == "GET":
+                return self._response(start_response, "200 OK", {"executionContracts":contract_entries()})
+            if path == "/v1/catalog/execution-contracts/query" and method == "POST":
                 length = int(environ.get("CONTENT_LENGTH") or "0")
                 if not 0 < length <= 64_000:
                     raise CatalogValidationError("invalid body size")
@@ -53,22 +57,22 @@ class CatalogApi:
                 if not isinstance(ids, list) or not 1 <= len(ids) <= 20:
                     raise CatalogValidationError("ids must contain between 1 and 20 entries")
                 if any(not isinstance(entry_id, str) or not SAFE_RESOURCE_ID.fullmatch(entry_id) for entry_id in ids):
-                    raise CatalogValidationError("invalid knowledge id")
+                    raise CatalogValidationError("invalid execution contract id")
                 entries, missing_ids = [], []
                 for entry_id in ids:
-                    knowledge = self.service.repository.get("knowledge", entry_id)
+                    knowledge = get_contract(entry_id)
                     if knowledge is None:
                         missing_ids.append(entry_id)
                     else:
                         entries.append(knowledge)
                 return self._response(start_response, "200 OK", {"entries": entries, "missingIds": missing_ids})
-            if path.startswith("/v1/catalog/knowledge/") and method == "GET":
-                knowledge_id = path[len("/v1/catalog/knowledge/"):]
+            if path.startswith("/v1/catalog/execution-contracts/") and method == "GET":
+                knowledge_id = path[len("/v1/catalog/execution-contracts/"):]
                 if not SAFE_RESOURCE_ID.fullmatch(knowledge_id):
-                    raise CatalogValidationError("invalid knowledge id")
-                knowledge = self.service.repository.get("knowledge", knowledge_id)
+                    raise CatalogValidationError("invalid execution contract id")
+                knowledge = get_contract(knowledge_id)
                 if knowledge is None:
-                    raise CatalogNotFoundError("knowledge not found")
+                    raise CatalogNotFoundError("execution contract not found")
                 return self._response(start_response, "200 OK", knowledge)
             if path.startswith("/v1/catalog/execution-context/") and method == "GET":
                 action_id = path.removeprefix("/v1/catalog/execution-context/")

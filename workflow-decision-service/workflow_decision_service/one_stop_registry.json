@@ -1,0 +1,137 @@
+{
+  "schemaVersion": "ngs.npc-one-stop-registry.v2",
+  "version": "3",
+  "stages": [
+    {
+      "id": "skeleton",
+      "dependsOn": [],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "overview",
+      "dependsOn": [
+        "skeleton"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "art",
+      "dependsOn": [
+        "overview"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "planning_representative",
+      "dependsOn": [
+        "art"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "planning_idle",
+      "dependsOn": [
+        "planning_representative"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "portrait_representative",
+      "dependsOn": [
+        "planning_idle"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "portrait_idle",
+      "dependsOn": [
+        "planning_idle",
+        "portrait_representative"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "idle_8way",
+      "dependsOn": [
+        "portrait_idle"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "animation_walk",
+      "dependsOn": [
+        "idle_8way"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "frames_walk",
+      "dependsOn": [
+        "animation_walk"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "animation_run",
+      "dependsOn": [
+        "idle_8way"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "frames_run",
+      "dependsOn": [
+        "animation_run"
+      ],
+      "completion": "verified-publication"
+    }
+  ],
+  "combatStages": [
+    {
+      "id": "planning_combat",
+      "dependsOn": [
+        "planning_idle"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "portrait_combat",
+      "dependsOn": [
+        "planning_combat",
+        "portrait_idle"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "combat_8way",
+      "dependsOn": [
+        "portrait_combat"
+      ],
+      "completion": "verified-publication"
+    }
+  ],
+  "combatMotionStages": [
+    {
+      "id": "animation_combat_{index}",
+      "dependsOn": [
+        "combat_8way"
+      ],
+      "completion": "verified-publication"
+    },
+    {
+      "id": "frames_combat_{index}",
+      "dependsOn": [
+        "animation_combat_{index}"
+      ],
+      "completion": "verified-publication"
+    }
+  ],
+  "combatDependencyOverrides": {
+    "portrait_representative": [
+      "planning_combat"
+    ],
+    "idle_8way": [
+      "portrait_combat"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+# Opt-in standalone sidecar; does not modify the existing Filex service.
+services:
+  filex-writer:
+    build: .
+    user: "${WRITER_UID:-1000}:${WRITER_GID:-1000}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ["127.0.0.1:8093:8093"]
+    volumes:
+      - type: bind
+        source: ${CANONICAL_KNOWLEDGE_ROOT:?Set exact canonical knowledge directory}
+        target: /canonical
+    secrets: [writer_token]
+    networks: [writer_private]
+secrets:
+  writer_token:
+    file: ${WRITER_TOKEN_PATH:?Set dedicated owner token file}
+networks:
+  writer_private:
+    internal: true

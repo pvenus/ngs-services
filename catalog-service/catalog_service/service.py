@@ -4,6 +4,7 @@ from typing import Any
 
 from .models import ActionDefinition, CodexTemplate, KnowledgeEntry, ServiceDefinition
 from .repository import CatalogRepository
+from .execution_contracts import get as get_contract, contract_id
 
 
 class CatalogValidationError(ValueError): pass
@@ -20,8 +21,8 @@ class CatalogService:
 
     def put_service(self, value: ServiceDefinition) -> dict[str, Any]:
         value = self._validated(value)
-        missing = [item for item in value.fixed_knowledge_ids if self.repository.get("knowledge", item) is None]
-        if missing: raise CatalogValidationError(f"unknown service knowledge ids: {', '.join(missing)}")
+        missing = [item for item in value.fixed_knowledge_ids if get_contract(item) is None]
+        if missing: raise CatalogValidationError(f"unknown service execution contract ids: {', '.join(missing)}")
         return self.repository.put("services", value.id, value.to_dict())
 
     def put_action(self, value: ActionDefinition) -> dict[str, Any]:
@@ -34,17 +35,16 @@ class CatalogService:
                 raise CatalogValidationError("prerequisite_get must reference a read-only action")
         if value.template_id and self.repository.get("templates", value.template_id) is None:
             raise CatalogValidationError("action.template_id does not exist")
-        missing = [item for item in value.knowledge_ids if self.repository.get("knowledge", item) is None]
-        if missing: raise CatalogValidationError(f"unknown action knowledge ids: {', '.join(missing)}")
+        missing = [item for item in value.knowledge_ids if get_contract(item) is None]
+        if missing: raise CatalogValidationError(f"unknown action execution contract ids: {', '.join(missing)}")
         return self.repository.put("actions", value.id, value.to_dict())
 
     def put_knowledge(self, value: KnowledgeEntry) -> dict[str, Any]:
-        value = self._validated(value)
-        return self.repository.put("knowledge", value.id, value.to_dict())
+        raise CatalogValidationError("knowledge_feature_removed")
 
     def put_template(self, value: CodexTemplate) -> dict[str, Any]:
         value = self._validated(value)
-        missing = [item for item in value.required_context_ids if self.repository.get("knowledge", item) is None]
+        missing = [item for item in value.required_context_ids if get_contract(item) is None]
         if missing: raise CatalogValidationError(f"unknown template context ids: {', '.join(missing)}")
         return self.repository.put("templates", value.id, value.to_dict())
 
@@ -57,10 +57,10 @@ class CatalogService:
         service = self.repository.get("services", action["service_id"])
         if service is None: raise CatalogNotFoundError("service not found")
         ids = list(dict.fromkeys(service.get("fixed_knowledge_ids", []) + action.get("knowledge_ids", [])))
-        knowledge = []
+        execution_contracts = []
         for entry_id in ids:
-            entry = self.repository.get("knowledge", entry_id)
-            if entry is None: raise CatalogValidationError(f"missing execution knowledge: {entry_id}")
-            knowledge.append(entry)
+            entry = get_contract(entry_id)
+            if entry is None: raise CatalogValidationError(f"missing execution contract: {entry_id}")
+            execution_contracts.append(entry)
         template = self.repository.get("templates", action["template_id"]) if action.get("template_id") else None
-        return {"service": service, "action": action, "knowledge": knowledge, "template": template}
+        return {"service": service, "action": action, "executionContracts": execution_contracts, "template": template}

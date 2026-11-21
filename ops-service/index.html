@@ -1,0 +1,19 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OPS · 공식 요청 원장</title><link rel="stylesheet" href="/style.css"><script defer src="/app.js"></script>
+<main><header><div><span class="brand">OPS</span><h1>공식 요청 원장</h1><p>Request Service에 등록된 요청만 보여줍니다.</p></div><div class="actions"><button id="refresh" type="button">새로고침</button></div></header>
+<nav class="ops-tabs" aria-label="OPS 화면"><a href="/requests" aria-current="page">요청 상태</a><a href="/services">서비스 상태</a><a href="/alarms">알람</a></nav>
+<div class="filters"><label for="status-filter">요청 상태</label><select id="status-filter"><option value="">전체</option><option value="registered">등록됨</option><option value="planned">계획됨</option><option value="completed">완료됨</option><option value="failed">실패</option><option value="cancelled">취소됨</option></select></div>
+<p id="notice" role="status" aria-live="polite"></p><div class="table-scroll"><table><thead><tr><th>요청 ID</th><th>상태</th><th>대상</th><th>프로젝트 / 유형</th><th>등록 시각</th><th>진행 상세</th></tr></thead><tbody id="rows"></tbody></table></div>
+<footer><button id="prev" type="button" disabled>이전</button><span id="page">1쪽</span><button id="next" type="button" disabled>다음</button></footer>
+<dialog id="progress-dialog" class="progress-dialog" aria-labelledby="progress-title" aria-describedby="progress-target">
+ <header><div><h2 id="progress-title">요청 진행 상세</h2><p id="progress-target"></p></div><button id="progress-close" type="button" autofocus>닫기</button></header>
+ <section class="progress-content">
+  <p id="progress-summary" role="status"></p>
+  <div class="table-scroll" id="progress-list" hidden><table>
+   <thead><tr><th scope="col">작업</th><th scope="col">워커</th><th scope="col">상태</th><th scope="col">선행 작업</th><th scope="col">마지막 변경</th></tr></thead>
+   <tbody id="progress-rows"></tbody>
+  </table></div>
+  <small id="progress-updated"></small>
+ </section>
+</dialog>
+</main></html>

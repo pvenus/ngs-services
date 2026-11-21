@@ -18,13 +18,17 @@ from .concept import ConceptModule
 from .domains import DomainModule
 
 class ProjectDataService(ProjectDisplayMixin):
-    DATA_COLLECTIONS = {"services", "actions", "knowledge", "templates"}
+    DATA_COLLECTIONS = {"services", "actions", "templates"}
     def __init__(self, storage_root: Path | str):
         self.storage = StorageRoot(storage_root)
         self.storage.initialize()
         self.store = DataStore(self.storage.root / "database" / "projectbs.sqlite3")
         self._display_import_pending()
-        self.concept = ConceptModule(self.store)
+        import os
+        if os.environ.get('PDS_CONCEPT_SOURCE')=='filex':
+            from .concept_filex import FilexConcept
+            self.concept = FilexConcept(self.store)
+        else:self.concept = ConceptModule(self.store)
         self.domains = DomainModule(self.storage.root,self.concept)
 
     def close(self) -> None:
