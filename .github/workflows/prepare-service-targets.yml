@@ -22,6 +22,8 @@ jobs:
           node-version: 24.21.0
       - name: Verify fixed targets without running project code
         run: python3 -B tools/release/prepare-targets.py "$RUNNER_TEMP/target-proof"
+      - name: Check Planner startup heartbeat and task behavior in fixtures
+        run: node --test workflow-planner/*.test.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: service-targets-${{ github.sha }}-${{ github.run_attempt }}

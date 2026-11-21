@@ -168,7 +168,7 @@ function serviceCard({serverName,state,missed,lastReceivedAt,commitSha}){
   (observation?new Date(lastReceivedAt).toLocaleString('ko-KR',{hour12:false}):shortTime(lastReceivedAt))+
   (missed>=2?' · '+missed+'회 누락':'');
  item.append(name,badge,detail);
- if(observation){
+ if(observation||serverName==='workflow-planner'){
   const version=document.createElement('small');version.className='ngs-observation-version';
   version.textContent=commitSha?'커밋 '+commitSha:'커밋 확인 안 됨';
   item.append(version);
