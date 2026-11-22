@@ -12,6 +12,8 @@ import {initializeOfficialSchema} from './official-inbox-schema.mjs';
 import {createRequestList,createWorkflowList,statuses} from './request-list.mjs';
 import {allowedWorkflowSourceSql,officialIdFor} from './space-intake.mjs';
 
+import {ensurePendingReasonTable,unsupportedPlannerPolicy} from './pending-unsupported.mjs';
+
 const error=()=>Error('OFFICIAL_REQUEST_INBOX_PRIVATE_REQUIRED');
 export function validateInboxPath(directory){
  if(typeof directory!=='string'||!isAbsolute(directory)||resolve(directory)!==directory||dirname(directory)===directory)
@@ -34,6 +36,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
  try{initializeOfficialSchema(db);}catch(error){db.close();throw error;}
  const original=db.prepare(`SELECT * FROM official_requests
   WHERE source_id=? AND project_id=? AND idempotency_key=?`);
+ try{ensurePendingReasonTable(db);}catch(error){db.close();throw error;}
  const target=db.prepare(`SELECT official_request_id FROM official_requests
   WHERE project_id=? AND request_type='npc.workflow' AND schema_version IN (?,?) AND state IN ('registered','planned')
   AND (json_extract(payload_json,'$.character.npcId')=? COLLATE NOCASE
@@ -89,6 +92,8 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
       if(concept.operation==='replace'||concept.operation==='add'&&!Object.hasOwn(concept,'requiredSections'))
        throw Error('NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID');
      }
+     if(kind===requestType&&unsupportedPlannerPolicy(kind,JSON.parse(payload)))
+      throw Error('REQUEST_UNSUPPORTED_RECREATE');
      if(kind===requestType){
       if(target.get(projectId,...oneStopSchemas,npcId,npcSlug))throw Error('OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED');
      }else if(kind===conceptCategoryRequestType&&targetCategory.get(projectId,conceptCategoryRequestType,conceptCategorySchema,categoryId)){

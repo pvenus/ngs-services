@@ -1,6 +1,6 @@
-/** Read-only bounded views of the official request ledger. */
+/** Operator views and bounded Planner handoff of the official request ledger. */
 import {sha,workflowStatuses} from './one-stop-envelope.mjs';
-import {canonicalWorkflowPayload,workflowScopeSql} from './request-envelope.mjs';
+import {canonicalWorkflowPayload,knownWorkflowSchema} from './request-envelope.mjs';
 import {conceptCategoryRequestType} from './concept-category-envelope.mjs';
 import {npcPlanningUpdateType} from './npc-planning-update-envelope.mjs';
 import {npcPlanningAddType} from './npc-planning-add-envelope.mjs';
@@ -8,6 +8,7 @@ import {audioRequestType} from './audio-generate-envelope.mjs';
 import {motion2DRequestType} from './motion-preset-convert-2d-envelope.mjs';
 import {audioDeleteType} from './audio-delete-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
+import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
 export const listTool='request_list',workflowListTool='request_workflow_list';
 export const statuses=Object.freeze(['registered',...workflowStatuses,'cancelled']);
 export const defaultLimit=50,maxLimit=100,maxCursor=160;
@@ -27,15 +28,19 @@ const basic=`rowid AS internalRowId, official_request_id AS officialRequestId,
   state AS status, registered_at AS registeredAt`;
 // targetNpcId is the legacy OPS display key. Keep its DTO stable for old
 // clients; the typed request family distinguishes a category target from an NPC.
-const operatorFields=`${basic}, source_id AS sourceId,
-  CASE request_type WHEN '${conceptCategoryRequestType}' THEN json_extract(payload_json,'$.categoryId')
+const terminalReason=`(SELECT reason FROM official_request_terminal_reasons
+ WHERE official_request_id=official_requests.official_request_id AND official_requests.state='failed')`;
+const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS failureReason,
+  CASE WHEN ${terminalReason}='${unsupportedReason}' THEN official_request_id
+  ELSE CASE request_type WHEN '${conceptCategoryRequestType}' THEN json_extract(payload_json,'$.categoryId')
    WHEN '${npcPlanningUpdateType}' THEN json_extract(payload_json,'$.npcId')
    WHEN '${npcPlanningAddType}' THEN json_extract(payload_json,'$.npcId')
    WHEN '${audioRequestType}' THEN json_extract(payload_json,'$.conceptId')
    WHEN '${audioDeleteType}' THEN json_extract(payload_json,'$.officialRequestId')
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.variantPresetId')
-   ELSE json_extract(payload_json,'$.character.npcId') END AS targetNpcId,
-  CASE request_type WHEN '${conceptCategoryRequestType}' THEN json_extract(payload_json,'$.title')
+   ELSE json_extract(payload_json,'$.character.npcId') END END AS targetNpcId,
+  CASE WHEN ${terminalReason}='${unsupportedReason}' THEN '지원 종료 요청'
+  ELSE CASE request_type WHEN '${conceptCategoryRequestType}' THEN json_extract(payload_json,'$.title')
    WHEN '${npcPlanningUpdateType}' THEN json_extract(payload_json,'$.role')
    WHEN '${npcPlanningAddType}' THEN json_extract(payload_json,'$.title')
    WHEN '${audioRequestType}' THEN json_extract(payload_json,'$.title')
@@ -43,7 +48,7 @@ const operatorFields=`${basic}, source_id AS sourceId,
       WHERE g.official_request_id=json_extract(official_requests.payload_json,'$.officialRequestId')
        AND g.request_type='${audioRequestType}' AND g.project_id=official_requests.project_id),'BGM 삭제')
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.label')
-   ELSE json_extract(payload_json,'$.character.name') END AS targetName`;
+   ELSE json_extract(payload_json,'$.character.name') END END AS targetName`;
 const workflowFields=`${basic}, payload_json AS payloadJson, payload_sha256 AS payloadSha256, source_id AS sourceId, idempotency_key AS sourceKey`;
 const commonKeys=['officialRequestId','projectId','requestType','schemaVersion'];
 function workflowProjection(r){
@@ -61,11 +66,12 @@ function createPage(db,workflow){
  const page=db.prepare(`SELECT ${workflow?workflowFields:operatorFields}
   FROM official_requests
   WHERE rowid<=? AND (? IS NULL OR state=?)
-   ${workflow?`AND ${allowedWorkflowSourceSql} AND project_id='binari' AND ${workflowScopeSql}`:""}
+   ${workflow?`AND ${allowedWorkflowSourceSql} AND project_id='binari'`:""}
    AND (? IS NULL OR registered_at<? OR (registered_at=? AND rowid<?))
   ORDER BY registered_at DESC, rowid DESC LIMIT ?`);
  const invalid=()=>Error(workflow?'REQUEST_WORKFLOW_LIST_INVALID':'REQUEST_LIST_INVALID');
  const failed=()=>Error(workflow?'OFFICIAL_REQUEST_WORKFLOW_LIST_FAILED':'OFFICIAL_REQUEST_LIST_FAILED');
+ const retirePage=workflow?createPendingRetirement(db):null;
  const inputs=workflow?['limit','cursor']:['status','limit','cursor'];
  return function list(value){
   if(!value||typeof value!=='object'||Array.isArray(value)||
@@ -83,7 +89,14 @@ function createPage(db,workflow){
   const more=rows.length>limit;
   if(more)rows.pop();
   const last=rows.at(-1);
-  const requests=rows.map(({internalRowId,...row})=>workflow?workflowProjection(row):row);
+  let requests;
+  if(workflow){
+   // Cursors follow the examined rows even when an entire page retires.
+   const retired=retirePage(rows);
+   requests=rows.filter(row=>!retired.has(row.internalRowId)&&knownWorkflowSchema(row.requestType,row.schemaVersion))
+    .map(({internalRowId,...row})=>workflowProjection(row));
+  }else requests=rows.map(({internalRowId,failureReason,...row})=>
+   failureReason===unsupportedReason?{...row,failureReason}:row);
   return {requests,nextCursor:more?encode([1,scope,horizon,last.registeredAt,last.internalRowId]):null};
  };
 }

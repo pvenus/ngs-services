@@ -164,3 +164,20 @@ path and the same ledger rules. Only one registered/planned request can target
 the same result ID across Local and Space. Intake neither checks mutable Filex
 state nor creates output; PDS independently checks the real source, the
 result's absence, and authorized publication.
+
+### Retired pending requests
+
+On a bounded Planner intake page, RS settles only previously registered,
+not-yet-planned requests whose trusted ledger identity and immutable canonical bytes match and whose
+request type/schema or exact operation is unsupported by this release.
+Unsupported fresh submissions do not enter the queue. A recognized, still
+supported historical request continues normally, and payload corruption,
+unbound records, already-planned/running, completed, failed and cancelled
+history are not reclassified. Startup and the OPS list do not perform this settlement.
+
+The atomic `registered → failed` transition adds the single reason
+`REQUEST_UNSUPPORTED_RECREATE` in a separate SQLite table. Original payload
+bytes, hashes and request IDs do not change. Only these failed rows expose
+the optional `failureReason` in the read-only operator list. A replacement is a
+new request, registered normally using a new idempotency key. The Planner
+continues to refuse unsupported graphs, and it does not set this RS status.

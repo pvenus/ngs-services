@@ -373,7 +373,7 @@ test('workflow list returns hash-verified registered payloads only; cursor has a
  const {workflow,list,update,rpc}=await listener(t,directory);
  const before=read(path,'SELECT rowid,* FROM official_requests');
  const tools=(await rpc('tools/list',{})).result.tools;
- assert.equal(tools.find(t=>t.name==='request_workflow_list').annotations.readOnlyHint,true);
+ assert.equal(tools.find(t=>t.name==='request_workflow_list').annotations.readOnlyHint,false);
  const head=(await workflow({limit:1})).result.structuredContent;
  assert.deepEqual(head.requests,[{officialRequestId:second.officialRequestId,projectId:'binari',requestType:'npc.workflow',
   schemaVersion:replacement().schemaVersion,payload:replacement(),payloadSha256:sha(canonical(replacement())),status:'registered',
@@ -521,7 +521,7 @@ test('concept and NPC share formal tools without crossing duplicate scope or cha
  assert.equal(fileRows.find(row=>row.official_request_id===replace.officialRequestId).state,'completed');
 });
 
-test('exact historical registered replace replay and status are preserved, but fresh destructive admission is refused',async t=>{
+test('unsupported historical registered concept replace is failed once; source and stale replay cannot revive it',async t=>{
  const {directory,path}=folder(t);
  openOfficialInbox(directory).close();
  const body=conceptExisting('replace'),key='historical-replace',id='request.official.'+sha(canonical(['request.official.v1','local','binari',key]));
@@ -530,14 +530,19 @@ test('exact historical registered replace replay and status are preserved, but f
   payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,'registered',?)`)
   .run(id,'local','binari',key,'concept.category.workflow',body.schemaVersion,raw,sha(raw),1);}
  finally{db.close();}
- const {submit,workflow,update}=await listener(t,directory);
+ const {submit,workflow,update,list}=await listener(t,directory);
  const result=async(p)=>(await p).result.structuredContent;
- assert.deepEqual(await result(submit(conceptInput(key,body))),{officialRequestId:id,status:'registered'});
+ const [before]=(await result(list({status:'registered'}))).requests;
+ assert.equal(before.officialRequestId,id);assert.equal(Object.hasOwn(before,'failureReason'),false);
+ assert.deepEqual(await result(workflow({})),{requests:[],nextCursor:null});
+ assert.deepEqual(await result(submit(conceptInput(key,body))),{error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
  assert.deepEqual(await result(submit(conceptInput('new-destructive',body))),{error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400});
- assert.equal((await result(workflow({}))).requests[0].payload.operation,'replace');
- assert.equal((await result(update({officialRequestId:id,status:'planned'}))).status,'planned');
- assert.equal((await result(update({officialRequestId:id,status:'completed'}))).status,'completed');
- assert.equal(read(path).length,1);
+ assert.deepEqual(await result(workflow({})),{requests:[],nextCursor:null});
+ assert.deepEqual(await result(update({officialRequestId:id,status:'planned'})),{error:'OFFICIAL_REQUEST_STATUS_CONFLICT',status:409});
+ const [failed]=(await result(list({status:'failed'}))).requests;
+ assert.equal(failed.officialRequestId,id);assert.equal(failed.failureReason,'REQUEST_UNSUPPORTED_RECREATE');
+ const [stored]=read(path);
+ assert.equal(stored.payload_json,raw);assert.equal(stored.payload_sha256,sha(raw));assert.equal(stored.state,'failed');
 });
 
 test('historical exact add without section list remains replayable, listable and transitions unchanged',async t=>{
@@ -592,4 +597,72 @@ test('2D motion request registration is typed, retains original and guards separ
  assert.deepEqual((await cancel({officialRequestId:registered.officialRequestId})).result.structuredContent,
   {officialRequestId:registered.officialRequestId,status:'cancelled'});
  assert.equal((await submit({...args,idempotencyKey:'after-cancel',payload:{...args.payload,label:'🎶'.repeat(120)}})).result.structuredContent.status,'registered');
+});
+
+test('only correctly bound registered unknown types, obsolete schemas and canonical unsupported combat retire only on paged intake',async t=>{
+ const {directory,path}=folder(t);
+ openOfficialInbox(directory).close();
+ const officialSchema=()=>read(path,"SELECT type,name,sql FROM sqlite_schema WHERE tbl_name='official_requests' ORDER BY name");
+ const beforeSchema=officialSchema(),cases=[];
+ function add(key,opts={}){
+  const {type='npc.workflow',project='binari',source='local',state='registered',body=payload,invalidDigest=false,invalidId=false}=opts;
+  const schema=opts.schema??body.schemaVersion;
+  const id='request.official.'+sha(canonical(['request.official.v1',source,project,key+(invalidId?'-wrong':'')]));
+  const raw=canonical(body);
+  cases.push({id,key,type,project,source,state,schema,raw,digest:invalidDigest?'0'.repeat(64):sha(raw)});
+  return id;
+ }
+ const old={schemaVersion:'ngs.retired-work.v1',projectId:'binari',revision:42};
+ const unknown=add('retired-type',{type:'retired.workflow',body:old});
+ const obsolete=add('retired-schema',{body:{...old,schemaVersion:'ngs.npc-one-stop.minimum.v0'}});
+ const spaceKnown=add('old-space-combat',{source:'space',body:{...payload,character:{...payload.character,npcId:'npc.space',slug:'spacem'},
+  includeCombat:true,combatMotionPresets:['strike']}});
+ const legit=add('supported-pending',{body:replacement()});
+ const motion=add('supported-motion',{type:'motion-preset.convert-2d',body:{schemaVersion:'ngs.motion-preset-convert-2d.v1',
+  projectId:'binari',sourcePresetId:'walk',variantPresetId:'walk-2d',label:'걷기 2D'}});
+ add('already-planned',{type:'retired.workflow',body:old,state:'planned'});
+ add('already-completed',{type:'retired.workflow',body:old,state:'completed'});
+ add('already-failed',{type:'retired.workflow',body:old,state:'failed'});
+ add('already-cancelled',{type:'retired.workflow',body:old,state:'cancelled'});
+ add('digest-mismatch',{type:'retired.workflow',body:old,invalidDigest:true});
+ add('id-mismatch',{type:'retired.workflow',body:old,invalidId:true});
+ add('schema-mismatch',{type:'retired.workflow',body:old,schema:'ngs.retired-work.v2'});
+ add('foreign-project',{type:'retired.workflow',body:old,project:'other'});
+ add('foreign-source',{type:'retired.workflow',body:old,source:'external'});
+ const db=new DatabaseSync(path);
+ try{
+  const insert=db.prepare('INSERT INTO official_requests VALUES(?,?,?,?,?,?,?,?,?,?)');
+  cases.forEach((r,i)=>insert.run(r.id,r.source,r.project,r.key,r.type,r.schema,r.raw,r.digest,r.state,i));
+ }finally{db.close();}
+ const marked=[unknown,obsolete,spaceKnown];
+ const app=openOfficialInbox(directory);
+ try{
+  assert.equal(read(path,'SELECT * FROM official_request_terminal_reasons').length,0);
+  assert.equal(read(path).filter(x=>marked.includes(x.official_request_id)&&x.state==='registered').length,3);
+  assert.throws(()=>app.updateStatus({officialRequestId:legit,status:'completed'}),/OFFICIAL_REQUEST_STATUS_CONFLICT/);
+  let cursor=null;const emitted=[];
+  do{
+   const page=app.workflowList(cursor===null?{limit:1}:{limit:1,cursor});
+   emitted.push(...page.requests);
+   cursor=page.nextCursor;
+  }while(cursor!==null);
+  assert.deepEqual(emitted.map(x=>x.officialRequestId),[motion,legit]);
+ }finally{app.close();}
+ openOfficialInbox(directory).close(); // Restart does not rescan or clear reasons.
+ assert.deepEqual(officialSchema(),beforeSchema);
+ assert.deepEqual(read(path,'SELECT official_request_id FROM official_request_terminal_reasons ORDER BY official_request_id'),
+  marked.toSorted().map(official_request_id=>({official_request_id})));
+ assert.deepEqual(read(path).map(row=>[row.official_request_id,row.state,row.payload_json,row.payload_sha256]),
+  cases.map(r=>[r.id,marked.includes(r.id)?'failed':r.state,r.raw,r.digest]));
+});
+
+test('fresh unsupported combat cannot create a stuck registration; a valid request can use a fresh key',async t=>{
+ const {directory,path}=folder(t),{submit,workflow}=await listener(t,directory);
+ const combat={...payload,includeCombat:true,combatMotionPresets:['strike']};
+ const result=async(p)=>(await p).result.structuredContent;
+ assert.deepEqual(await result(submit(input('new-combat',combat))),{error:'REQUEST_UNSUPPORTED_RECREATE',status:422});
+ assert.deepEqual(read(path),[]);
+ const receipt=await result(submit(input('new-supported')));
+ assert.equal(receipt.status,'registered');
+ assert.equal((await result(workflow({}))).requests[0].officialRequestId,receipt.officialRequestId);
 });

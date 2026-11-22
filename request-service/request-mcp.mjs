@@ -11,10 +11,12 @@ import {defaultLimit,listTool,maxCursor,maxLimit,statuses,workflowListTool} from
 
 import {spaceQueueIdPattern,verifiedSpaceRequest} from './space-intake.mjs';
 
+import {unsupportedReason} from './pending-unsupported.mjs';
+
 const version='2025-06-18';
 const maxBody=96*1024;
 const known={
- REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
+ REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
  NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID:400,NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID:400,NGS_AUDIO_GENERATE_PAYLOAD_INVALID:400,NGS_AUDIO_DELETE_PAYLOAD_INVALID:400,
  NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID:400,OFFICIAL_MOTION_2D_VARIANT_ALREADY_REGISTERED:409,
  OFFICIAL_AUDIO_DELETE_TARGET_NOT_COMPLETED:404,OFFICIAL_AUDIO_DELETE_ALREADY_REGISTERED:409,
@@ -109,7 +111,7 @@ const list={
  outputSchema:{type:'object',properties:{
   requests:{type:'array',items:{type:'object',properties:{
    ...Object.fromEntries(rowFields.map(k=>[k,{type:'string'}])),
-   status:{enum:statuses},registeredAt:{type:'integer',minimum:0},
+   status:{enum:statuses},registeredAt:{type:'integer',minimum:0},failureReason:{const:unsupportedReason},
   },required:rowFields,additionalProperties:false}},
   nextCursor:{type:['string','null']},
  },required:['requests','nextCursor'],additionalProperties:false},
@@ -117,7 +119,7 @@ const list={
 };
 const workflowFields=['officialRequestId','projectId','requestType','schemaVersion','payload','payloadSha256','status','registeredAt'];
 const workflowList={
- name:workflowListTool,description:'Read a local page of eligible registered requests with their immutable typed payload.',
+ name:workflowListTool,description:'Read a bounded Planner intake page, settling authoritative unsupported pending rows without executing them.',
  inputSchema:{...list.inputSchema,properties:{limit:list.inputSchema.properties.limit,cursor:list.inputSchema.properties.cursor}},
  outputSchema:{...list.outputSchema,properties:{...list.outputSchema.properties,
   requests:{type:'array',items:{type:'object',properties:{
@@ -126,7 +128,7 @@ const workflowList={
    status:{const:'registered'},registeredAt:{type:'integer',minimum:0},sourceId:{const:'space'},sourceKey:{type:'string',pattern:spaceQueueIdPattern},
   },required:workflowFields,additionalProperties:false}},
  }},
- annotations:list.annotations,
+ annotations:{...list.annotations,readOnlyHint:false},
 };
 const updateStatus={
  name:updateStatusTool,description:'Record an allowed workflow status transition for one exact official request.',

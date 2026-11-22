@@ -25,6 +25,8 @@ const workflowFamilies=new Map([
 export const workflowScopeSql='('+[...workflowFamilies].map(([type,{schemas}])=>
  "(request_type='"+type+"' AND schema_version IN ("+schemas.map(schema=>"'"+schema+"'").join(',')+"))").join(' OR ')+')';
 
+export const knownWorkflowSchema=(type,schema)=>workflowFamilies.get(type)?.schemas.includes(schema)===true;
+
 export function canonicalWorkflowPayload(body,projectId,type,schema){
  const known=workflowFamilies.get(type);
  if(!known||!known.schemas.includes(schema)||body?.schemaVersion!==schema)
