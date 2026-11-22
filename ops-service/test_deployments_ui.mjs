@@ -7,7 +7,7 @@ const code=readFileSync(new URL('./deployments.js',import.meta.url),'utf8');
 const csrf='f'.repeat(64),a='a'.repeat(40),b='b'.repeat(40);
 const date='2026-11-21T18:01:02Z',newDate='2026-11-21T18:08:15Z';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-const layout={ngs:['ngs-local','ngs-space'],services:['request-service','rs-mcp','workflow-planner','backend-stack'],
+const layout={ngs:['ngs-local','ngs-space'],services:['request-service','rs-mcp','workflow-planner','filex-writer','backend-stack'],
  workers:['worker-document','worker-file','worker-image','worker-animation','worker-postprocess','worker-audio']};
 function data({all=true,running=false,compare=null}={}){
  const groups=Object.entries(layout).map(([id,targets])=>({id,label:id,targets:[...targets],canDeploy:true}));
@@ -38,7 +38,7 @@ function fixtures(fetcher,extras={}){
  const row=target=>find(of('deploy-groups'),n=>n.dataset.deployTarget===target);
  return {of,row,find,hits,scheduled};
 }
-test('grouped page shows 12 known deploy targets and verified evidence only; OPS cannot become a target',async()=>{
+test('grouped page shows 13 known deploy targets and verified evidence only; OPS cannot become a target',async()=>{
  const model=data(),fake={id:'ops',label:'OPS',group:'services',state:'ready',canDeploy:true};
  model.cycle.groups.find(x=>x.id==='services').targets.push(fake.id);model.cycle.targets.push(fake);
  const app=fixtures(async()=>Response.json(model));
@@ -99,9 +99,9 @@ test('Space uses a fixed publication destination and unlinked Space cannot be de
  assert.ok(app.find(row,n=>n.textContent==='자동 게시 미연결'));
  assert.equal(app.find(row,n=>n.textContent.includes('untrusted.example')),undefined);
  assert.equal(app.find(row,n=>n.tag==='button').disabled,true);
- assert.equal(app.of('deploy-all').disabled,true);
+ assert.equal(app.of('deploy-all').disabled,false);
  assert.match(app.find(app.of('deploy-groups'),n=>n.className.includes('deploy-comparison')).textContent,/로컬 코드 차이/);
- app.find(row,n=>n.tag==='button').fire('click');app.of('deploy-all').fire('click');
+ app.find(row,n=>n.tag==='button').fire('click');
  assert.equal(app.hits.length,1);
  space.state='ready';
  app.of('deploy-refresh').fire('click');await flush();
@@ -110,7 +110,7 @@ test('Space uses a fixed publication destination and unlinked Space cannot be de
  assert.equal(app.find(app.row('ngs-space'),n=>n.tag==='button').disabled,false);
 });
 
-test('verified Space thread handoff is manual only and keeps all deployment disabled',async()=>{
+test('verified Space thread handoff stays separate without blocking ready bulk deployment',async()=>{
  const model=data(),space=model.cycle.targets.find(x=>x.id==='ngs-space');
  const url='https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef';
  space.state='not_configured';space.canDeploy=false;
@@ -122,7 +122,7 @@ test('verified Space thread handoff is manual only and keeps all deployment disa
  const button=app.find(app.row('ngs-space'),n=>n.tag==='button');
  assert.equal(button.disabled,false);
  assert.equal(button.textContent,'배포 스레드에 전달');
- assert.equal(app.of('deploy-all').disabled,true);
+ assert.equal(app.of('deploy-all').disabled,false);
  button.fire('click');await flush();
  assert.deepEqual(opens,[[url,'_blank','noopener,noreferrer']]);
  assert.deepEqual(copies,['NGS Space를 pvenus/ngs-platform 커밋 '+a+'로 게시해 주세요. 게시 대상: vinus-npcgen.park-venus0518.chatgpt.site.']);
@@ -184,7 +184,7 @@ test('Space queue submits only the verified candidate and presents publication l
  const row=()=>app.row('ngs-space'),button=()=>app.find(row(),n=>n.tag==='button');
  assert.equal(button().textContent,'스페이스 게시 요청');assert.equal(button().disabled,false);
  assert.ok(app.find(row(),n=>n.textContent==='게시 후보: '+b));
- assert.equal(app.of('deploy-all').disabled,true);
+ assert.equal(app.of('deploy-all').disabled,false);
  button().fire('click');await flush();
  const [[url,opts]]=app.hits.filter(([,o])=>o.method==='POST');
  assert.equal(url,'/api/deployments');assert.equal(opts.headers['X-OPS-Deploy-CSRF'],csrf);
@@ -256,4 +256,14 @@ test('only the exact failed Local candidate offers a distinct retry action and d
  local.retry={sha:b,previousAttemptId:'initial'};
  app.of('deploy-refresh').fire('click');await flush();
  assert.equal(app.find(app.row('ngs-local'),n=>n.tag==='button').disabled,true);
+});
+
+test('bulk stays disabled when there are no ordinary ready targets',async()=>{
+ const model=data({all:false});
+ for(const item of model.cycle.targets)item.canDeploy=false;
+ const app=fixtures(async()=>Response.json(model));
+ await flush();
+ assert.equal(app.of('deploy-all').disabled,true);
+ app.of('deploy-all').fire('click');await flush();
+ assert.equal(app.hits.filter(([,o])=>o.method==='POST').length,0);
 });

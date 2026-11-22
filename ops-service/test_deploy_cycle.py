@@ -46,26 +46,28 @@ class Cycle(unittest.TestCase):
         self.fail('worker did not finish')
     def target(self,cycle,id):
         return next(r for r in cycle.status()['targets'] if r['id']==id)
-    def test_exact_inventory_and_all_preflight_never_partial_if_one_missing(self):
+    def test_bulk_uses_only_ready_rows_and_does_not_include_space(self):
         c=C.DeploymentCycle(self.root,runner=self.receipt)
         self.assertEqual({r['id'] for r in c.status()['targets']},C.IDS)
-        self.assertEqual(len(C.IDS),12)
+        self.assertEqual(len(C.IDS),13)
         self.assertNotIn('ops',C.IDS)
-        for id in C.IDS-{'ngs-space'}:self.stage(id)
+        target='worker-document'
+        self.stage(target)
         self.assertFalse(c.status()['allReady'])
-        with self.assertRaises(Rejected) as r:c.trigger('all')
-        self.assertEqual(r.exception.status,503)
-        self.assertEqual(self.hits,[])
+        self.assertTrue(c.status()['canDeployAll'])
+        c.trigger('all');self.drain(c)
+        self.assertEqual(self.hits,[(target,A)])
+        self.assertFalse(c.status()['canDeployAll'])
         with self.assertRaises(Rejected):c.trigger('ops')
         self.stage('ngs-space')
-        self.assertTrue(c.status()['allReady'])
-        c.trigger('all')
-        self.drain(c)
-        self.assertTrue(all(r['state']=='current' for r in c.status()['targets']))
-        self.assertEqual([key for key,_ in self.hits],c._selection('all'))
-        self.assertEqual(c.status()['comparison'],'match') # provider SHA is independent
-        c.trigger('all');c.sweep()
-        self.assertEqual(len(self.hits),12)
+        self.assertTrue(self.target(c,'ngs-space')['canDeploy'])
+        self.assertFalse(c.status()['canDeployAll'])
+        c.trigger('all');self.drain(c)
+        self.assertEqual(self.hits,[(target,A)])
+        for id in C.IDS-{'ngs-space',target}:self.stage(id)
+        c.trigger('all');self.drain(c)
+        self.assertEqual(set(key for key,_ in self.hits),C.IDS-{'ngs-space'})
+        self.assertFalse(c.status()['canDeployAll'])
     def test_failed_candidate_does_not_repeat_and_honors_new_verified_ref(self):
         id='worker-document';folder=self.stage(id)
         def fail(d,r):
@@ -104,10 +106,11 @@ class Cycle(unittest.TestCase):
         (t/'run-once').write_bytes(b'unexpected')
         self.assertFalse(c.status()['allReady'])
         self.assertEqual(self.target(c,'ngs-space')['state'],'not_configured')
-        with self.assertRaises(Rejected):c.trigger('all')
-        self.assertEqual(self.hits,[])
+        self.assertTrue(c.status()['canDeployAll'])
+        c.trigger('all');self.drain(c)
+        self.assertNotIn('ngs-space',{key for key,_ in self.hits})
         C.persist(t/'observed.json',{'sha':A,'deploymentId':'native.one','providerSha':B,'deployedAt':STAMP})
-        C.persist(self.root/'targets'/'ngs-local'/'observed.json',{'sha':B,'deployedAt':STAMP})
+        C.persist(self.root/'targets'/'ngs-local'/'observed.json',{'sha':B,'deployedAt':'2026-11-22T23:59:59Z'})
         self.assertEqual(c.status()['comparison'],'mismatch')
         self.assertIsNone(self.target(c,'ngs-space')['candidateSha'])
     def test_running_job_exclusive_and_orphan_blocks_new_targets(self):
@@ -164,7 +167,8 @@ class Cycle(unittest.TestCase):
         C.persist(file,data)
         self.assertEqual(c.status()['preparation'],{'checkedAt':STAMP,'targets':data['targets']})
         self.assertFalse(self.target(c,'worker-audio')['canDeploy'])
-        self.assertNotIn('filex-writer',C.IDS)
+        self.assertIn('filex-writer',C.IDS)
+        self.assertFalse(self.target(c,'filex-writer')['canDeploy'])
         with self.assertRaises(Rejected):c.trigger('filex-writer')
         for invalid in ({**data,'token':'never return token'},
                         {**data,'targets':{'worker-audio':{'state':'blocked','code':'/Users/private'}}},

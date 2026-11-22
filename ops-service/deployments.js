@@ -9,7 +9,7 @@ const stateLabels={
 };
 const groupLayout={
  ngs:{label:'NGS',targets:[['ngs-local','로컬'],['ngs-space','스페이스']]},
- services:{label:'서비스',targets:[['request-service','RS'],['rs-mcp','RS-MCP'],['workflow-planner','Workflow Planner'],['backend-stack','백엔드 스택 · PDS 포함']]},
+ services:{label:'서비스',targets:[['request-service','RS'],['rs-mcp','RS-MCP'],['workflow-planner','Workflow Planner'],['filex-writer','Filex 저장기'],['backend-stack','백엔드 스택 · PDS 포함']]},
  workers:{label:'워커',targets:[['worker-document','문서'],['worker-file','파일'],['worker-image','이미지'],
   ['worker-animation','애니메이션'],['worker-postprocess','후처리'],['worker-audio','음악']]},
 };
@@ -204,13 +204,6 @@ function groupSection(id,layout,value,targets){
   }else button.addEventListener('click',()=>void deploy(target,button));
   row.append(name,stateCell,evidenceCell(item?.observed),action);body.append(row);
  }
- if(id==='services'){
-  const filex=preparationText(value.preparation?.targets?.['filex-writer']);
-  if(filex){
-   const row=node('tr'),label=node('th','Filex 저장기');label.scope='row';
-   row.append(label,node('td',filex),node('td',''),node('td','배포 경로 미설정'));body.append(row);
-  }
- }
  return section;
 }
 function acceptTargets(value,observed){
@@ -239,7 +232,7 @@ function render(response){
  current={value,targets};rowButtons=new Map();
  gate.hidden=true;details.hidden=false;
  groupsNode.replaceChildren(...Object.entries(groupLayout).map(([id,layout])=>groupSection(id,layout,value,targets)));
- all.disabled=active||value.canDeployAll!==true||spacePublicationUnlinked(targets.get('ngs-space'));
+ all.disabled=active||value.canDeployAll!==true;
  if(focusTarget&&!rowButtons.get(focusTarget)?.disabled)rowButtons.get(focusTarget)?.focus();
  return [...targets.values()].some(item=>['running','queued'].includes(item.state))||spacePublication(targets.get('ngs-space'))?.busy===true;
 }
@@ -280,7 +273,7 @@ async function deploy(target,button){
  const {value,targets}=current;
  if(target==='all'?value.canDeployAll!==true:targets.get(target)?.canDeploy!==true)return;
  await submitDeployment({action:'wake',target},
-  target==='all'?'모든 대상의 배포를 요청하는 중입니다.':'선택한 대상의 배포를 요청하는 중입니다.');
+  target==='all'?'배포 가능한 대상만 요청하는 중입니다.':'선택한 대상의 배포를 요청하는 중입니다.');
 }
 async function submitDeployment(payload,message){
  const csrf=current.value.csrf;

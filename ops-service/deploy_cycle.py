@@ -19,7 +19,7 @@ from release_equivalence import equivalent_release
 TARGETS=(
     ('ngs-local','로컬','ngs'),('ngs-space','스페이스','ngs'),
     ('request-service','Request Service','services'),('rs-mcp','RS-MCP','services'),('workflow-planner','Workflow Planner','services'),
-    ('backend-stack','백엔드 스택','services'),
+    ('filex-writer','Filex 저장기','services'),('backend-stack','백엔드 스택','services'),
     ('worker-document','문서 워커','workers'),('worker-image','이미지 워커','workers'),
     ('worker-animation','애니메이션 워커','workers'),('worker-postprocess','후처리 워커','workers'),
     ('worker-audio','오디오 워커','workers'),('worker-file','파일 워커','workers'),
@@ -541,7 +541,10 @@ class DeploymentCycle:
             row['state'] not in ('running','failed','unknown') for row in (local,space)):
             compare='match' if local['observed']['sha']==space['observed']['sha'] else 'mismatch'
         all_ready=bool(not (locked or journal) and all(ready.values()))
-        return ({'groups':groups,'targets':rows,'allReady':all_ready,'canDeployAll':all_ready,
+        # Space publication and Local same-version retries have independent
+        # approval paths; bulk cutover covers only actionable ordinary rows.
+        can_deploy_all=any(r['id']!='ngs-space' and r['canDeploy'] for r in rows)
+        return ({'groups':groups,'targets':rows,'allReady':all_ready,'canDeployAll':can_deploy_all,
                  'active':active,'comparison':compare,**({'preparation':preparation} if preparation else {})},
                 plans,bool(journal or locked))
 
@@ -614,17 +617,20 @@ class DeploymentCycle:
             status,plans,blocked=self._snapshot()
             if blocked:
                 reject(409,'OPS_DEPLOY_CYCLE_BUSY_OR_UNVERIFIED')
-            if not all(key in plans for key in targets):
+            if selection=='all':
+                targets=[key for key in targets if key!='ngs-space' and key in plans]
+            elif not all(key in plans for key in targets):
                 reject(503,'OPS_DEPLOY_TARGETS_UNAVAILABLE')
             staged=[(key,plans[key][0],plans[key][1]) for key in targets
                     if plans[key][2]=='ready' and not (automatic and plans[key][0].get('manualOnly') is True)]
             if not staged:return status
+            expected=[row[0] for row in staged] if selection=='all' else targets
             fd=None
             try:
                 fd=self._executor_lock()
                 # Another process could have published a journal since selection.
                 _,fresh,blocked=self._snapshot()
-                if blocked or any(fresh.get(key)!=plans[key] for key in targets):
+                if blocked or any(fresh.get(key)!=plans[key] for key in expected):
                     reject(409,'OPS_DEPLOY_CYCLE_PLAN_CHANGED')
                 job={'schemaVersion':ACTIVE,'selection':selection,'targets':[row[0] for row in staged],'startedAt':now()}
                 persist(self.root/'active.json',job)
