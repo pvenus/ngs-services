@@ -55,9 +55,10 @@ const audioPayload={type:'object',properties:{
  schemaVersion:{const:audioSchema},projectId:{const:'binari'},kind:{const:audioKind},
  title:{type:'string',minLength:1,maxLength:audioTitleLimit},conceptId:{type:'string',pattern:audioConceptIdPattern},
  brief:{type:'string',minLength:1,maxLength:audioBriefLimit},text:{type:'string',maxLength:audioVocalTextLimit},
+ targetDurationSeconds:{const:60},
  durationSeconds:{anyOf:[{type:'number',minimum:audioDuration.min,maximum:audioDuration.max},{type:'null'}]},
  },required:['schemaVersion','projectId','kind','title','conceptId','brief','text','durationSeconds'],additionalProperties:false,
- allOf:[{if:{properties:{durationSeconds:{type:'number'}}},then:{properties:{text:{const:''}}}}]};
+ allOf:[{if:{properties:{durationSeconds:{type:'number'}}},then:{properties:{text:{const:''}},not:{required:['targetDurationSeconds']}}}]};
 const audioDeletePayload={type:'object',properties:{
  schemaVersion:{const:audioDeleteSchema},projectId:{const:'binari'},officialRequestId:{type:'string',pattern:audioOfficialIdPattern,minLength:81,maxLength:81},
  },required:['schemaVersion','projectId','officialRequestId'],additionalProperties:false};

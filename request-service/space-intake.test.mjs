@@ -134,3 +134,17 @@ test('Space intake shares typed NPC/Concept validators and Planner claim shape',
   assert.ok(buildPlan(request).tasks.length>0);
  }
 });
+
+test('local official registration and Planner preserve automatic 60-second target only when requested',async t=>{
+ const {call}=await fixture(t);
+ const submit=(id,payload)=>call('request_submit',{sourceId:'local',requestType:'audio.generate',idempotencyKey:id,payload});
+ const exact={...generated,targetDurationSeconds:60};
+ assert.equal((await submit('opt-in',exact)).status,'registered');
+ assert.equal((await submit('legacy',generated)).status,'registered');
+ for(const [i,change] of [{targetDurationSeconds:59},{targetDurationSeconds:null},{durationSeconds:10}].entries())
+  assert.equal((await submit('bad-'+i,{...exact,...change})).status,400);
+ const {requests}=await call('request_workflow_list',{});
+ const {buildPlan}=await import('../workflow-planner/planner.mjs');
+ for(const row of requests)assert.equal(buildPlan(row).tasks[0].type,'audio.generate');
+ assert.deepEqual(requests.map(r=>r.payload.targetDurationSeconds).sort(),[60,undefined]);
+});

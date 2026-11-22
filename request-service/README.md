@@ -127,3 +127,9 @@ The client can only call the fixed approved Site's HTTPS
 `/api/space-machine-mcp` machine endpoint, uses the existing platform service
 authorization and distinct machine token, and does not follow redirects.
 Without explicit enablement, the ordinary local launcher contract is unchanged.
+
+
+The optional `targetDurationSeconds: 60` is valid only on `audio.generate`
+with `durationSeconds: null`. Registration preserves the target in the
+official request digest. It is a composition target, not a minimum publication
+length; existing audio generation and Filex result formats are unchanged.

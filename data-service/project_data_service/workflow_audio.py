@@ -30,12 +30,16 @@ def need(ok):
 
 def payload(value):
     def text(v,n):return type(v) is str and 1<=len(v)<=n and v==v.strip(JS_TRIM) and not CONTROL.search(v)
-    need(type(value) is dict and set(value)=={'schemaVersion','projectId','kind','title','conceptId','brief','text','durationSeconds'}
+    fields={'schemaVersion','projectId','kind','title','conceptId','brief','text','durationSeconds'}
+    need(type(value) is dict and set(value)-{'targetDurationSeconds'}==fields
          and value['schemaVersion']==PAYLOAD and value['projectId']=='binari'
          and value['kind']=='bgm' and text(value['title'],120)
          and not re.search(r'[\t\r\n\u2028\u2029]',value['title']) and match(value['conceptId'],CID)
          and text(value['brief'],4000))
     duration=value['durationSeconds']
+    if 'targetDurationSeconds' in value:
+        target=value['targetDurationSeconds']
+        need(duration is None and type(target) is int and target==60)
     need((value['text']=='' or text(value['text'],4000)) if duration is None else
          value['text']=='' and type(duration) in (int,float) and 10<=duration<=30)
     return value
