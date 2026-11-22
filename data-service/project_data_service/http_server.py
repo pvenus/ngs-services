@@ -64,8 +64,8 @@ class Handler(DomainHandler):
         from .single_target_delete import PATH as single_delete_path,serve as single_delete
         if media_path==single_delete_path:return single_delete(self)
 
-        from .workflow_motion_2d import PATH as motion_2d_path,serve as motion_2d
-        if media_path in (motion_2d_path,motion_2d_path+'/read'):return motion_2d(self)
+        from .workflow_motion_2d import ROUTES as motion_2d_routes,serve as motion_2d
+        if media_path in motion_2d_routes:return motion_2d(self)
 
         from .workflow_audio import PATH as audio_workflow_path,serve as audio_workflow
         if media_path in (audio_workflow_path,audio_workflow_path+'/read'):return audio_workflow(self)

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import zlib
 
@@ -30,11 +31,11 @@ SOURCE='walk'
 TARGET='walk-stylized-2d'
 
 
-def png(rgb):
+def png(rgb,width=1,height=1):
     def part(tag,value):
         return struct.pack('!I',len(value))+tag+value+struct.pack('!I',zlib.crc32(tag+value))
-    return m.PNG+part(b'IHDR',struct.pack('!IIBBBBB',1,1,8,2,0,0,0))+part(
-        b'IDAT',zlib.compress(b'\0'+rgb))+part(b'IEND',b'')
+    return m.PNG+part(b'IHDR',struct.pack('!IIBBBBB',width,height,8,2,0,0,0))+part(
+        b'IDAT',zlib.compress((b'\0'+rgb*width)*height))+part(b'IEND',b'')
 
 
 def asset(raw):
@@ -76,7 +77,7 @@ s.serve_forever()
         self.db.chmod(0o600)
         self.record('INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,?,?)',
                     (OID,'binari',m.REQUEST,m.SCHEMA,canonical(self.pdu).decode(),self.hash,'planned',None,1000))
-        for k in (m.IMAGE,m.FINAL,*[m.task_key(d) for d in m.DIRECTIONS]):
+        for k in m.TASKS:
             kind,worker=m.type_for(k)
             self.record('INSERT INTO workflow_tasks VALUES(?,?,?,?,?,?,?,?,?,?)',(m.task_id(OID,k),OID,k,kind,worker,
                 canonical(m.expected_input(self.pdu,OID,k)).decode(),m.expected_parent(OID,k),'pending',None,1001))
@@ -96,7 +97,7 @@ s.serve_forever()
         self.source_file=outlines/'presets'/f'{SOURCE}.json'
         self.source_bytes=self.source_file.read_bytes()
         s=self.db.stat()
-        self.media={'frames':3,'fps':6,'duration':.5,'width':16,'height':16}
+        self.media={'frames':3,'fps':6,'duration':.5,'width':1,'height':1}
         service=m.WorkflowMotion2D(self.motion,PrivatePlannerClaim(str(self.db),s.st_dev,s.st_ino),
                                     self.root/'temp-stage',lambda p:self.media)
         class QuietHandler(Handler):
@@ -124,15 +125,18 @@ s.serve_forever()
         return {'officialRequestId':OID,'taskId':m.task_id(OID,k),'projectId':'binari',
                  'payloadSha256':self.hash,'claimStamp':1001}
 
-    def request(self,body=None,*,read=False,headers=None,status=200):
+    def request(self,body=None,*,read=False,headers=None,status=200,path=None):
         c=HTTPConnection('127.0.0.1',self.port,timeout=12)
         try:
-            raw=None if body is None else canonical(body)
-            c.request('GET' if body is None else 'POST',m.PATH+('/read' if read else ''),body=raw,
-                      headers={'Content-Type':'application/json',**(headers or {})})
-            reply=c.getresponse();data=json.loads(reply.read())
-            self.assertEqual(reply.status,status,data)
-            return data
+            raw=body if body is None or type(body) is bytes else canonical(body)
+            c.request('GET' if body is None else 'POST',path or m.PATH+('/read' if read else ''),body=raw,
+                      headers={'Content-Type':'application/octet-stream' if type(body) is bytes else 'application/json',**(headers or {})})
+            reply=c.getresponse();data=reply.read()
+            self.assertEqual(reply.status,status,data[:512])
+            if reply.getheader('Content-Type')=='application/octet-stream':
+                self.assertEqual(int(reply.getheader('Content-Length')),len(data))
+                return data
+            return json.loads(data)
         finally:
             c.close()
 
@@ -145,24 +149,48 @@ s.serve_forever()
         self.state(m.IMAGE,'completed',reply['resultRef'])
         return image
 
-    def clips(self,*,omit=None):
-        image=self.initialize()
-        for d in m.DIRECTIONS:
-            if d==omit:continue
-            key=m.task_key(d);self.state(key,'running')
-            claim=self.claim(key)
+    def upload_payload(self,claim,frames,records=None):
+        if records is None:
+            records=[{'bytes':len(x),'sha256':m.sha(x)} for x in frames]
+        return m.framing(canonical({'claim':claim,'frames':records}))+b''.join(frames)
+
+    def stage_frames(self,d,image=None):
+        key=m.frames_key(d);self.state(key,'running')
+        claim=self.claim(key)
+        if image:
             read=self.request({'claim':claim},read=True)
             self.assertEqual(set(read),{'direction','sourcePresetHash','reference','image'})
             self.assertEqual(read['direction'],d)
             self.assertEqual(read['sourcePresetHash'],digest(self.source))
             self.assertEqual(base64.b64decode(read['reference']['base64']),self.original[d])
             self.assertEqual(read['image'],{**asset(image),'bytes':len(image)})
-            ref=self.request({'claim':claim,'artifact':asset(self.clip[d])})['resultRef']
+        frames=[png(bytes((i,2,3))) for i in range(3)]
+        binary=self.upload_payload(claim,frames)
+        ref=self.request(binary,path=m.FRAMES)
+        self.assertEqual(ref,self.request(binary,path=m.FRAMES))
+        records=[{'bytes':len(x),'sha256':m.sha(x)} for x in frames]
+        meta={'direction':d,'sourcePresetHash':digest(self.source),'width':1,'height':1,'frames':records}
+        self.assertEqual(ref,{'ok':True,'resultRef':'motion.2d.frames.'+d+'.'+digest(meta)})
+        self.state(key,'completed',ref['resultRef'])
+        enc=m.encode_key(d);self.state(enc,'running')
+        response=self.request({'claim':self.claim(enc)},path=m.FRAME_READ)
+        size=struct.unpack_from('!I',response)[0]
+        self.assertEqual(json.loads(response[4:4+size]),{**meta,'fps':6})
+        self.assertEqual(response[4+size:],b''.join(frames))
+
+    def clips(self,*,omit=None):
+        image=self.initialize()
+        for d in m.DIRECTIONS:
+            if d==omit:continue
+            self.stage_frames(d,image)
+            key=m.encode_key(d)
+            ref=self.request({'claim':self.claim(key),'artifact':asset(self.clip[d])})['resultRef']
             self.assertEqual(ref,'motion.2d.clip.'+d+'.'+m.sha(self.clip[d]))
             self.state(key,'completed',ref)
 
-    def test_actual_http_single_image_eight_clips_atomic_distinct_publication_and_replay(self):
+    def test_actual_http_single_image_eight_frame_packets_and_clips_atomic_distinct_publication_and_replay(self):
         self.assertEqual(self.request(),{'enabled':True,'schemaVersion':'workflow.motion-preset-convert-2d.v1'})
+        self.assertEqual(self.request(path=m.FRAMES),{'enabled':True,'schemaVersion':'workflow.motion-preset-convert-2d.frames.v1'})
         self.clips()
         self.assertEqual(len(self.motion.list()['presets']),1)
         self.state(m.FINAL,'running')
@@ -299,7 +327,8 @@ s.serve_forever()
 
     def test_stale_clip_during_slow_probe_never_commits_local_intermediate(self):
         self.initialize()
-        k=m.task_key('ne');self.state(k,'running')
+        self.stage_frames('ne')
+        k=m.encode_key('ne')
         def lost_during_decoding(_):
             with sqlite3.connect(self.db,timeout=.2) as other:
                 other.execute('UPDATE workflow_tasks SET updated_at=updated_at+1 WHERE task_key=?',(k,))
@@ -308,6 +337,85 @@ s.serve_forever()
         self.request({'claim':self.claim(k),'artifact':asset(self.clip['ne'])},status=422)
         self.assertFalse((self.root/'temp-stage'/OID/'ne.mp4').exists())
         self.assertEqual([p['presetId'] for p in self.motion.list()['presets']],[SOURCE])
+
+    def test_binary_frame_handoff_denies_foreign_stale_geometry_tamper_and_old_dispatch(self):
+        self.initialize()
+        k=m.frames_key('w'); enc=m.encode_key('w')
+        self.state(k,'running')
+        claim=self.claim(k)
+        good=[png(bytes((i,2,3))) for i in range(3)]
+        packet=self.upload_payload(claim,good)
+        self.request(packet,path=m.FRAMES,headers={'Origin':'http://foreign.invalid'},status=403)
+        self.request(packet,path=m.FRAMES,headers={'Content-Encoding':'gzip'},status=403)
+        self.request({'claim':claim,'artifact':asset(self.clip['w'])},status=422)
+        self.request(packet,path=m.FRAMES+'/no',status=405)
+        self.request(packet+b'x',path=m.FRAMES,status=422)
+        self.request(self.upload_payload({**claim,'claimStamp':1000},good),path=m.FRAMES,status=422)
+        self.request(self.upload_payload(claim,good[:-1]),path=m.FRAMES,status=422)
+        self.request(self.upload_payload(claim,[*good[:-1],png(b'\1\2\3',2)]),path=m.FRAMES,status=422)
+        self.request(packet[:-1]+bytes([packet[-1]^1]),path=m.FRAMES,status=422)
+        self.assertFalse((self.root/'temp-stage'/OID/'w.frames').exists())
+        self.state(enc,'running')
+        self.request({'claim':self.claim(enc)},path=m.FRAME_READ,status=422)
+        self.request(self.upload_payload(self.claim(enc),good),path=m.FRAMES,status=422)
+        ref=self.request(packet,path=m.FRAMES)['resultRef']
+        self.request(self.upload_payload(claim,list(reversed(good))),path=m.FRAMES,status=422)
+        self.state(k,'completed',ref.rsplit('.',1)[0]+'.'+'f'*64)
+        self.request({'claim':self.claim(enc)},path=m.FRAME_READ,status=422)
+        self.state(k,'completed',ref)
+        self.request({'claim':self.claim(enc)},path=m.FRAME_READ)
+        self.media={**self.media,'width':2}
+        self.request({'claim':self.claim(enc),'artifact':asset(self.clip['w'])},status=422)
+        self.assertFalse((self.root/'temp-stage'/OID/'w.mp4').exists())
+        # A historical in-flight combined clip is not executable on this
+        # release even if its old row/claim is otherwise plausible.
+        old='motion_2d_e'
+        inp={'sourcePresetId':SOURCE,'variantPresetId':TARGET,'direction':'e'}
+        self.record('INSERT INTO workflow_tasks VALUES(?,?,?,?,?,?,?,?,?,?)',
+            (m.task_id(OID,old),OID,old,m.REQUEST+'.clip','animation',
+             canonical(inp).decode(),m.task_id(OID,m.IMAGE),'running',None,1001))
+        self.request({'claim':self.claim(old)},read=True,status=422)
+
+    def test_stalled_binary_upload_does_not_hold_sqlite_or_other_direction_and_stale_cannot_commit(self):
+        self.initialize()
+        slow=m.frames_key('n'); other=m.frames_key('ne')
+        self.state(slow,'running');self.state(other,'running')
+        frames=[png(bytes((i,2,3))) for i in range(3)]
+        raw=self.upload_payload(self.claim(slow),frames)
+        conn=HTTPConnection('127.0.0.1',self.port,timeout=8)
+        self.addCleanup(conn.close)
+        conn.putrequest('POST',m.FRAMES)
+        conn.putheader('Content-Length',str(len(raw)))
+        conn.putheader('Content-Type','application/octet-stream')
+        conn.endheaders()
+        conn.send(raw[:-len(frames[-1])])
+        folder=self.root/'temp-stage'/OID
+        deadline=time.monotonic()+4
+        while not list(folder.glob('.frames-*')) and time.monotonic()<deadline:
+            time.sleep(.01)
+        self.assertTrue(list(folder.glob('.frames-*')))
+        with sqlite3.connect(self.db,timeout=.2) as writer:
+            writer.execute('UPDATE workflow_tasks SET updated_at=updated_at+1 WHERE task_key=?',(slow,))
+        # Per-direction locks, not the request-wide lock: NE can commit while
+        # N is still waiting on its binary body.
+        result=self.request(self.upload_payload(self.claim(other),frames),path=m.FRAMES)
+        self.assertTrue(result['resultRef'].startswith('motion.2d.frames.ne.'))
+        conn.send(raw[-len(frames[-1]):])
+        r=conn.getresponse()
+        self.assertEqual(r.status,422)
+        self.assertEqual(json.loads(r.read()),{'error':'MOTION_2D_REJECTED'})
+        self.assertFalse((folder/'n.frames').exists())
+        self.assertTrue((folder/'ne.frames').exists())
+        self.assertEqual(list(folder.glob('.frames-*')),[])
+
+    def test_binary_frame_limits_are_independent_of_header_and_require_exact_counts(self):
+        row={'bytes':m.MAX_FRAME,'sha256':'a'*64}
+        self.assertEqual(m.frame_sizes([row]*8,8),m.MAX_PACK)
+        self.assertEqual(m.frame_sizes([{**row,'bytes':1}]*1000,1000),1000)
+        for rows,count in (([row]*9,9),([row]*2,3),([{**row,'bytes':True}]*2,2),
+                           ([{**row,'bytes':m.MAX_FRAME+1}]*2,2),(list([row]*1001),1001)):
+            with self.assertRaises(m.Rejected):
+                m.frame_sizes(rows,count)
 
     def test_only_output_is_bounded_to_eight_mib(self):
         data=b'x'*(8*1024*1024)
@@ -333,14 +441,15 @@ s.serve_forever()
         self.state(m.FINAL,'running')
         body={'claim':self.claim(m.FINAL),'artifact':{}}
         self.request(body,status=422)
-        key=m.task_key('nw');self.state(key,'running')
+        self.stage_frames('nw')
+        key=m.encode_key('nw')
         art={'claim':self.claim(key),'artifact':asset(self.clip['nw'])}
         self.media={**self.media,'frames':2}
         self.request(art,status=422)
         self.media={**self.media,'frames':3}
         res=self.request(art)
         self.state(key,'completed',res['resultRef'])
-        self.state(m.task_key('w'),'completed','motion.2d.clip.w.'+'1'*64)
+        self.state(m.encode_key('w'),'completed','motion.2d.clip.w.'+'1'*64)
         self.request(body,status=422)
         self.assertEqual(len(self.motion.list()['presets']),1)
 

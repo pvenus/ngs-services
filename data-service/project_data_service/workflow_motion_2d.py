@@ -24,6 +24,10 @@ PATH = '/v1/motion-presets/workflow-convert-2d'
 REQUEST = 'motion-preset.convert-2d'
 SCHEMA = 'ngs.motion-preset-convert-2d.v1'
 CAPABILITY = 'workflow.motion-preset-convert-2d.v1'
+FRAME_CAPABILITY = 'workflow.motion-preset-convert-2d.frames.v1'
+FRAMES = PATH+'/frames'
+FRAME_READ = FRAMES+'/read'
+ROUTES = (PATH, PATH+'/read', FRAMES, FRAME_READ)
 IMAGE = 'motion_2d_image'
 FINAL = 'motion_2d_finalize'
 DIRECTIONS = ('n','ne','e','se','s','sw','w','nw')
@@ -37,6 +41,11 @@ JS_TRIM = '\t\n\r\v\f \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u20
 MAX_IMAGE = 8*1024*1024
 MAX_REFERENCE = 64*1024*1024
 MAX_OUTPUT = 8*1024*1024
+MAX_FRAME = 8*1024*1024
+MAX_PACK = 64*1024*1024
+MAX_FRAMES = 1000
+MAX_HEADER = 128*1024
+MAX_PACKET = 4+MAX_HEADER+MAX_PACK
 MAX_BODY = ((max(MAX_IMAGE,MAX_OUTPUT)+2)//3)*4+8192
 PNG = b'\x89PNG\r\n\x1a\n'
 
@@ -62,14 +71,26 @@ def task_id(oid,key):
     return 'workflow.task.'+digest([oid,key])
 
 
-def task_key(direction):
-    return 'motion_2d_'+direction
+def frames_key(direction):
+    return 'motion_2d_frames_'+direction
+
+
+def encode_key(direction):
+    return 'motion_2d_encode_'+direction
+
+
+FRAME_DIRECTIONS = {frames_key(d):d for d in DIRECTIONS}
+ENCODE_DIRECTIONS = {encode_key(d):d for d in DIRECTIONS}
+ALL_DIRECTIONS = {**FRAME_DIRECTIONS, **ENCODE_DIRECTIONS}
+TASKS = (IMAGE, FINAL, *ALL_DIRECTIONS)
 
 
 def type_for(key):
     if key==IMAGE:return REQUEST+'.image','image'
-    if key==FINAL:return REQUEST+'.finalize','animation'
-    return REQUEST+'.clip','animation'
+    if key==FINAL:return REQUEST+'.finalize','postprocess'
+    if key in FRAME_DIRECTIONS:return REQUEST+'.frames','animation'
+    require(key in ENCODE_DIRECTIONS)
+    return REQUEST+'.encode','postprocess'
 
 
 def payload(value):
@@ -86,13 +107,15 @@ def payload(value):
 def expected_input(value,oid,key):
     source={'sourcePresetId':value['sourcePresetId'],'variantPresetId':value['variantPresetId']}
     if key==FINAL:
-        return {**source,'dependsOnTaskIds':[task_id(oid,task_key(d)) for d in DIRECTIONS]}
+        return {**source,'dependsOnTaskIds':[task_id(oid,encode_key(d)) for d in DIRECTIONS]}
     if key==IMAGE:return source
-    return {**source,'direction':key.removeprefix('motion_2d_')}
+    return {**source,'direction':ALL_DIRECTIONS[key]}
 
 
 def expected_parent(oid,key):
-    return None if key in (IMAGE,FINAL) else task_id(oid,IMAGE)
+    if key in (IMAGE,FINAL):return None
+    parent=IMAGE if key in FRAME_DIRECTIONS else frames_key(ENCODE_DIRECTIONS[key])
+    return task_id(oid,parent)
 
 
 def get_row(db,oid,key):
@@ -132,7 +155,7 @@ def claimed(verifier,claim):
             and claim['projectId']=='binari' and match(claim['payloadSha256'],HASH)
             and type(claim['claimStamp']) is int and 0<=claim['claimStamp']<=SAFE_INT)
     oid=claim['officialRequestId']
-    keys={task_id(oid,k):k for k in (IMAGE,FINAL,*(task_key(d) for d in DIRECTIONS))}
+    keys={task_id(oid,k):k for k in TASKS}
     require(type(claim['taskId']) is str and claim['taskId'] in keys)
     key=keys[claim['taskId']]
     with verifier.snapshot() as db:
@@ -141,10 +164,13 @@ def claimed(verifier,claim):
         require(valid_input(row,p,oid,key) and row['status']=='running' and row['result_ref'] is None
                 and row['updated_at']==claim['claimStamp'])
         refs={}
-        if key!=IMAGE:
+        if key in FRAME_DIRECTIONS:
             refs[IMAGE]=predecessor(db,oid,p,IMAGE)
-        if key==FINAL:
-            refs.update((task_key(d),predecessor(db,oid,p,task_key(d))) for d in DIRECTIONS)
+        elif key in ENCODE_DIRECTIONS:
+            frame_key=frames_key(ENCODE_DIRECTIONS[key])
+            refs[frame_key]=predecessor(db,oid,p,frame_key)
+        elif key==FINAL:
+            refs.update((encode_key(d),predecessor(db,oid,p,encode_key(d))) for d in DIRECTIONS)
         yield oid,key,p,refs
 
 
@@ -190,7 +216,7 @@ def save(path,data,limit,guard):
 
 
 @contextmanager
-def staging(root,oid,*,create):
+def staging(root,oid,*,create,direction=None):
     if create:
         require(root.parent.resolve()==root.parent)
         root.mkdir(mode=0o700,exist_ok=True)
@@ -200,13 +226,14 @@ def staging(root,oid,*,create):
         path.mkdir(mode=0o700,exist_ok=True)
         sync(root)
     private_dir(path)
-    lock=os.open(path/'.lock',os.O_CREAT|os.O_RDWR|os.O_NONBLOCK|os.O_NOFOLLOW,0o600)
+    lockpath=path/('.lock' if direction is None else '.'+direction+'.lock')
+    lock=os.open(lockpath,os.O_CREAT|os.O_RDWR|os.O_NONBLOCK|os.O_NOFOLLOW,0o600)
     try:
         a=os.fstat(lock)
         require(stat.S_ISREG(a.st_mode) and a.st_uid==os.getuid() and a.st_nlink==1 and stat.S_IMODE(a.st_mode)==0o600)
         fcntl.flock(lock,fcntl.LOCK_EX)
         private_dir(path)
-        require((path/'.lock').lstat().st_ino==a.st_ino)
+        require(lockpath.lstat().st_ino==a.st_ino)
         yield path
     finally:
         os.close(lock)
@@ -237,7 +264,7 @@ def validate_png(data):
             require(1<=w<=4096 and 1<=h<=4096 and w*h<=8*1024*1024)
         elif chunk==b'IEND':
             require(image_data and size==0 and end==len(data))
-            return
+            return w,h
         elif chunk==b'IDAT':
             image_data |= size>0
         elif chunk in (b'IHDR',b'acTL',b'fcTL',b'fdAT'):
@@ -247,8 +274,76 @@ def validate_png(data):
 
 
 def asset_ref(key,raw):
-    stem='image' if key==IMAGE else 'clip.'+key.removeprefix('motion_2d_')
+    stem='image' if key==IMAGE else 'clip.'+ENCODE_DIRECTIONS[key]
     return 'motion.2d.'+stem+'.'+sha(raw)
+
+
+def strict_json(raw):
+    def unique(pairs):
+        result=dict(pairs)
+        require(len(result)==len(pairs))
+        return result
+    return json.loads(raw.decode('utf-8'),object_pairs_hook=unique)
+
+
+def frame_sizes(records,count):
+    require(type(records) is list and len(records)==count and 2<=count<=MAX_FRAMES)
+    total=0
+    for row in records:
+        require(type(row) is dict and set(row)=={'bytes','sha256'} and type(row['bytes']) is int
+                and 0<row['bytes']<=MAX_FRAME and match(row['sha256'],HASH))
+        total+=row['bytes']
+    require(total<=MAX_PACK)
+    return total
+
+
+def framing(raw):
+    require(0<len(raw)<=MAX_HEADER)
+    return struct.pack('!I',len(raw))+raw
+
+
+def read_exact(reader,size):
+    data=reader.read(size)
+    require(len(data)==size)
+    return data
+
+
+def incoming_header(reader,size):
+    require(4<size<=MAX_PACKET)
+    length=struct.unpack('!I',read_exact(reader,4))[0]
+    require(0<length<=MAX_HEADER and length<size-4)
+    meta=strict_json(read_exact(reader,length))
+    require(type(meta) is dict and set(meta)=={'claim','frames'})
+    return meta,size-4-length
+
+
+def frames_ref(meta):
+    proof={k:meta[k] for k in ('direction','sourcePresetHash','width','height','frames')}
+    return 'motion.2d.frames.'+proof['direction']+'.'+digest(proof)
+
+
+def packet_metadata(direction, source_hash, row, width, height, frames):
+    return dict(direction=direction,sourcePresetHash=source_hash,fps=row['fps'],
+                width=width,height=height,frames=frames)
+
+
+def verify_packet(blob,direction,source_hash,row,*,verify_frames):
+    require(len(blob)>4)
+    length=struct.unpack_from('!I',blob)[0]
+    require(0<length<=MAX_HEADER and len(blob)>4+length)
+    meta=strict_json(blob[4:4+length])
+    require(type(meta) is dict and set(meta)=={'direction','sourcePresetHash','fps','width','height','frames'})
+    require(meta==packet_metadata(direction,source_hash,row,meta['width'],meta['height'],meta['frames'])
+            and all(type(meta[k]) is int and 1<=meta[k]<=4096 for k in ('width','height'))
+            and meta['width']*meta['height']<=8*1024*1024
+            and frame_sizes(meta['frames'],row['frameCount'])==len(blob)-4-length)
+    if verify_frames:
+        offset=4+length
+        raw=memoryview(blob)
+        for item in meta['frames']:
+            require(sha(raw[offset:offset+item['bytes']])==item['sha256'])
+            offset+=item['bytes']
+    return meta
 
 
 class FFProbe:
@@ -285,9 +380,10 @@ class WorkflowMotion2D:
         require(isinstance(motion,MotionPresets) and isinstance(verifier,PrivatePlannerClaim) and callable(probe))
         self.motion,self.verifier,self.root,self.probe=motion,verifier,Path(root),probe
 
-    def capability(self):
-        with self.verifier.snapshot():self.motion.snapshot()
-        return {'enabled':True,'schemaVersion':CAPABILITY}
+    def capability(self,*,frames=False):
+        with self.verifier.snapshot():pass
+        self.motion.snapshot()
+        return {'enabled':True,'schemaVersion':FRAME_CAPABILITY if frames else CAPABILITY}
 
     def basis(self,folder,p,*,create,guard):
         snapshot=self.motion.snapshot()
@@ -302,7 +398,7 @@ class WorkflowMotion2D:
         return source_hash,source
 
     def check_clip(self,folder,key,raw,source):
-        direction=key.removeprefix('motion_2d_')
+        direction=ALL_DIRECTIONS[key]
         row=next(x for x in source['directions'] if x['direction']==direction)
         require(len(raw)>12 and raw[4:8]==b'ftyp' and sha(raw)!=row['sha256'])
         fd,tmp=tempfile.mkstemp(dir=folder,prefix='.probe-',suffix='.mp4')
@@ -311,12 +407,12 @@ class WorkflowMotion2D:
             return check_clip_timing(self.probe(Path(tmp)),row)
         finally:os.unlink(tmp)
 
-    def run(self,body,*,read,started):
-        require(type(body) is dict and set(body)==({'claim'} if read else {'claim','artifact'}))
-        claim=body['claim']
-        with claimed(self.verifier,claim) as validated:
-            expected=validated
-        oid,key,p,refs=expected
+    @contextmanager
+    def session(self,claim,*,keys,read=False):
+        # Validate and detach before taking any file lock or moving media.
+        with claimed(self.verifier,claim) as expected:
+            oid,key,p,refs=expected
+            require(key in keys)
 
         @contextmanager
         def guard():
@@ -324,10 +420,74 @@ class WorkflowMotion2D:
                 require(fresh==expected)
                 yield
 
-        # The staging lock may wait and the media/storage calls may be slow.
-        # An unrelated Planner writer must be free to commit throughout.
-        with staging(self.root,oid,create=key==IMAGE and read) as folder:
-            source_hash,source=self.basis(folder,p,create=key==IMAGE and read,guard=guard)
+        creates=key==IMAGE and read
+        with staging(self.root,oid,create=creates,direction=ALL_DIRECTIONS.get(key)) as folder:
+            source_hash,source=self.basis(folder,p,create=creates,guard=guard)
+            yield oid,key,p,refs,guard,folder,source_hash,source
+
+    @staticmethod
+    def source_direction(source,key):
+        direction=ALL_DIRECTIONS[key]
+        return direction,next(row for row in source['directions'] if row['direction']==direction)
+
+    @staticmethod
+    def frame_image(folder,refs):
+        image=private_file(folder/'image.png',MAX_IMAGE)
+        require(refs[IMAGE][0]==asset_ref(IMAGE,image))
+        return image
+
+    def write_frames(self,reader,length):
+        meta,body_size=incoming_header(reader,length)
+        with self.session(meta['claim'],keys=FRAME_DIRECTIONS) as (_,key,_,refs,guard,folder,source_hash,source):
+            direction,row=self.source_direction(source,key)
+            self.frame_image(folder,refs)
+            records=meta['frames']
+            require(frame_sizes(records,row['frameCount'])==body_size)
+            path=folder/(direction+'.frames')
+            fd,tmp=tempfile.mkstemp(dir=folder,prefix='.frames-')
+            try:
+                with os.fdopen(fd,'wb') as out:
+                    geometry=None
+                    for frame in records:
+                        raw=read_exact(reader,frame['bytes'])
+                        require(sha(raw)==frame['sha256'])
+                        got=validate_png(raw)
+                        if geometry is None:
+                            geometry=got
+                            packet=packet_metadata(direction,source_hash,row,*geometry,records)
+                            out.write(framing(canonical(packet)))
+                        require(got==geometry)
+                        out.write(raw)
+                    out.flush()
+                    os.fsync(out.fileno())
+                if os.path.lexists(path):
+                    old=verify_packet(private_file(path,MAX_PACKET),direction,source_hash,row,verify_frames=True)
+                    require(old==packet)
+                    with guard():pass
+                else:
+                    with guard():os.replace(tmp,path)
+                    sync(folder)
+                return {'ok':True,'resultRef':frames_ref(packet)}
+            finally:
+                if os.path.lexists(tmp):os.unlink(tmp)
+
+    def frame_packet(self,folder,source_hash,source,key,refs,*,verify_frames):
+        direction,row=self.source_direction(source,key)
+        blob=private_file(folder/(direction+'.frames'),MAX_PACKET)
+        packet=verify_packet(blob,direction,source_hash,row,verify_frames=verify_frames)
+        require(refs[frames_key(direction)][0]==frames_ref(packet))
+        return blob,packet
+
+    def read_frames(self,body):
+        require(type(body) is dict and set(body)=={'claim'})
+        with self.session(body['claim'],keys=ENCODE_DIRECTIONS) as (_,key,_,refs,guard,folder,source_hash,source):
+            packet,_=self.frame_packet(folder,source_hash,source,key,refs,verify_frames=True)
+            with guard():return packet
+
+    def run(self,body,*,read,started):
+        require(type(body) is dict and set(body)==({'claim'} if read else {'claim','artifact'}))
+        keys=(IMAGE,FINAL,*FRAME_DIRECTIONS) if read else (IMAGE,FINAL,*ENCODE_DIRECTIONS)
+        with self.session(body['claim'],keys=keys,read=read) as (oid,key,p,refs,guard,folder,source_hash,source):
             proof={'sourcePresetHash':source_hash}
             if key==IMAGE:
                 if read:
@@ -336,19 +496,22 @@ class WorkflowMotion2D:
                 validate_png(raw)
                 save(folder/'image.png',raw,MAX_IMAGE,guard)
                 return {'ok':True,'resultRef':asset_ref(key,raw)}
-            image=private_file(folder/'image.png',MAX_IMAGE)
-            require(refs[IMAGE][0]==asset_ref(IMAGE,image))
-            if key!=FINAL:
-                direction=key.removeprefix('motion_2d_')
-                if read:
-                    ref=self.motion.get(p['sourcePresetId'],direction,
-                                        expected_preset_hash=source_hash,max_asset_bytes=MAX_REFERENCE)
-                    require(ref['presetHash']==source_hash)
-                    answer={'direction':direction,**proof,'reference':ref,
-                            'image':{'sha256':sha(image),'bytes':len(image),'base64':base64.b64encode(image).decode()}}
-                    with guard():return answer
+            if key in FRAME_DIRECTIONS:
+                direction,row=self.source_direction(source,key)
+                require(row['frameCount']<=MAX_FRAMES)
+                image=self.frame_image(folder,refs)
+                ref=self.motion.get(p['sourcePresetId'],direction,
+                                    expected_preset_hash=source_hash,max_asset_bytes=MAX_REFERENCE)
+                require(ref['presetHash']==source_hash)
+                answer={'direction':direction,**proof,'reference':ref,
+                        'image':{'sha256':sha(image),'bytes':len(image),'base64':base64.b64encode(image).decode()}}
+                with guard():return answer
+            if key in ENCODE_DIRECTIONS:
+                direction=ENCODE_DIRECTIONS[key]
+                _,packet=self.frame_packet(folder,source_hash,source,key,refs,verify_frames=False)
                 raw=artifact_bytes(body['artifact'],MAX_OUTPUT)
-                self.check_clip(folder,key,raw,source)
+                dimensions=self.check_clip(folder,key,raw,source)
+                require(dimensions=={k:packet[k] for k in ('width','height')})
                 save(folder/(direction+'.mp4'),raw,MAX_OUTPUT,guard)
                 return {'ok':True,'resultRef':asset_ref(key,raw)}
             if read:
@@ -356,7 +519,7 @@ class WorkflowMotion2D:
             require(type(body['artifact']) is dict and not body['artifact'])
             rows=[]
             for row in source['directions']:
-                direction=row['direction'];clip_key=task_key(direction)
+                direction=row['direction'];clip_key=encode_key(direction)
                 raw=private_file(folder/(direction+'.mp4'),MAX_OUTPUT)
                 require(refs[clip_key][0]==asset_ref(clip_key,raw))
                 dimensions=self.check_clip(folder,clip_key,raw,source)
@@ -402,28 +565,46 @@ def serve(handler):
     service=getattr(handler.server,'workflow_motion_2d',None)
     if not isinstance(service,WorkflowMotion2D):
         return handler.respond(404,{'error':'MOTION_2D_DISABLED'})
+    route=(handler.command,handler.path)
     if (handler.server.server_address[0]!='127.0.0.1' or handler.client_address[0]!='127.0.0.1'
             or handler.headers.get_all('Host')!=['127.0.0.1:'+str(handler.server.server_port)]
             or handler.headers.get_all('Origin') is not None or handler.headers.get_all('Transfer-Encoding') is not None
             or handler.headers.get_all('Content-Encoding') is not None
-            or (handler.command,handler.path) not in (('GET',PATH),('POST',PATH),('POST',PATH+'/read'))):
+            or route not in (('GET',PATH),('GET',FRAMES),*(('POST',path) for path in ROUTES))):
         return handler.respond(403,{'error':'MOTION_2D_INTERNAL_ONLY'})
     started=[]
     try:
-        if handler.command=='GET':return handler.respond(200,service.capability())
-        reading=handler.path.endswith('/read')
+        if handler.command=='GET':
+            return handler.respond(200,service.capability(frames=handler.path==FRAMES))
         handler.connection.settimeout(20)
         size=handler.headers.get_all('Content-Length',[])
-        require(handler.headers.get_all('Content-Type')==['application/json'] and len(size)==1 and re.fullmatch(r'[1-9][0-9]{0,9}',size[0]) is not None
-                and int(size[0])<=(8192 if reading else MAX_BODY))
-        raw=handler.rfile.read(int(size[0]))
-        require(len(raw)==int(size[0]))
-        def unique(pairs):
-            result=dict(pairs)
-            require(len(result)==len(pairs))
-            return result
-        return handler.respond(200,service.run(json.loads(raw,object_pairs_hook=unique),read=reading,started=started))
+        binary=handler.path==FRAMES
+        expect='application/octet-stream' if binary else 'application/json'
+        limit=MAX_PACKET if binary else MAX_BODY if handler.path==PATH else 8192
+        require(handler.headers.get_all('Content-Type')==[expect] and len(size)==1
+                and re.fullmatch(r'[1-9][0-9]{0,9}',size[0]) is not None and int(size[0])<=limit)
+        n=int(size[0])
+        if binary:
+            return handler.respond(200,service.write_frames(handler.rfile,n))
+        body=strict_json(read_exact(handler.rfile,n))
+        if handler.path==FRAME_READ:
+            packet=service.read_frames(body)
+        else:
+            return handler.respond(200,service.run(body,read=handler.path==PATH+'/read',started=started))
     except (Rejected,ClaimDenied,ValueError,KeyError,TypeError,RecursionError,ArithmeticError):
         return handler.respond(409,{'error':'MOTION_2D_OUTCOME_UNCONFIRMED'}) if started else handler.respond(422,{'error':'MOTION_2D_REJECTED'})
     except (OSError,sqlite3.Error,subprocess.SubprocessError):
         return handler.respond(503,{'error':'MOTION_2D_OUTCOME_UNCONFIRMED'})
+
+    try:
+        handler.send_response(200)
+        handler.send_header('Content-Type','application/octet-stream')
+        handler.send_header('Content-Length',str(len(packet)))
+        handler.send_header('X-Content-Type-Options','nosniff')
+        handler.send_header('Cache-Control','no-store')
+        handler.end_headers()
+        handler.wfile.write(packet)
+    except OSError:
+        # The read changes no stage or receipt. Never append JSON to a
+        # partially transmitted binary response.
+        handler.close_connection=True
