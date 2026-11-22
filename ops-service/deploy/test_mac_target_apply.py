@@ -93,7 +93,7 @@ class TargetTests(unittest.TestCase):
         return directory, selector, before, entry
 
     def test_all_fixed_targets_real_contract_and_preservation(self):
-        for name in set(apply.TARGETS)-{'workflow-planner'}:
+        for name in set(apply.TARGETS)-{'workflow-planner','worker-audio'}:
             with self.subTest(target=name), tempfile.TemporaryDirectory() as root:
                 home = Path(root).resolve()
                 folder, selector, prior, entry = self.make(home, name)

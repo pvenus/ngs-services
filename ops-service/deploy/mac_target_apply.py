@@ -54,7 +54,7 @@ PORTS = (8030, 8031, 8032, 8040, 8041, 8050, 8060)
 LABEL_PID = re.compile(r'^\s*pid = ([1-9][0-9]*)\s*$', re.MULTILINE)
 
 
-def validate_and_rewrite(prior, release, catalog, base):
+def validate_and_rewrite(prior, release, catalog, base, *, audio_config=None):
     v = plistlib.loads(prior)
     need(isinstance(v, dict) and v.get('Label') == catalog.label, 'TARGET_SELECTOR_LABEL')
     args = v.get('ProgramArguments')
@@ -89,6 +89,10 @@ def validate_and_rewrite(prior, release, catalog, base):
         need(args.count('--adapter-module') == 1 and args.index('--adapter-module') + 1 < len(args)
              and args[args.index('--adapter-module') + 1] == str(old / adapter), 'TARGET_AUDIO_ADAPTER')
         changes[str(old / adapter)] = str(release / adapter)
+        if audio_config is not None:
+            need(args.count('--adapter-config') == 1 and args.index('--adapter-config')+1 < len(args),
+                 'TARGET_AUDIO_BINDING_INVALID')
+            changes[args[args.index('--adapter-config')+1]] = str(audio_config)
     if catalog.heartbeat == 'postprocess-worker':
         native = 'native-postprocess'
         need(args.count('--worker-source') == 1 and args.index('--worker-source') + 1 < len(args)
@@ -202,7 +206,8 @@ def apply_target(target, sha, archive_sha, directory, home, host):
     manifest_path = directory / 'candidate.json'
     private_file(manifest_path, 0o600)
     m = json_load(manifest_path.read_bytes())
-    need(shape(m, 'schemaVersion target sha archiveSha256 treeSha256 expectedPriorPlistSha256') and
+    extra = ' audioBindingSha256' if target == 'worker-audio' else ''
+    need(shape(m, 'schemaVersion target sha archiveSha256 treeSha256 expectedPriorPlistSha256' + extra) and
          m['schemaVersion'] == 'ops.mac-target-candidate.v1' and m['target'] == target and
          m['sha'] == sha and m['archiveSha256'] == archive_sha and
          all(matches(DIGEST, m[k]) for k in ('treeSha256', 'expectedPriorPlistSha256')),
@@ -216,7 +221,13 @@ def apply_target(target, sha, archive_sha, directory, home, host):
     private_file(selector)
     prior = selector.read_bytes()
     need(digest(prior) == m['expectedPriorPlistSha256'], 'TARGET_SELECTOR_CHANGED')
-    desired = validate_and_rewrite(prior, release, catalog, base)
+    if target == 'worker-audio':
+        from audio_cutover import verify_audio_binding
+        audio_config, audio_proof = verify_audio_binding(release, sha)
+        need(audio_proof == m['audioBindingSha256'],'TARGET_AUDIO_BINDING_CHANGED')
+        desired = validate_and_rewrite(prior, release, catalog, base, audio_config=audio_config)
+    else:
+        desired = validate_and_rewrite(prior, release, catalog, base)
     if target == 'workflow-planner':
         original = plistlib.loads(prior)
         prior_expected = planner_identity(original, home)
@@ -247,6 +258,9 @@ def apply_target(target, sha, archive_sha, directory, home, host):
             need(loaded_selector(report, *prior_expected[:2]), 'TARGET_PLANNER_PRIOR_NOT_LOADED')
             need(planner_identity(original, home)[2] == prior_expected[2], 'TARGET_PLANNER_DATABASE_IDENTITY')
         else:
+            if target == 'worker-audio':
+                need(verify_audio_binding(release,sha) == (audio_config,audio_proof),
+                     'TARGET_AUDIO_BINDING_CHANGED')
             pid = host.pid(catalog.label)
         need(pid is not None, 'TARGET_PRIOR_NOT_RUNNING')
         try:

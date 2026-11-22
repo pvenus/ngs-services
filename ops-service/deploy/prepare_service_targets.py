@@ -255,3 +255,42 @@ def request_candidate(verified, repo, release, home, expected_selector_sha):
     return {"schemaVersion": "ops.mac-target-candidate.v1", "target": name, "sha": p["headSha"],
             "archiveSha256": verified["artifactSha256"], "treeSha256": tree_sha(release),
             "expectedPriorPlistSha256": expected_selector_sha}
+
+
+def prepare_audio_candidate(verified, repo, release, home, expected_selector_sha):
+    """Prepare only the exact worker source and separate owner-local audio binding."""
+    from audio_cutover import stage_audio_binding
+    p = verified['proof']
+    name = 'worker-audio'
+    catalog = TARGETS[name]
+    base = home / 'Workspaces'
+    head = p['headSha']
+    need(p['repository'] == WORKERS and matches(DIGEST, expected_selector_sha)
+         and release == base / 'Workers/code/releases' / (catalog.release_prefix + head),'TARGET_AUDIO_RELEASE')
+    private_directory(release)
+    selected = {n.removeprefix('workflow-production/'): spec for n,spec in tracked_targets(verified,repo)[name].items()}
+    seen = set()
+    for folder in ('candidate-audio-resident','candidate-native-audio-resident'):
+        private_directory(release / folder)
+        for path in (release / folder).rglob('*'):
+            need(not path.is_symlink() and (path.is_dir() or path.is_file()),'TARGET_AUDIO_UNSAFE_SOURCE')
+            if not path.is_file():
+                continue
+            rel = path.relative_to(release).as_posix()
+            private_file(path)
+            data = path.read_bytes()
+            need(rel in selected and hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest() == selected[rel][0],
+                 'TARGET_AUDIO_SOURCE_DRIFT')
+            seen.add(rel)
+    need(seen == selected.keys(),'TARGET_AUDIO_SOURCE_MISSING')
+    selector = home / 'Library/LaunchAgents' / (catalog.label + '.plist')
+    private_file(selector)
+    raw = selector.read_bytes()
+    need(digest(raw) == expected_selector_sha,'TARGET_SELECTOR_CHANGED')
+    validate_and_rewrite(raw,release,catalog,base)
+    proof = stage_audio_binding(plistlib.loads(raw)['ProgramArguments'],release,head)
+    private_file(selector)
+    need(selector.read_bytes() == raw,'TARGET_SELECTOR_CHANGED')
+    return {'schemaVersion':'ops.mac-target-candidate.v1','target':name,'sha':head,
+            'archiveSha256':verified['artifactSha256'],'treeSha256':tree_sha(release),
+            'expectedPriorPlistSha256':expected_selector_sha,'audioBindingSha256':proof}
