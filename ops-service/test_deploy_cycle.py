@@ -139,6 +139,40 @@ class Cycle(unittest.TestCase):
         self.assertEqual(self.hits,[(only,A)])
         c.sweep();c.trigger(only)
         self.assertEqual(self.hits,[(only,A)])
+    def test_auto_registered_candidate_is_actionable_only_from_manual_cycle(self):
+        target='worker-audio'
+        folder=self.stage(target)
+        record=json.loads((folder/'ready.json').read_bytes())
+        C.persist(folder/'ready.json',{**record,'manualOnly':True})
+        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        self.assertTrue(self.target(c,target)['manualOnly'])
+        self.assertTrue(self.target(c,target)['canDeploy'])
+        self.assertIsNone(c.sweep()['active'])
+        self.assertIsNone(c.trigger(target,automatic=True)['active']) # re-check after sweep
+        self.assertEqual(self.hits,[])
+        c.trigger(target);self.drain(c)
+        self.assertEqual(self.hits,[(target,A)])
+        C.persist(folder/'ready.json',{**record,'sha':B,'manualOnly':False})
+        self.assertFalse(self.target(c,target)['canDeploy'])
+
+    def test_preparation_exposes_only_bounded_status_and_adds_no_deploy_authority(self):
+        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        file=self.root/'ops-candidate-preparation-status.json'
+        data={'schemaVersion':C.PREPARATION,'checkedAt':STAMP,'targets':{
+            'worker-audio':{'state':'pending','sha':A},
+            'filex-writer':{'state':'not_configured','code':'FILEX_ADAPTER_REQUIRED'}}}
+        C.persist(file,data)
+        self.assertEqual(c.status()['preparation'],{'checkedAt':STAMP,'targets':data['targets']})
+        self.assertFalse(self.target(c,'worker-audio')['canDeploy'])
+        self.assertNotIn('filex-writer',C.IDS)
+        with self.assertRaises(Rejected):c.trigger('filex-writer')
+        for invalid in ({**data,'token':'never return token'},
+                        {**data,'targets':{'worker-audio':{'state':'blocked','code':'/Users/private'}}},
+                        {**data,'targets':{'intruder':{'state':'ready'}}}):
+            C.persist(file,invalid)
+            self.assertNotIn('preparation',c.status())
+        self.assertEqual(self.hits,[])
+
     def test_failure_receipt_preserves_only_exact_phase_code_and_rollback(self):
         data={'phase':'start','code':'TARGET_BOOTSTRAP_FAILED','rollback':'restored'}
         raw={'schemaVersion':C.ERROR,'target':'rs-mcp','sha':A,**data}

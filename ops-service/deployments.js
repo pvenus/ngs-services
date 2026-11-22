@@ -13,6 +13,15 @@ const groupLayout={
  workers:{label:'워커',targets:[['worker-document','문서'],['worker-file','파일'],['worker-image','이미지'],
   ['worker-animation','애니메이션'],['worker-postprocess','후처리'],['worker-audio','음악']]},
 };
+const preparationLabels={ready:'후보 검증 완료',current:'현재 배포와 동일',equivalent:'현재 배포와 동일',
+ pending:'GitHub 빌드 대기',blocked:'후보 준비 차단',failed:'후보 준비 실패',in_progress:'후보 검증 중',
+ auth_required:'GitHub 읽기 권한 확인 필요',not_configured:'후보 준비 경로 미설정'};
+function preparationText(item){
+ if(!item||!Object.hasOwn(preparationLabels,item.state))return '';
+ const sha=typeof item.sha==='string'&&item.sha.length===40&&shaPattern.test(item.sha)?' · '+item.sha.slice(0,7):'';
+ const code=typeof item.code==='string'&&/^[A-Z][A-Z0-9_]{1,79}$/u.test(item.code)?' · '+item.code:'';
+ return preparationLabels[item.state]+sha+code;
+}
 const spacePublicationHost='vinus-npcgen.park-venus0518.chatgpt.site';
 const spacePublicationUnlinked=target=>target?.state==='not_configured';
 const shaPattern=/^[a-f0-9]{40}$/u,keyPattern=/^[a-f0-9]{64}$/u;
@@ -166,6 +175,8 @@ function groupSection(id,layout,value,targets){
    }
   }
   const stateCell=node('td'),badge=node('span',spaceUnlinked?'자동 게시 미연결':stateLabels[state],'deploy-state');stateCell.append(badge);
+  const prepare=preparationText(value.preparation?.targets?.[target]);
+  if(prepare)stateCell.append(node('small',prepare));
   const failure=item?.failure;
   if(state==='failed'&&target==='ngs-local')localFailureStatus(stateCell,failure);
   else if(state==='failed'&&typeof failure?.code==='string'&&/^TARGET_[A-Z_]+$/u.test(failure.code)&&failure.code.length<60){
@@ -192,6 +203,13 @@ function groupSection(id,layout,value,targets){
    button.addEventListener('click',()=>{if(!button.disabled)void openSpaceHandoff(handoff,fallback)});
   }else button.addEventListener('click',()=>void deploy(target,button));
   row.append(name,stateCell,evidenceCell(item?.observed),action);body.append(row);
+ }
+ if(id==='services'){
+  const filex=preparationText(value.preparation?.targets?.['filex-writer']);
+  if(filex){
+   const row=node('tr'),label=node('th','Filex 저장기');label.scope='row';
+   row.append(label,node('td',filex),node('td',''),node('td','배포 경로 미설정'));body.append(row);
+  }
  }
  return section;
 }
@@ -237,7 +255,7 @@ async function reload(){
   const data=await r.json();if(sequence!==readSequence)return;
   const running=render(data);
   status(running?'대기 또는 배포 중인 대상의 상태를 자동으로 확인합니다.':'');
-  if(running)timer=setTimeout(reload,2500);
+  timer=setTimeout(reload,running?2500:30000);
  }catch{
   if(sequence!==readSequence)return;
   current=null;disableActions();status('배포 상태를 확인하지 못했습니다. 새로고침해서 결과를 확인해 주세요.');

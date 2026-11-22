@@ -117,6 +117,12 @@ SPACE_PUBLICATION_SCHEMA='ops.ngs-space-publication.v1'
 SPACE_SITE='appgprj_6abcee8b33688191bed4fec75f26b91f'
 SPACE_HOST='vinus-npcgen.park-venus0518.chatgpt.site'
 ACTIVE='ops.deploy-cycle-active.v1'
+PREPARATION='ops.candidate-preparation-status.v1'
+PREPARATION_IDS={id for id,_,group in TARGETS if group in ('workers','services')} | {'filex-writer'}
+PREPARATION_STATES={'ready','current','blocked','pending','auth_required','failed',
+                    'in_progress','equivalent','not_configured'}
+PREPARATION_CODE=re.compile(r'[A-Z][A-Z0-9_]{1,79}')
+
 RETRY_RUNNER='ops.ngs-local-retry-runner.v1'
 RETRY_ARCHIVE='ops.ngs-local-retry-admission.v1'
 
@@ -154,6 +160,24 @@ def latest_local_attempt(folder):
     check(names=={'current.json',*ids},'OPS_NGS_RETRY_PROOF_INVALID')
     for item in ids:secure_directory(directory/item)
     return ids[-1],directory/ids[-1]
+
+
+def preparation_status(root):
+    try:
+        value=retry_read(root/'ops-candidate-preparation-status.json',16384)
+        check(exact(value,'schemaVersion','checkedAt','targets') and value['schemaVersion']==PREPARATION
+              and type(value['targets']) is dict and set(value['targets']) <= PREPARATION_IDS,
+              'OPS_PREPARATION_STATUS_INVALID')
+        stamp(value['checkedAt'])
+        for item in value['targets'].values():
+            check(type(item) is dict and set(item) in ({'state'},{'state','sha'},
+                  {'state','code'},{'state','sha','code'}) and type(item['state']) is str
+                  and item['state'] in PREPARATION_STATES and ('sha' not in item or is_sha(item['sha']))
+                  and ('code' not in item or type(item['code']) is str and PREPARATION_CODE.fullmatch(item['code'])),
+                  'OPS_PREPARATION_STATUS_INVALID')
+        return {'checkedAt':value['checkedAt'],'targets':value['targets']}
+    except (OSError,ValueError,KeyError,AttributeError,TypeError,OverflowError,RecursionError):
+        return None
 
 
 def now():
@@ -387,7 +411,9 @@ class DeploymentCycle:
             return (None,initial,'not_configured')
         record=optional(path/'ready.json')
         if record is not None:
-            check(exact(record,'schemaVersion','target','sha','verifiedAt','artifactSha256','runnerSha256') and
+            fields=('schemaVersion','target','sha','verifiedAt','artifactSha256','runnerSha256')
+            check((exact(record,*fields) or
+                   (exact(record,*fields,'manualOnly') and record['manualOnly'] is True)) and
                   record['schemaVersion']==READY and record['target']==target and is_sha(record['sha']) and
                   sha256(record['artifactSha256']) and sha256(record['runnerSha256']),'OPS_TARGET_READINESS_INVALID')
             stamp(record['verifiedAt'])
@@ -467,6 +493,7 @@ class DeploymentCycle:
         except (OSError,ValueError,TypeError,OverflowError):
             journal=None;locked=True
         active=({'selection':journal['selection'],'targets':journal['targets']} if journal and self.active==journal else None)
+        preparation=preparation_status(self.root) if configured else None
         unknown=bool(journal and active is None)
         rows,plans=[],{}
         for target,label,group in TARGETS:
@@ -479,6 +506,8 @@ class DeploymentCycle:
                  'candidateSha':record['sha'] if record else None,'observed':initial,
                  'ready':phase in ('ready','current') and not locked and not unknown,
                  'canDeploy':phase=='ready' and not (locked or journal)}
+            if record is not None and record.get('manualOnly') is True:
+                row['manualOnly']=True
             if target=='ngs-space' and configured:
                 try: publication=space_publication(self.root/'targets'/target)
                 except (OSError,ValueError): publication=None
@@ -513,7 +542,8 @@ class DeploymentCycle:
             compare='match' if local['observed']['sha']==space['observed']['sha'] else 'mismatch'
         all_ready=bool(not (locked or journal) and all(ready.values()))
         return ({'groups':groups,'targets':rows,'allReady':all_ready,'canDeployAll':all_ready,
-                 'active':active,'comparison':compare},plans,bool(journal or locked))
+                 'active':active,'comparison':compare,**({'preparation':preparation} if preparation else {})},
+                plans,bool(journal or locked))
 
     def status(self):
         with self.guard:return self._snapshot()[0]
@@ -577,7 +607,7 @@ class DeploymentCycle:
                     self.active=None
                     os.close(fd)
 
-    def trigger(self,selection):
+    def trigger(self,selection,*,automatic=False):
         if type(selection) is not str:reject(400,'OPS_DEPLOY_SELECTION_INVALID')
         targets=self._selection(selection)
         with self.guard:
@@ -586,7 +616,8 @@ class DeploymentCycle:
                 reject(409,'OPS_DEPLOY_CYCLE_BUSY_OR_UNVERIFIED')
             if not all(key in plans for key in targets):
                 reject(503,'OPS_DEPLOY_TARGETS_UNAVAILABLE')
-            staged=[(key,plans[key][0],plans[key][1]) for key in targets if plans[key][2]=='ready']
+            staged=[(key,plans[key][0],plans[key][1]) for key in targets
+                    if plans[key][2]=='ready' and not (automatic and plans[key][0].get('manualOnly') is True)]
             if not staged:return status
             fd=None
             try:
@@ -694,6 +725,7 @@ class DeploymentCycle:
         status=self.status()
         if status['active'] is not None:return status
         preferred=self._selection('all')
-        pending={row['id'] for row in status['targets'] if row['canDeploy']}
+        pending={row['id'] for row in status['targets']
+                 if row['canDeploy'] and row.get('manualOnly') is not True}
         if not pending:return status
-        return self.trigger(next(key for key in preferred if key in pending))
+        return self.trigger(next(key for key in preferred if key in pending),automatic=True)
