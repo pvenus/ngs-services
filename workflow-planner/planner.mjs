@@ -12,7 +12,7 @@ import {audioDeleteType,audioDeleteTaskKey,validateAudioDelete} from './audio-de
 import {createWorkflowTasksSql,RETRY_COUNT_COLUMN,migrateWorkflowAudioTask} from './audio-task-schema.mjs';
 
 import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
-import {buildMotion2DTasks,hasCompleteMotion2DGraph} from './motion-preset-convert-2d-plan.mjs';
+import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit} from './motion-preset-convert-2d-plan.mjs';
 
 export const portraitPixelTaskType='npc.portrait-pixel';
 export const pixelImageStyle='pixel-sprite.v1';
@@ -170,7 +170,7 @@ export class PlannerStore{
       AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id)
       AND NOT EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id AND t.status<>'completed')
     ORDER BY r.registered_at,r.official_request_id`).all();
-   const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 11');
+   const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    for(const row of candidates){
     if(row.request_type===motion2DRequestType){
      let payload;
@@ -179,7 +179,7 @@ export class PlannerStore{
       if(payload.schemaVersion!==row.schema_version||validateMotion2D(payload,row.project_id)!==row.payload||
          sha(row.payload)!==row.payload_sha256)continue;
      }catch{continue;}
-     if(!hasCompleteMotion2DGraph({officialRequestId:row.official_request_id,payload},evidence.all(row.official_request_id)))continue;
+     if(!hasCompleteMotion2DGraph({officialRequestId:row.official_request_id,payload},evidence.all(row.official_request_id,motion2DCompletionReadLimit)))continue;
     }
     result.push({official_request_id:row.official_request_id});
    }

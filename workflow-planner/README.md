@@ -69,21 +69,29 @@ the requested `variantPresetId` is the independent publication target.
 | Task key | Type suffix under `motion-preset.convert-2d` | Worker | Dependency |
 | --- | --- | --- | --- |
 | `motion_2d_image` | `.image` | image | none |
-| `motion_2d_{n,ne,e,se,s,sw,w,nw}` | `.clip` | animation | exact image task |
-| `motion_2d_finalize` | `.finalize` | animation | the exact eight ordered clip task IDs |
+| `motion_2d_frames_{n,ne,e,se,s,sw,w,nw}` | `.frames` | animation | exact image task |
+| `motion_2d_encode_{n,ne,e,se,s,sw,w,nw}` | `.encode` | postprocess | only the matching direction's frame task |
+| `motion_2d_finalize` | `.finalize` | postprocess | the exact eight ordered encode task IDs |
 
-All input rows bind the original source and target IDs. Clip inputs add their
-direction; final input adds `dependsOnTaskIds` in the table's given direction
+All input rows bind the original source and target IDs. Frame and encode inputs
+add their direction; final input adds `dependsOnTaskIds` in the table's given direction
 order. Finalization leaves the historical scalar dependency column empty,
-not as a readiness signal: a compatible animation claim selector must
-enforce this exact eight-ID fan-in against completed clip receipts and
+not as a readiness signal: the postprocess finalizer claim must enforce this
+exact eight-ID fan-in against completed encode receipts and
 PDS must independently verify all eight before canonical publication. Do not
 activate intake until these consumers are installed. No workflow DB schema
 migration or change to legacy NPC execution. RS's completed notification
-requires the exact persisted graph, status completed on all ten tasks, and
+requires the exact persisted graph, status completed on every task, and
 matching typed result refs: `motion.2d.image.<sha256>`,
+`motion.2d.frames.<direction>.<manifestSha256>`,
 `motion.2d.clip.<direction>.<sha256>`, and
 `motion.2d.published.<presetHash>`. These refs are worker/PDS evidence, not an
 independent Filex read by the Planner. Invalid/partial graphs do not report
 completion. The historical Laya configuration is not on this intake path;
 registration and routing are in the typed RS family and active planner code.
+
+New requests stage 18 tasks. Replayed requests keep their original task rows;
+the existing 10-task graph is accepted only for historical completion evidence.
+Do not select the new planner independently of the matching PDS and worker
+release, and drain any old active graph on its current installed workers before selecting
+the split release.

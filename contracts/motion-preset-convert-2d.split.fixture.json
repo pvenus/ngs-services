@@ -1,0 +1,244 @@
+{
+  "row": {
+    "officialRequestId": "request.official.4ec9fcca84e0839dfb2b37142f360737b5b275ca71c56e53e06dc3e14ef35181",
+    "projectId": "binari",
+    "requestType": "motion-preset.convert-2d",
+    "schemaVersion": "ngs.motion-preset-convert-2d.v1",
+    "payload": {
+      "schemaVersion": "ngs.motion-preset-convert-2d.v1",
+      "projectId": "binari",
+      "sourcePresetId": "walk",
+      "variantPresetId": "walk-stylized-2d",
+      "label": "걷기 2D"
+    },
+    "payloadSha256": "bab3b0dca09fe9cb4889eeb154053e98613717cf8aef7a7603684808ddf70542",
+    "status": "registered",
+    "registeredAt": 1795290000000
+  },
+  "tasks": [
+    {
+      "id": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "key": "motion_2d_image",
+      "type": "motion-preset.convert-2d.image",
+      "workerType": "image",
+      "dependsOn": null,
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d"
+      }
+    },
+    {
+      "id": "workflow.task.accfb41d68d5e619d7da32152bbc3956b37d3b25283baf09b5ed87cec5bbf8ac",
+      "key": "motion_2d_frames_n",
+      "type": "motion-preset.convert-2d.frames",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "n"
+      }
+    },
+    {
+      "id": "workflow.task.1d3715f7091a0ea1a2e591ec36269d4c519b9bf3fc5ecf1d097e1995bdfd15e2",
+      "key": "motion_2d_frames_ne",
+      "type": "motion-preset.convert-2d.frames",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "ne"
+      }
+    },
+    {
+      "id": "workflow.task.2c658e34c34aa3abca032d4ee33f5caa5567fa0ac92a5e0975d097ca6e98e7ab",
+      "key": "motion_2d_frames_e",
+      "type": "motion-preset.convert-2d.frames",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "e"
+      }
+    },
+    {
+      "id": "workflow.task.c0acfdd2060f906584007043e463104fe6e0ddabb1399a6a843027bbd0e2dab6",
+      "key": "motion_2d_frames_se",
+      "type": "motion-preset.convert-2d.frames",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "se"
+      }
+    },
+    {
+      "id": "workflow.task.a029cb711dc6fbf8b04a6820c0d82546de10e37dbbafbfcae539340062a47771",
+      "key": "motion_2d_frames_s",
+      "type": "motion-preset.convert-2d.frames",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "s"
+      }
+    },
+    {
+      "id": "workflow.task.84dac519bc3b477989ea7111b46aae9073ea33f3c2e69292b25e4762c258fdef",
+      "key": "motion_2d_frames_sw",
+      "type": "motion-preset.convert-2d.frames",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "sw"
+      }
+    },
+    {
+      "id": "workflow.task.f68105a557b51a85ab0844261cc079f0188991d5fc217b86b7b90ff8863fd9c3",
+      "key": "motion_2d_frames_w",
+      "type": "motion-preset.convert-2d.frames",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "w"
+      }
+    },
+    {
+      "id": "workflow.task.a378562a21ae01f651154ac5881bcfda756efcb07be016994863ee14053a17c8",
+      "key": "motion_2d_frames_nw",
+      "type": "motion-preset.convert-2d.frames",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "nw"
+      }
+    },
+    {
+      "id": "workflow.task.d9048b418ababf929fa12cf51d07d918b9eb1308e01784e494a37299e41b6b77",
+      "key": "motion_2d_encode_n",
+      "type": "motion-preset.convert-2d.encode",
+      "workerType": "postprocess",
+      "dependsOn": "workflow.task.accfb41d68d5e619d7da32152bbc3956b37d3b25283baf09b5ed87cec5bbf8ac",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "n"
+      }
+    },
+    {
+      "id": "workflow.task.3ff7e702b29aba5de8b6b45aaede2c645d414202eed25091b6d5bc59cfdfe135",
+      "key": "motion_2d_encode_ne",
+      "type": "motion-preset.convert-2d.encode",
+      "workerType": "postprocess",
+      "dependsOn": "workflow.task.1d3715f7091a0ea1a2e591ec36269d4c519b9bf3fc5ecf1d097e1995bdfd15e2",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "ne"
+      }
+    },
+    {
+      "id": "workflow.task.df52d4df500c6d7ae416b2608aa006e3d74ccd0e2bf769ca499ba3e350cddaab",
+      "key": "motion_2d_encode_e",
+      "type": "motion-preset.convert-2d.encode",
+      "workerType": "postprocess",
+      "dependsOn": "workflow.task.2c658e34c34aa3abca032d4ee33f5caa5567fa0ac92a5e0975d097ca6e98e7ab",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "e"
+      }
+    },
+    {
+      "id": "workflow.task.ab344717d2b2c9e44e0ed153f795cbc064342ee9366b955d6234ceddcd038d3f",
+      "key": "motion_2d_encode_se",
+      "type": "motion-preset.convert-2d.encode",
+      "workerType": "postprocess",
+      "dependsOn": "workflow.task.c0acfdd2060f906584007043e463104fe6e0ddabb1399a6a843027bbd0e2dab6",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "se"
+      }
+    },
+    {
+      "id": "workflow.task.240da0c2f0835ee3418eb6d30e80dc493eed8adcdf9d67df12c49ee33b56e485",
+      "key": "motion_2d_encode_s",
+      "type": "motion-preset.convert-2d.encode",
+      "workerType": "postprocess",
+      "dependsOn": "workflow.task.a029cb711dc6fbf8b04a6820c0d82546de10e37dbbafbfcae539340062a47771",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "s"
+      }
+    },
+    {
+      "id": "workflow.task.9300cc6e27753e1e925dd04533bbba5e0f93e7031e0b9b40f23a940a9417b239",
+      "key": "motion_2d_encode_sw",
+      "type": "motion-preset.convert-2d.encode",
+      "workerType": "postprocess",
+      "dependsOn": "workflow.task.84dac519bc3b477989ea7111b46aae9073ea33f3c2e69292b25e4762c258fdef",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "sw"
+      }
+    },
+    {
+      "id": "workflow.task.14b6f665f86db449c63f86d868df077f2cd9a2c73a499cc1e019b01145a91d5d",
+      "key": "motion_2d_encode_w",
+      "type": "motion-preset.convert-2d.encode",
+      "workerType": "postprocess",
+      "dependsOn": "workflow.task.f68105a557b51a85ab0844261cc079f0188991d5fc217b86b7b90ff8863fd9c3",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "w"
+      }
+    },
+    {
+      "id": "workflow.task.f2a5d4b76e91658ca436bff1de2a93fd61a8b4ca9f40bcbc8028acd31d824c89",
+      "key": "motion_2d_encode_nw",
+      "type": "motion-preset.convert-2d.encode",
+      "workerType": "postprocess",
+      "dependsOn": "workflow.task.a378562a21ae01f651154ac5881bcfda756efcb07be016994863ee14053a17c8",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "nw"
+      }
+    },
+    {
+      "id": "workflow.task.eb96f1569f15c50a99ea39d3c6c1facd0c6d27c41172b8b21949d99a8be5f515",
+      "key": "motion_2d_finalize",
+      "type": "motion-preset.convert-2d.finalize",
+      "workerType": "postprocess",
+      "dependsOn": null,
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "dependsOnTaskIds": [
+          "workflow.task.d9048b418ababf929fa12cf51d07d918b9eb1308e01784e494a37299e41b6b77",
+          "workflow.task.3ff7e702b29aba5de8b6b45aaede2c645d414202eed25091b6d5bc59cfdfe135",
+          "workflow.task.df52d4df500c6d7ae416b2608aa006e3d74ccd0e2bf769ca499ba3e350cddaab",
+          "workflow.task.ab344717d2b2c9e44e0ed153f795cbc064342ee9366b955d6234ceddcd038d3f",
+          "workflow.task.240da0c2f0835ee3418eb6d30e80dc493eed8adcdf9d67df12c49ee33b56e485",
+          "workflow.task.9300cc6e27753e1e925dd04533bbba5e0f93e7031e0b9b40f23a940a9417b239",
+          "workflow.task.14b6f665f86db449c63f86d868df077f2cd9a2c73a499cc1e019b01145a91d5d",
+          "workflow.task.f2a5d4b76e91658ca436bff1de2a93fd61a8b4ca9f40bcbc8028acd31d824c89"
+        ]
+      }
+    }
+  ]
+}
