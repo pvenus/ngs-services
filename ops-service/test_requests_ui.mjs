@@ -28,3 +28,23 @@ test('request list asks for resubmission only for the exact unsupported failed r
  assert.equal(states[1].children.length,0);
  assert.equal(states[2].children.length,0);
 });
+
+test('2D split progress distinguishes generation, encode and the exact eight-direction publish barrier',()=>{
+ const node=()=>({children:[],textContent:'',dataset:{},append(){},replaceChildren(){},addEventListener(){},setAttribute(){}});
+ const document={getElementById:node,createElement:node,addEventListener(){}};
+ const api=runInNewContext(code+'\n;({stateFor,taskName});',{document,AbortController,URLSearchParams,location:{search:''},
+  fetch:async()=>Response.json({requests:[],nextCursor:null})});
+ const final={key:'motion_2d_finalize',type:'motion-preset.convert-2d.finalize',workerType:'postprocess',
+  status:'pending',dependsOn:null};
+ const parents=new Map(['n','ne','e','se','s','sw','w','nw'].map(d=>['motion_2d_encode_'+d,
+  {type:'motion-preset.convert-2d.encode',workerType:'postprocess',status:d==='n'?'running':'completed'}]));
+ assert.equal(api.taskName('motion_2d_frames_n'),'북 PNG 프레임 생성');
+ assert.equal(api.taskName('motion_2d_encode_n'),'북 MP4 인코딩');
+ assert.equal(api.stateFor(final,parents,'planned'),'pending');
+ parents.get('motion_2d_encode_n').status='failed';
+ assert.equal(api.stateFor(final,parents,'planned'),'blocked');
+ parents.get('motion_2d_encode_n').status='completed';
+ assert.equal(api.stateFor(final,parents,'planned'),'ready');
+ parents.delete('motion_2d_encode_ne');
+ assert.equal(api.stateFor(final,parents,'planned'),'pending');
+});

@@ -54,7 +54,8 @@ async function load(){
 let progressSelection=null,progressTimer=null,progressFetch=null;
 const workerNames={file:'파일',document:'문서',image:'이미지',animation:'애니메이션',postprocess:'후처리',audio:'음원'};
 const taskNames={audio_generate:'BGM 생성',delete:'기존 NPC 폴더 삭제',preset:'프리셋 생성',planning_representative:'대표 기획',
- portrait_representative:'대표 포트레이트',planning_idle:'아이들 기획',portrait_idle_reference:'아이들 기준 포트레이트'};
+ portrait_representative:'대표 포트레이트',planning_idle:'아이들 기획',portrait_idle_reference:'아이들 기준 포트레이트',
+ motion_2d_image:'2D 기준 이미지 생성',motion_2d_finalize:'2D 프리셋 최종 등록'};
 const directionNames={n:'북',ne:'북동',e:'동',se:'남동',s:'남',sw:'남서',w:'서',nw:'북서'};
 function taskName(key){
  if(!key)return '—';
@@ -63,11 +64,28 @@ function taskName(key){
  if(portrait)return directionNames[portrait[1]]+' 포트레이트';
  const motion=key.match(/^(animation|frames)_(walk|run)_(n|ne|e|se|s|sw|w|nw)$/);
  if(motion)return directionNames[motion[3]]+' '+(motion[2]==='walk'?'걷기':'뛰기')+(motion[1]==='animation'?' 원본 PNG':' 프레임 후처리');
+ const motion2D=key.match(/^motion_2d_(?:(frames|encode)_)?(n|ne|e|se|s|sw|w|nw)$/);
+ if(motion2D)return directionNames[motion2D[2]]+' '+(motion2D[1]==='frames'?'PNG 프레임 생성':motion2D[1]==='encode'?'MP4 인코딩':'2D 영상 생성');
  return key;
+}
+function motionFinalDependencies(task,keys){
+ if(task.key!=='motion_2d_finalize'||task.type!=='motion-preset.convert-2d.finalize'||task.dependsOn!==null)return null;
+ const split=task.workerType==='postprocess';
+ const type='motion-preset.convert-2d.'+(split?'encode':'clip'), worker=split?'postprocess':'animation';
+ if(task.workerType!==worker)return null;
+ return Object.keys(directionNames).map(direction=>{
+  const parent=keys.get('motion_2d_'+(split?'encode_':'')+direction);
+  return parent?.type===type&&parent.workerType===worker?parent:null;
+ });
 }
 function stateFor(task,keys,state){
  if(task.status!=='pending')return task.status;
  if(state!=='planned')return 'pending';
+ const finalParents=motionFinalDependencies(task,keys);
+ if(finalParents){
+  if(finalParents.some(parent=>parent?.status==='failed'))return 'blocked';
+  return finalParents.every(parent=>parent?.status==='completed')?'ready':'pending';
+ }
  const parent=keys.get(task.dependsOn);
  if(parent?.status==='failed')return 'blocked';
  return !task.dependsOn||parent?.status==='completed'?'ready':'pending';
@@ -75,6 +93,7 @@ function stateFor(task,keys,state){
 const progressLabels={completed:'완료',running:'진행 중',ready:'인수 가능',pending:'대기',failed:'실패',blocked:'선행 실패'};
 const progressRowId=key=>'progress-task-'+encodeURIComponent(key);
 function dependencyCell(task,keys,selection){
+ if(motionFinalDependencies(task,keys))return cell('8방향 MP4');
  const parent=task.dependsOn,td=cell(taskName(parent));
  if(!keys.has(parent))return td;
  const link=document.createElement('a');
