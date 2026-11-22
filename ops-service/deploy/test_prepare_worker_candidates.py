@@ -344,3 +344,17 @@ class WorkerCandidates(unittest.TestCase):
         self.assertTrue(all(row=={'state':'blocked','code':'WORKER_LOADED_UNPROVEN'}
                             for row in rows.values()))
         self.assertEqual(list(self.targets.rglob('ready.json')),[])
+
+    def test_exact_current_in_legacy_short_release_has_no_equivalence_pointer(self):
+        target='worker-document'
+        selector=self.selector_paths[target]
+        v=plistlib.loads(selector.read_bytes())
+        current=self.releases/('workflows-github-'+self.head[:7])
+        self.install_source(current,self.head)
+        v['ProgramArguments'][1]=str(current/workers.TARGETS[target].entry)
+        v['WorkingDirectory']=str((current/workers.TARGETS[target].entry).parent)
+        write(selector,plistlib.dumps(v))
+        self.observed(target,self.head)
+        self.assertEqual(self.prepare()['targets'][target],{'state':'current'})
+        self.assertFalse((self.targets/target/'equivalent.json').exists())
+        self.assertFalse((self.targets/target/'ready.json').exists())

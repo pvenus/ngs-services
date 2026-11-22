@@ -100,7 +100,12 @@ def _selector(target, home, release):
     old = old_entry.parents[len(Path(catalog.entry).parts)-1]
     need(old_entry==old/catalog.entry and current.get('Label')==catalog.label and
          current.get('WorkingDirectory')==str(old_entry.parent),'WORKER_SELECTOR_INVALID')
-    if old == release:
+    active_suffix=old.name.removeprefix('workflows-github-')
+    if (old.parent==release.parent and old.name.startswith('workflows-github-')
+            and re.fullmatch(r'[a-f0-9]{7,40}',active_suffix)
+            and release.name.removeprefix('workflows-github-').startswith(active_suffix)):
+        # Historical seven-character names share a literal prefix with the
+        # full immutable release, but this is an observation, never a rewrite.
         return prior, current, old, None
     proposed = plistlib.loads(validate_and_rewrite(prior, release, catalog, home/'Workspaces'))
     return prior, current, old, proposed
@@ -276,7 +281,7 @@ def _plan(verified, repo, home, control, release, full_tree, target, trusted_dep
             code='WORKER_ACTIVE_TREE_DRIFT' if getattr(error,'args',())==('WORKER_ACTIVE_TREE_DRIFT',) else 'WORKER_ACTIVE_PROOF_UNAVAILABLE'
             raise Refused(code) from None
         comparison=None # Existing exact Image recovery still requires its separate authority.
-    if proposed is None:
+    if proposed is None or (comparison and comparison[1]==head):
         need(not failed and comparison and comparison[0]=='equivalent','WORKER_ACTIVE_PROOF_UNAVAILABLE')
         return 'current',None
     if comparison and comparison[0]=='equivalent':
