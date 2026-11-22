@@ -318,3 +318,25 @@ baseline and locks, archives the exact previous
 result before invoking the unchanged fixed adapter, and retains a journal
 on uncertain execution outcome. This lane only supports Image Worker. Other
 worker/service types, Filex, Local NGS and Space keep their own existing rules.
+
+### Worker readiness is per runtime closure
+
+A Workers main advance does not make all six worker rows deployable. Each
+verified CI target supplies its exact scoped source roots; the preparer
+compares them with the trustworthy actually loaded LaunchAgent and its
+recorded installed revision. A different historical revision is read from
+the fixed Workers Git repository in a private object store. The accepted
+runtime bytes, modes, declared native/shared directories and actually bound
+ACE native sidecar (Audio) must agree with that revision; unknown or
+unexpected files and sources do not qualify as deployable changes.
+
+A loaded equivalent worker remains current even when busy. It gets a
+durable non-executable equivalence proof without overwriting its deployment
+receipt. A real delta still needs idle and trusted readiness. The worker
+decision binds the artifact, runner, selected prior, observed revision,
+both source closures and candidate bytes. An old ready pointer by itself
+doesn't authorize deployment. OPS checks the matching recent preparation
+record and checks loaded identity/work again before invoking a changed
+worker runner. The separately verified Image Worker retry lane remains
+available for applicable failures; proved source equivalence never needs a
+restart just to change the recorded repository head.

@@ -23,7 +23,7 @@ class ImageRetry(unittest.TestCase):
     auth=T.DeployTests.auth
 
     def fixture(self,runner=None):
-        self.folder=self.stage('worker-image')
+        self.folder=self.stage('worker-image',worker_proof=False)
         old=C.optional(self.folder/'ready.json')
         C.persist(self.folder/'ready.json',{**old,'manualOnly':True})
         self.selector=self.root/'Library/LaunchAgents/com.vinus.workflow.image-worker.plist'

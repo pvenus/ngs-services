@@ -53,7 +53,7 @@ PENDING = frozenset(('GITHUB_TARGET_RUN_NOT_READY GITHUB_TARGET_RUN_MOVED GITHUB
                      'WORKER_MAIN_ADVANCED PREP_LOCK_BUSY PREP_ACTIVE_DEPLOYMENT WORKER_DEPLOY_ACTIVE_OR_UNVERIFIED '
                      'SERVICE_LOCAL_ARTIFACT_UNAVAILABLE FILEX_WORKFLOW_NOT_READY FILEX_MAIN_ADVANCED '
                      'FILEX_PREPARATION_LOCK_BUSY').split())
-BLOCKED = frozenset(('WORKER_RETRY_BASELINE_UNPROVEN WORKER_RUNNER_UNVERIFIED WORKER_RUNNER_DEPENDENCY_UNVERIFIED WORKER_SELECTOR_INVALID '
+BLOCKED = frozenset(('WORKER_ACTIVE_PROOF_UNAVAILABLE WORKER_ACTIVE_TREE_DRIFT WORKER_LOADED_UNPROVEN WORKER_RETRY_BASELINE_UNPROVEN WORKER_RUNNER_UNVERIFIED WORKER_RUNNER_DEPENDENCY_UNVERIFIED WORKER_SELECTOR_INVALID '
                      'WORKER_RUNTIME_PATH_INVALID WORKER_RUNTIME_DEPENDENCY_UNVERIFIED WORKER_DATABASE_UNVERIFIED '
                      'WORKER_IMAGE_CONFIG_UNVERIFIED WORKER_OUTCOME_UNVERIFIED WORKER_ATTEMPT_FAILED '
                      'WORKER_IDLE_UNPROVEN WORKER_AUDIO_PROOF_DRIFT WORKER_ADMISSION_INPUT_DRIFT '
@@ -228,7 +228,7 @@ def fixed_git_settings():
         os.environ.update(old)
 
 
-def fetch_git(repo, where, head, *, run=subprocess.run):
+def fetch_git(repo, where, head, *, run=subprocess.run, prior=False):
     require(repo in (SERVICES, WORKERS) and valid(SHA, head), 'GIT_OBJECTS_UNVERIFIED')
     # Fresh private object database. No checkout, refs from user input, remotes,
     # GitHub credentials, template hooks, global gitconfig, LFS or submodules.
@@ -240,10 +240,12 @@ def fetch_git(repo, where, head, *, run=subprocess.run):
         require(result.returncode==0, 'GIT_OBJECTS_UNVERIFIED')
         return result.stdout
 
+    require(not prior or repo==WORKERS,'GIT_OBJECTS_UNVERIFIED')
+    source_ref, local_ref=(head,'refs/heads/observed-worker') if prior else ('refs/heads/main','refs/heads/canonical-main')
     command('init','--bare','--template=',str(where))
     command('-C',str(where),'fetch','--depth=1','--no-tags','--no-recurse-submodules',
-            'https://github.com/'+repo+'.git','refs/heads/main:refs/heads/canonical-main')
-    require(command('-C',str(where),'rev-parse','--verify','refs/heads/canonical-main^{commit}')
+            'https://github.com/'+repo+'.git',source_ref+':'+local_ref)
+    require(command('-C',str(where),'rev-parse','--verify',local_ref+'^{commit}')
             == (head+'\n').encode(), 'GIT_OBJECTS_UNVERIFIED')
     return where
 
@@ -296,7 +298,7 @@ def running_count(path, worker):
     return row[0]
 
 
-def worker_idle(deps, home, host, target, expected):
+def worker_loaded(deps, home, host, target, expected, *, idle=False):
     if target not in WORKER_TARGETS or not valid(DIGEST, expected):
         return False
     try:
@@ -313,7 +315,7 @@ def worker_idle(deps, home, host, target, expected):
                 or args[args.index('--db')+1]!=str(database)):
             return False
         pid, report = host.launch_report(cat.label)
-        if not pid or not deps.loaded_selector(report,args,wd) or running_count(database,target.removeprefix('worker-')):
+        if not pid or not deps.loaded_selector(report,args,wd) or (idle and running_count(database,target.removeprefix('worker-'))):
             return False
         confirmed, latest = host.launch_report(cat.label)
         return bool(confirmed==pid and deps.loaded_selector(latest,args,wd) and
@@ -321,6 +323,10 @@ def worker_idle(deps, home, host, target, expected):
     except (OSError,ValueError,KeyError,TypeError,sqlite3.Error,subprocess.SubprocessError):
         return False
 
+
+
+def worker_idle(deps,home,host,target,expected):
+    return worker_loaded(deps,home,host,target,expected,idle=True)
 
 
 # The existing image worker reports heartbeat only after its provider probe.
@@ -338,6 +344,13 @@ def loaded_image_selector(report,args,working_directory):
         return False
     return (lines[start:end]==['\t\t'+p for p in args]
             and lines.count('\tworking directory = '+working_directory)==1)
+
+
+def current_worker_idle(home,target,selector_sha):
+    if target not in WORKER_TARGETS:return False
+    deps=SimpleNamespace(target_specs={target:SimpleNamespace(
+        label='com.vinus.workflow.'+target.removeprefix('worker-')+'-worker')},loaded_selector=loaded_image_selector)
+    return worker_idle(deps,home,ReadonlyHost(),target,selector_sha)
 
 
 def image_heartbeat():
@@ -417,7 +430,7 @@ def convert(result, head):
     return row(state,head=head,code=result.get('code'))
 
 
-def run_once(deps, home, control, *, fetch=fetch_git, host=None):
+def run_once(deps, home, control, *, fetch=fetch_git, prior_fetch=fetch_git, host=None):
     host = host if host is not None else ReadonlyHost()
     states = {FILEX:row('not_configured',code='FILEX_PREPARER_NOT_PROVISIONED')}
     # Candidate source helpers independently recheck canonical main under their
@@ -446,11 +459,18 @@ def run_once(deps, home, control, *, fetch=fetch_git, host=None):
                     result = deps.prepare_services(ev['verified'],git,home,control,assert_current=assert_current,
                                                    filex_ready=filex_ready,host=host)
                 else:
+                    history={}
+                    def prior_repo(sha):
+                        require(valid(SHA,sha),'GIT_OBJECTS_UNVERIFIED')
+                        if sha not in history:
+                            history[sha]=prior_fetch(WORKERS,Path(root)/('worker-prior-'+sha),sha,prior=True)
+                        return history[sha]
                     package = deps.prepare_workers({k:v for k,v in ev.items() if k!='verified'},repo=git,
                         home=home,control=control,read_main=main,
                         idle=lambda target,prior:worker_idle(deps,home,host,target,prior),trusted_deploy=control/'bin',
                         retry_probe=lambda target,pin,prior,finished:image_retry_baseline(
-                            home,target,pin,prior,finished,host=host))
+                            home,target,pin,prior,finished,host=host),
+                        loaded=lambda target,prior:worker_loaded(deps,home,host,target,prior),prior_repo=prior_repo)
                     require(type(package) is dict and package.get('sha')==head,'GITHUB_TARGET_EVIDENCE_INVALID')
                     result = package['targets']
                 require(type(result) is dict and set(result)==set(catalog),'GITHUB_TARGET_EVIDENCE_INVALID')

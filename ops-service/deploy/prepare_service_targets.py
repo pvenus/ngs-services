@@ -103,29 +103,34 @@ def git(repo, *args):
     return subprocess.check_output(["/usr/bin/git", "-C", str(repo), *args], timeout=30, stderr=subprocess.DEVNULL)
 
 
+def tracked_tree(repo, head, family, roots):
+    files = {}
+    counts = dict.fromkeys(SOURCE.values(), 0)
+    for root, oid in roots.items():
+        need(git(repo, "rev-parse", head + ":" + root).decode().strip() == oid, "TARGET_GIT_TREE_DRIFT")
+        raw = git(repo, "ls-tree", "-r", "-z", head, "--", root)
+        for record in raw.rstrip(b"\0").split(b"\0"):
+            flags, name = record.split(b"\t", 1)
+            mode, kind, blob = flags.split()
+            name = name.decode()
+            path = Path(name)
+            need(mode in {b"100644", b"100755"} and kind == b"blob" and name.startswith(root + "/")
+                 and all(NAME.fullmatch(part) or part == ".gitignore" for part in path.parts)
+                 and permitted_source(path, family)
+                 and not any(part.lower() in {"private", "credentials", "tokens", "secrets"} for part in path.parts)
+                 and name not in files, "TARGET_TRACKED_SOURCE_SCOPE_INVALID")
+            files[name] = (blob.decode(), int(mode[-3:], 8))
+            if path.suffix in SOURCE:
+                counts[SOURCE[path.suffix]] += 1
+    return files, counts
+
+
 def tracked_targets(verified, repo):
     """Cross-check every reported tree, check count and entrypoint against exact Git blobs."""
     p = verified["proof"]
     out = {}
     for target, row in p["targets"].items():
-        files = {}
-        counts = dict.fromkeys(SOURCE.values(), 0)
-        for root, oid in row["roots"].items():
-            need(git(repo, "rev-parse", p["headSha"] + ":" + root).decode().strip() == oid, "TARGET_GIT_TREE_DRIFT")
-            raw = git(repo, "ls-tree", "-r", "-z", p["headSha"], "--", root)
-            for record in raw.rstrip(b"\0").split(b"\0"):
-                flags, name = record.split(b"\t", 1)
-                mode, kind, blob = flags.split()
-                name = name.decode()
-                path = Path(name)
-                need(mode in {b"100644", b"100755"} and kind == b"blob" and name.startswith(root + "/")
-                     and all(NAME.fullmatch(part) or part == ".gitignore" for part in path.parts)
-                     and permitted_source(path, p["repository"])
-                     and not any(part.lower() in {"private", "credentials", "tokens", "secrets"} for part in path.parts)
-                     and name not in files, "TARGET_TRACKED_SOURCE_SCOPE_INVALID")
-                files[name] = (blob.decode(), int(mode[-3:], 8))
-                if path.suffix in SOURCE:
-                    counts[SOURCE[path.suffix]] += 1
+        files, counts = tracked_tree(repo,p["headSha"],p["repository"],row["roots"])
         need(counts == row["checked"] and all(x in files for x in row["entrypoints"]), "TARGET_GIT_CHECK_COVERAGE_DRIFT")
         out[target] = files
     return out

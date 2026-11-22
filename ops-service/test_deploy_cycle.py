@@ -23,16 +23,39 @@ class Cycle(unittest.TestCase):
         self.root=Path(temp.name).resolve()
         (self.root/'targets').mkdir(mode=0o700)
         self.hits=[]
-    def stage(self,id,sha=A,source=SOURCE):
+    def stage(self,id,sha=A,source=SOURCE,*,worker_proof=True):
         t=self.root/'targets'/id
         t.mkdir(mode=0o700,exist_ok=True)
         if id=='ngs-space':
             C.persist(t/'publication.json',{'schemaVersion':C.SPACE_PUBLICATION_SCHEMA,
              'provider':'chatgpt-sites','projectId':C.SPACE_SITE,'hostname':C.SPACE_HOST,'accessMode':'custom'})
         path=t/'run-once';path.write_bytes(source);path.chmod(0o700)
-        C.persist(t/'ready.json',{'schemaVersion':C.READY,'target':id,'sha':sha,
-         'runnerSha256':hashlib.sha256(source).hexdigest(),'artifactSha256':HASH,'verifiedAt':STAMP})
+        runner=hashlib.sha256(source).hexdigest()
+        ready={'schemaVersion':C.READY,'target':id,'sha':sha,
+               'runnerSha256':runner,'artifactSha256':HASH,'verifiedAt':STAMP}
+        if id in C.WORKER_IDS and worker_proof:
+            old='e'*40
+            ready['manualOnly']=True
+            role=id.removeprefix('worker-')
+            selector=self.root/'Library/LaunchAgents'/('com.vinus.workflow.'+role+'-worker.plist')
+            selector.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+            C.persist(selector,{'fixtureSelector':id})
+            pin=hashlib.sha256(selector.read_bytes()).hexdigest()
+            C.persist(t/'observed.json',{'sha':old,'deployedAt':STAMP})
+            C.persist(t/'candidate.json',{'target':id,'sha':sha,'archiveSha256':HASH,'expectedPriorPlistSha256':pin})
+            C.persist(t/'worker-source-decision.json',{'schemaVersion':C.WORKER_DECISION,'target':id,'sha':sha,
+             'artifactSha256':HASH,'runnerSha256':runner,'selectorSha256':pin,'observedSha':old,
+             'activeTreeSha256':'0'*64,'candidateTreeSha256':'1'*64,'state':'changed',
+             'manifestSha256':hashlib.sha256((t/'candidate.json').read_bytes()).hexdigest()})
+            path=self.root/'ops-candidate-preparation-status.json'
+            prior=C.optional(path) or {'targets':{}}
+            C.persist(path,{'schemaVersion':C.PREPARATION,'checkedAt':C.now(),
+                       'targets':{**prior['targets'],id:{'state':'ready','sha':sha}}})
+        C.persist(t/'ready.json',ready)
         return t
+
+    def cycle(self,**kwargs):
+        return C.DeploymentCycle(self.root,home=self.root,worker_probe=lambda *_:True,**kwargs)
     def receipt(self,directory,record):
         self.hits.append((directory.name,record['sha']))
         result={'schemaVersion':C.RECEIPT,'target':directory.name,'sha':record['sha'],'deployedAt':STAMP,
@@ -47,7 +70,7 @@ class Cycle(unittest.TestCase):
     def target(self,cycle,id):
         return next(r for r in cycle.status()['targets'] if r['id']==id)
     def test_bulk_uses_only_ready_rows_and_does_not_include_space(self):
-        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        c=self.cycle(runner=self.receipt)
         self.assertEqual({r['id'] for r in c.status()['targets']},C.IDS)
         self.assertEqual(len(C.IDS),13)
         self.assertNotIn('ops',C.IDS)
@@ -73,10 +96,10 @@ class Cycle(unittest.TestCase):
         def fail(d,r):
             self.hits.append((d.name,r['sha']))
             return {'sha':B}
-        c=C.DeploymentCycle(self.root,runner=fail)
-        c.sweep();self.drain(c)
+        c=self.cycle(runner=fail)
+        c.trigger(id);self.drain(c)
         self.assertEqual(self.target(c,id)['state'],'failed')
-        self.assertIsNone(self.target(c,id)['observed'])
+        self.assertEqual(self.target(c,id)['observed']['sha'],'e'*40)
         self.assertEqual(c.sweep()['active'],None)
         with self.assertRaises(Rejected):c.trigger(id)
         self.assertEqual(self.hits,[(id,A)])
@@ -95,12 +118,12 @@ class Cycle(unittest.TestCase):
             f'printf \'{{"schemaVersion":"{C.RECEIPT}","target":"{id}","sha":"{A}",'
             f'"deployedAt":"{STAMP}","state":"deployed","health":"verified"}}\\n\'\n').encode()
         self.stage(id,source=encoded)
-        c=C.DeploymentCycle(self.root)
+        c=self.cycle()
         c.trigger(id);self.drain(c)
         self.assertEqual(self.target(c,id)['state'],'current')
         self.assertEqual(self.target(c,id)['observed']['deployedAt'],STAMP)
     def test_all_drift_preflight_blocks_and_private_receipts_not_publicly_written(self):
-        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        c=self.cycle(runner=self.receipt)
         for id in C.IDS:self.stage(id)
         t=self.root/'targets'/'ngs-space'
         (t/'run-once').write_bytes(b'unexpected')
@@ -120,10 +143,10 @@ class Cycle(unittest.TestCase):
         self.addCleanup(end.set)
         def runner(directory,record):
             entered.set();end.wait(3);return self.receipt(directory,record)
-        c=C.DeploymentCycle(self.root,runner=runner)
+        c=self.cycle(runner=runner)
         c.trigger(d);self.assertTrue(entered.wait(1))
         self.assertEqual(c.status()['active'],{'selection':d,'targets':[d]})
-        other=C.DeploymentCycle(self.root,runner=self.receipt)
+        other=self.cycle(runner=self.receipt)
         with self.assertRaises(Rejected) as r:other.trigger(p)
         self.assertEqual(r.exception.status,409)
         end.set();self.drain(c)
@@ -135,7 +158,7 @@ class Cycle(unittest.TestCase):
     def test_auto_and_manual_share_eligibility_without_cross_target_fallback(self):
         only='request-service'
         self.stage(only)
-        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        c=self.cycle(runner=self.receipt)
         self.assertFalse(c.status()['allReady'])
         with self.assertRaises(Rejected):c.trigger('services')
         c.sweep();self.drain(c)
@@ -147,7 +170,7 @@ class Cycle(unittest.TestCase):
         folder=self.stage(target)
         record=json.loads((folder/'ready.json').read_bytes())
         C.persist(folder/'ready.json',{**record,'manualOnly':True})
-        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        c=self.cycle(runner=self.receipt)
         self.assertTrue(self.target(c,target)['manualOnly'])
         self.assertTrue(self.target(c,target)['canDeploy'])
         self.assertIsNone(c.sweep()['active'])
@@ -159,7 +182,7 @@ class Cycle(unittest.TestCase):
         self.assertFalse(self.target(c,target)['canDeploy'])
 
     def test_preparation_exposes_only_bounded_status_and_adds_no_deploy_authority(self):
-        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        c=self.cycle(runner=self.receipt)
         file=self.root/'ops-candidate-preparation-status.json'
         data={'schemaVersion':C.PREPARATION,'checkedAt':STAMP,'targets':{
             'worker-audio':{'state':'pending','sha':A},
@@ -182,7 +205,7 @@ class Cycle(unittest.TestCase):
         raw={'schemaVersion':C.ERROR,'target':'rs-mcp','sha':A,**data}
         source=("#!/bin/sh\nprintf '%s\\n' '"+json.dumps(raw)+"'\nexit 1\n").encode()
         t=self.stage('rs-mcp',source=source)
-        c=C.DeploymentCycle(self.root)
+        c=self.cycle()
         c.trigger('rs-mcp');self.drain(c)
         self.assertEqual(self.target(c,'rs-mcp')['failure'],data)
         self.assertEqual(json.loads((t/'last-result.json').read_bytes())['failure'],data)
@@ -190,7 +213,7 @@ class Cycle(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'OPS_TARGET_ERROR_INVALID'):
             C.safe_failure({**data,'code':'/private/credentials'})
     def test_space_is_a_fixed_site_not_a_local_path_or_implicit_permission(self):
-        c=C.DeploymentCycle(self.root,runner=self.receipt)
+        c=self.cycle(runner=self.receipt)
         target=self.stage('ngs-space')
         config=target/'publication.json'
         row=self.target(c,'ngs-space')
@@ -210,7 +233,7 @@ class Cycle(unittest.TestCase):
         source=("#!/bin/sh\nprintf '%s\\n' '"+json.dumps(raw)+"'\nexit 1\n").encode()
         path=self.stage('ngs-local',source=source)
         C.persist(path/'observed.json',{'sha':B,'deployedAt':STAMP})
-        cycle=C.DeploymentCycle(self.root)
+        cycle=self.cycle()
         cycle.trigger('ngs-local');self.drain(cycle)
         result=self.target(cycle,'ngs-local')
         self.assertEqual(result['failure'],failure)
@@ -236,10 +259,47 @@ class Cycle(unittest.TestCase):
         result_file=self.root/'mac-releases'/A/'result.json'
         C.persist(result_file,{'state':'rolled-back'})
         saved=(path/'last-result.json').read_bytes(),result_file.read_bytes()
-        cycle=C.DeploymentCycle(self.root,runner=self.receipt)
+        cycle=self.cycle(runner=self.receipt)
         row=self.target(cycle,'ngs-local')
         self.assertEqual(row['failure'],{'phase':'unknown','code':'NGS_LOCAL_CAUSE_NOT_RECORDED','rollback':'restored'})
         self.assertFalse(row['canDeploy'])
         self.assertEqual(((path/'last-result.json').read_bytes(),result_file.read_bytes()),saved)
         C.persist(result_file,{'state':'rolled-back','raw':'not trusted'})
         self.assertNotIn('failure',self.target(cycle,'ngs-local'))
+
+    def test_worker_delta_requires_recent_exact_supervisor_and_live_click_proof(self):
+        target='worker-document'
+        row=self.stage(target)
+        c=self.cycle(runner=self.receipt)
+        self.assertTrue(self.target(c,target)['canDeploy'])
+        status=self.root/'ops-candidate-preparation-status.json'
+        saved=C.optional(status)
+        for state in ('blocked','current'):
+            C.persist(status,{**saved,'targets':{target:{'state':state,'sha':A}}})
+            self.assertFalse(self.target(c,target)['canDeploy'])
+            with self.assertRaises(Rejected):c.trigger(target)
+        C.persist(status,{**saved,'targets':{target:{'state':'ready','sha':B}}})
+        self.assertFalse(self.target(c,target)['canDeploy'])
+        C.persist(status,saved)
+        c.worker_probe=lambda *_:False
+        with self.assertRaises(Rejected):c.trigger(target)
+        self.assertEqual(self.hits,[])
+        (row/'worker-source-decision.json').unlink()
+        self.assertFalse(self.target(c,target)['canDeploy'])
+        with self.assertRaises(Rejected):c.trigger(target)
+
+    def test_worker_equivalent_makes_old_ready_non_actionable_for_manual_and_all(self):
+        target='worker-animation'
+        row=self.stage(target)
+        c=self.cycle(runner=self.receipt)
+        d=C.optional(row/'worker-source-decision.json')
+        d={**d,'state':'equivalent','candidateTreeSha256':d['activeTreeSha256']}
+        del d['manifestSha256']
+        eq={k:d[k] for k in ('target','sha','observedSha','artifactSha256','runnerSha256','selectorSha256')}
+        C.persist(row/'equivalent.json',{**eq,'schemaVersion':'ops.deploy-target-equivalent.v1',
+                   'runtimeTreeSha256':d['activeTreeSha256'],'verifiedAt':STAMP})
+        C.persist(row/'worker-source-decision.json',d)
+        self.assertEqual(self.target(c,target)['state'],'current')
+        self.assertFalse(self.target(c,target)['canDeploy'])
+        c.trigger(target);c.trigger('all');c.sweep()
+        self.assertEqual(self.hits,[])

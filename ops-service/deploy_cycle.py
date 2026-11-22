@@ -15,6 +15,7 @@ import uuid
 from deploy_control import KEY, bounded_private, is_sha, reject, secure_directory, stamp
 from release_equivalence import actual_selector_sha, equivalent_release
 from deploy.prepare_ops_candidates_once import image_retry_baseline
+from deploy.prepare_ops_candidates_once import current_worker_idle
 
 
 TARGETS=(
@@ -27,6 +28,8 @@ TARGETS=(
 )
 GROUPS=(('ngs','NGS'),('services','서비스'),('workers','워커'))
 IDS={item[0] for item in TARGETS}
+WORKER_IDS={t for t,_,group in TARGETS if group=='workers'}
+WORKER_DECISION='ops.worker-source-decision.v1'
 READY='ops.deploy-target-ready.v1'
 IMAGE_RETRY='worker-image'
 IMAGE_RETRY_READY='ops.worker-manual-retry-ready.v1'
@@ -347,10 +350,11 @@ def proof(value,target,sha):
 
 
 class DeploymentCycle:
-    def __init__(self,root,*,runner=fixed_runner,retry_probe=image_retry_baseline,home=None):
+    def __init__(self,root,*,runner=fixed_runner,retry_probe=image_retry_baseline,worker_probe=current_worker_idle,home=None):
         self.root=Path(root)
         self.runner=runner
         self.retry_probe=retry_probe
+        self.worker_probe=worker_probe
         self.home=Path.home() if home is None else Path(home)
         self.guard=threading.RLock()
         self.active=None
@@ -448,11 +452,71 @@ class DeploymentCycle:
             try: verified_runner(path/'run-once')
             except (OSError,ValueError):return (None,initial,'not_configured')
             return (None,initial,'pending')
-        if state and state['attemptedSha']==record['sha'] and state['state']=='failed':
+        failed=state and state['attemptedSha']==record['sha'] and state['state']=='failed'
+        if target in WORKER_IDS:
+            # Prepared worker deployments must prove a real per-target delta,
+            # not merely an old board-level candidate/ready record.
+            if initial and initial['sha']==record['sha'] and not failed:
+                return (record,initial,'current')
+            try:decision=self._worker_decision(path,target,record,initial)
+            except (OSError,ValueError,KeyError,TypeError):
+                if failed and target==IMAGE_RETRY:
+                    return (record,initial,'failed')
+                raise
+            if decision=='equivalent':
+                check(equivalent_release(path,target,record,initial,
+                      selector_sha=lambda key:actual_selector_sha(key,home=self.home)),
+                      'OPS_TARGET_SOURCE_DECISION_INVALID')
+                return (record,initial,'current')
+            if failed:
+                return (record,initial,'failed')
+            if decision=='changed':
+                return (record,initial,'ready')
+            # A legacy proof can only suppress execution on transitional
+            # installs; no old ready marker may enable any worker deployment.
+            if initial and equivalent_release(path,target,record,initial,
+                      selector_sha=lambda key:actual_selector_sha(key,home=self.home)):
+                return (record,initial,'current')
+            return (record,initial,'pending')
+        if failed:
             return (record,initial,'failed')
         if initial and (initial['sha']==record['sha'] or equivalent_release(path,target,record,initial)):
             return (record,initial,'current')
         return (record,initial,'ready')
+
+    def _worker_decision(self,path,target,record,initial):
+        file=path/'worker-source-decision.json'
+        try:
+            decision=retry_read(file)
+        except FileNotFoundError:
+            return None
+        fields=('schemaVersion','target','sha','artifactSha256','runnerSha256','selectorSha256',
+                'observedSha','activeTreeSha256','candidateTreeSha256','state')
+        check(type(decision) is dict and decision.get('state') in ('equivalent','changed') and
+              exact(decision,*fields,*(['manifestSha256'] if decision.get('state')=='changed' else [])),
+              'OPS_TARGET_SOURCE_DECISION_INVALID')
+        # Interrupted/moved publication is not an executable old plan.
+        if decision['sha']!=record['sha']:
+            return None
+        check(decision['schemaVersion']==WORKER_DECISION and decision['target']==target and
+              record.get('manualOnly') is True and initial and decision['observedSha']==initial['sha'] and
+              decision['artifactSha256']==record['artifactSha256'] and decision['runnerSha256']==record['runnerSha256'] and
+              sha256(decision['activeTreeSha256']) and sha256(decision['candidateTreeSha256']) and
+              decision['selectorSha256']==actual_selector_sha(target,home=self.home) and
+              (decision['activeTreeSha256']==decision['candidateTreeSha256'])==(decision['state']=='equivalent'),
+              'OPS_TARGET_SOURCE_DECISION_INVALID')
+        if decision['state']=='changed':
+            raw=bounded_private(path/'candidate.json',4096)
+            candidate=json.loads(raw,object_pairs_hook=unique_pairs)
+            check(decision['manifestSha256']==hashlib.sha256(raw).hexdigest() and
+                  candidate['target']==target and candidate['sha']==record['sha'] and
+                  candidate['archiveSha256']==record['artifactSha256'] and
+                  candidate['expectedPriorPlistSha256']==decision['selectorSha256'],'OPS_TARGET_SOURCE_DECISION_INVALID')
+            status=preparation_status(self.root)
+            if (not status or status['targets'].get(target)!={'state':'ready','sha':record['sha']}
+                    or not 0<=(stamp(now())-stamp(status['checkedAt'])).total_seconds()<=900):
+                return None
+        return decision['state']
 
     def _retry_plan(self,record,initial):
         # Results/pins are just eligibility evidence. The native runner repeats
@@ -592,6 +656,9 @@ class DeploymentCycle:
     def _plan_still_exact(self,target,record):
         current,_,phase=self._target(target)
         check(current==record and phase=='ready','OPS_TARGET_PLAN_CHANGED')
+        if target in WORKER_IDS:
+            pin=actual_selector_sha(target,home=self.home)
+            check(self.worker_probe(self.home,target,pin) is True,'OPS_WORKER_LIVE_BASELINE_UNPROVEN')
 
     def _run(self,fd,job,staged):
         safely_done=False
@@ -651,6 +718,10 @@ class DeploymentCycle:
                 _,fresh,blocked=self._snapshot()
                 if blocked or any(fresh.get(key)!=plans[key] for key in expected):
                     reject(409,'OPS_DEPLOY_CYCLE_PLAN_CHANGED')
+                if selection in WORKER_IDS:
+                    pin=actual_selector_sha(selection,home=self.home)
+                    if self.worker_probe(self.home,selection,pin) is not True:
+                        reject(409,'OPS_WORKER_LIVE_BASELINE_UNPROVEN')
                 job={'schemaVersion':ACTIVE,'selection':selection,'targets':[row[0] for row in staged],'startedAt':now()}
                 persist(self.root/'active.json',job)
                 self.active=job

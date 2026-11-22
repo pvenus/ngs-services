@@ -46,9 +46,16 @@ class WorkerCandidates(unittest.TestCase):
         paths.update(f'{audio.NATIVE}/{name}' for name in audio.CODE)
         for path in paths:
             write(cls.repo/'workflow-production'/path,('fixture '+path).encode())
-        git('add','workflow-production')
-        git('-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm','fixture')
-        cls.head=git('rev-parse','HEAD').decode().strip()
+        def commit(label,*options):
+            git('add','workflow-production')
+            git('-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm',label,*options)
+            return git('rev-parse','HEAD').decode().strip()
+        cls.prior_sha=commit('old worker contents')
+        for _, entries in source.SPECS[source.WORKERS].values():
+            for entry in entries:
+                write(cls.repo/entry,b'// changed worker candidate fixture\n')
+        cls.head=commit('new worker contents')
+        cls.same_tree_sha=commit('equivalent worker contents','--allow-empty')
         targets={}
         for target,(roots,entries) in source.SPECS[source.WORKERS].items():
             trees={key:git('rev-parse','HEAD:'+key).decode().strip() for key in roots}
@@ -83,7 +90,8 @@ class WorkerCandidates(unittest.TestCase):
         root=self.home/'Workspaces/Workers'
         self.releases=root/'code/releases'
         self.releases.mkdir(mode=0o700,parents=True)
-        self.prior=self.releases/'workflows-github-abcdef1'
+        self.prior=self.releases/('workflows-github-'+self.prior_sha[:7])
+        self.install_source(self.prior,self.prior_sha)
         self.runtime=root/'runtime'
         self.runtime.mkdir(mode=0o700)
         self.selector_paths={}
@@ -102,8 +110,16 @@ class WorkerCandidates(unittest.TestCase):
             return accessible(value, **options)
         self.enterContext(patch.object(workers,'_accessible',side_effect=fixture_accessible))
         db=write(self.runtime/'workflow.sqlite',b'not opened')
-        native=self.releases/'workflow-native-audio-resident-github-abcdef1'
-        for name in audio.CODE:write(native/name,b'old content')
+        native=self.releases/('workflow-native-audio-resident-github-'+self.prior_sha[:7])
+        def depth(path):return len(path.parts)
+        for old in sorted((self.prior/audio.NATIVE).rglob('*'),key=depth):
+            dest=native/old.relative_to(self.prior/audio.NATIVE)
+            if old.is_dir():
+                dest.mkdir(mode=0o700,parents=True,exist_ok=True)
+                dest.chmod(0o700)
+            elif old.is_file():
+                write(dest,old.read_bytes())
+        native.chmod(0o700)
         runtime_root=self.runtime/'audio-runtime'
         artifact_root=self.runtime/'audio-scratch'
         artifact_root.mkdir(mode=0o700)
@@ -123,12 +139,11 @@ class WorkerCandidates(unittest.TestCase):
         self.trusted=Path(workers.__file__).parent
         for target in workers.TARGET_IDS:
             definition=workers.TARGETS[target]
-            old=write(self.prior/definition.entry,b'old content')
+            old=self.prior/definition.entry
             args=[str(exe),str(old),'--run','--db',str(db)]
             env={}
             if target=='worker-file': args=[str(exe),str(old),'--single-target','--resident','--db',str(db)]
             if target=='worker-animation':
-                (self.prior/'native-wan').mkdir(mode=0o700)
                 bind=write(self.runtime/'wan-binding.json',b'{}')
                 env={'WORKFLOW_WAN_RELEASE':str(self.prior/'native-wan'),
                      'WORKFLOW_WAN_PYTHON':str(exe),'WORKFLOW_WAN_BINDING':str(bind)}
@@ -138,21 +153,35 @@ class WorkerCandidates(unittest.TestCase):
             if target=='worker-postprocess':
                 sam=self.runtime/'sam'
                 sam.mkdir(mode=0o700)
-                (self.prior/'native-postprocess').mkdir(mode=0o700)
                 args+=['--config',str(write(self.runtime/'pp-config.json',b'{}')),
                        '--model-pins',str(write(self.runtime/'pp-pins.json',b'{}')),
                        '--worker-source',str(self.prior/'native-postprocess'),'--sam-source',str(sam)]
             if target=='worker-audio':
-                adapter=write(self.prior/'candidate-audio-resident/adapters/load.mjs',b'old content')
+                adapter=self.prior/'candidate-audio-resident/adapters/load.mjs'
                 args+=['--adapter-module',str(adapter),'--adapter-config',str(outer)]
             p=self.home/'Library/LaunchAgents'/(definition.label+'.plist')
             self.selector_paths[target]=write(p,plistlib.dumps({'Label':definition.label,
                 'ProgramArguments':args,'WorkingDirectory':str(old.parent),'EnvironmentVariables':env}))
             folder=self.targets/target
             folder.mkdir(mode=0o700)
+            self.observed(target,self.prior_sha)
             write(folder/'run-once',(self.trusted/'mac_target_apply.py').read_bytes()).chmod(0o500)
             for module in workers.SUPPORT:
                 write(folder/module,(self.trusted/module).read_bytes())
+
+    def install_source(self,release,revision):
+        paths=source.git(self.repo,'ls-tree','-r','--name-only',revision,'--','workflow-production').decode().splitlines()
+        for path in paths:
+            dst=release/Path(path).relative_to('workflow-production')
+            for parent in reversed([x for x in dst.parents if x.is_relative_to(release)]):
+                parent.mkdir(mode=0o700,exist_ok=True)
+            write(dst,source.git(self.repo,'show',revision+':'+path))
+
+    def observed(self,target,sha):
+        atomic_write(self.targets/target/'observed.json',json_bytes({'sha':sha,'deployedAt':'2026-11-21T12:28:46Z'}))
+
+    def loaded(self,target,pin):
+        return pin==digest(self.selector_paths[target].read_bytes())
 
     def idle(self,target,pin):
         self.calls.append(target)
@@ -161,7 +190,8 @@ class WorkerCandidates(unittest.TestCase):
     def prepare(self,evidence=None,main=None,retry_probe=None):
         return workers.prepare_worker_candidates(self.evidence if evidence is None else evidence,
                 repo=self.repo,home=self.home,control=self.control,
-                read_main=main or (lambda:self.head), idle=self.idle, retry_probe=retry_probe)
+                read_main=main or (lambda:self.head), idle=self.idle, retry_probe=retry_probe,
+                loaded=self.loaded,prior_repo=lambda _:self.repo)
 
     def test_all_six_real_artifact_bindings_publish_manual_only_and_rerun_is_noop(self):
         original={p:p.read_bytes() for p in self.selector_paths.values()}|self.old_bindings
@@ -243,7 +273,7 @@ class WorkerCandidates(unittest.TestCase):
         ready=folder/'ready.json'
         old_plan=json_load(prior.read_bytes())
         old_ready=ready.read_bytes()
-        baseline='abcdef1'+'a'*33
+        baseline=self.prior_sha
         last=folder/'last-result.json'
         atomic_write(last,json_bytes({'schemaVersion':workers.TERMINAL,'target':target,'attemptedSha':self.head,
              'state':'failed','finishedAt':'2026-11-22T16:08:26Z','observed':{'sha':baseline,
@@ -273,3 +303,44 @@ class WorkerCandidates(unittest.TestCase):
         atomic_write(prior,json_bytes({**new_plan,'treeSha256':'c'*64}))
         self.assertEqual(self.prepare(retry_probe=authoritative_probe)['targets'][target],
                          {'state':'blocked','code':'WORKER_REGISTERED_CANDIDATE_DRIFT'})
+
+    def test_equivalent_loaded_worker_stays_current_even_if_busy_and_replaces_stale_ready(self):
+        self.prepare()
+        target='worker-document'
+        self.blocked.add(target)
+        selector=self.selector_paths[target]
+        v=plistlib.loads(selector.read_bytes())
+        equivalent=self.releases/('workflows-github-'+self.same_tree_sha)
+        self.install_source(equivalent,self.same_tree_sha)
+        v['ProgramArguments'][1]=str(equivalent/workers.TARGETS[target].entry)
+        v['WorkingDirectory']=str((equivalent/workers.TARGETS[target].entry).parent)
+        write(selector,plistlib.dumps(v))
+        self.observed(target,self.same_tree_sha)
+        folder=self.targets/target
+        saved=(folder/'candidate.json').read_bytes()
+        rows=self.prepare()['targets']
+        self.assertEqual(rows[target],{'state':'current'})
+        self.assertEqual(rows['worker-animation'],{'state':'already_ready'})
+        self.assertEqual((folder/'candidate.json').read_bytes(),saved)
+        proof=json_load((folder/'equivalent.json').read_bytes())
+        self.assertEqual(proof['observedSha'],self.same_tree_sha)
+        marker=json_load((folder/'worker-source-decision.json').read_bytes())
+        self.assertEqual(marker['activeTreeSha256'],marker['candidateTreeSha256'])
+        self.assertEqual(marker['state'],'equivalent')
+
+    def test_active_tree_or_native_sidecar_drift_is_never_a_change(self):
+        write(self.prior/'native-wan/workers/animation/unexpected.py',b'untested extra')
+        sidecar=self.releases/('workflow-native-audio-resident-github-'+self.prior_sha[:7])
+        write(sidecar/'extra.py',b'untested extra')
+        rows=self.prepare()['targets']
+        for target in ('worker-animation','worker-audio'):
+            self.assertEqual(rows[target],{'state':'blocked','code':'WORKER_ACTIVE_TREE_DRIFT'})
+            self.assertFalse((self.targets/target/'ready.json').exists())
+        self.assertEqual(rows['worker-file'],{'state':'ready'})
+
+    def test_unproven_loaded_selector_never_registers_earlier_observed_release(self):
+        self.loaded=lambda target,pin:False
+        rows=self.prepare()['targets']
+        self.assertTrue(all(row=={'state':'blocked','code':'WORKER_LOADED_UNPROVEN'}
+                            for row in rows.values()))
+        self.assertEqual(list(self.targets.rglob('ready.json')),[])

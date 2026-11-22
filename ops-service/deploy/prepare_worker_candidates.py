@@ -5,13 +5,15 @@ import os
 from pathlib import Path
 import plistlib
 import stat
+import re
+import subprocess
 
 from mac_target_apply import TARGETS, validate_and_rewrite
 from prepare_ngs_local_once import lock, read_private
 from prepare_ngs_release import (Refused, atomic_write, digest, json_bytes, json_load, need,
                                  private_directory, private_file, tree_sha)
-from prepare_service_targets import (SPECS, WORKERS, assemble_source, prepare_audio_candidate,
-                                     tracked_targets, verify_target_artifact)
+from prepare_service_targets import (SPECS, WORKERS, assemble_source, git, prepare_audio_candidate,
+                                     tracked_targets, tracked_tree, verify_target_artifact)
 
 TARGET_IDS = tuple(SPECS[WORKERS])
 READY = 'ops.deploy-target-ready.v1'
@@ -20,6 +22,9 @@ TERMINAL = 'ops.deploy-target-result.v1'
 MAX_CONTROL = 128 * 1024
 RETRY_TARGET = 'worker-image'
 RETRY_READY = 'ops.worker-manual-retry-ready.v1'
+DECISION = 'ops.worker-source-decision.v1'
+SHA = re.compile(r'[a-f0-9]{40}')
+STAMP = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')
 # Trusted production adapters are read and compared, never imported from the
 # live target directories or executed by this module.
 SUPPORT = ('prepare_ngs_release.py', 'planner_cutover.py', 'audio_cutover.py')
@@ -93,6 +98,8 @@ def _selector(target, home, release):
     need(type(args) is list and len(args) >= 2 and all(type(a) is str for a in args), 'WORKER_SELECTOR_INVALID')
     old_entry = Path(args[1])
     old = old_entry.parents[len(Path(catalog.entry).parts)-1]
+    need(old_entry==old/catalog.entry and current.get('Label')==catalog.label and
+         current.get('WorkingDirectory')==str(old_entry.parent),'WORKER_SELECTOR_INVALID')
     if old == release:
         return prior, current, old, None
     proposed = plistlib.loads(validate_and_rewrite(prior, release, catalog, home/'Workspaces'))
@@ -152,17 +159,130 @@ def _prior_attempt(target_dir, target, head):
     return (last,digest(raw)) if last['attemptedSha']==head and last['state']=='failed' else None
 
 
-def _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle, retry_probe):
+def _observation(directory,target,old):
+    last=_optional(directory/'last-result.json')
+    initial=_optional(directory/'observed.json')
+    rows=[]
+    for item in (initial,last.get('observed') if last else None):
+        if item is None:continue
+        need(type(item) is dict and set(item)=={'sha','deployedAt'} and type(item['sha']) is str
+             and SHA.fullmatch(item['sha']) and type(item['deployedAt']) is str and STAMP.fullmatch(item['deployedAt']),
+             'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+        datetime.fromisoformat(item['deployedAt'])
+        rows.append(item)
+    need(bool(rows),'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+    observed=max(reversed(rows),key=lambda item:item['deployedAt'])
+    hint=old.name.removeprefix('workflows-github-')
+    need(re.fullmatch(r'[a-f0-9]{7,40}',hint) is not None and observed['sha'].startswith(hint),
+         'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+    return observed['sha']
+
+
+def _history(repo, revision, target):
+    declared, entries=SPECS[WORKERS][target]
+    root={r:git(repo,'rev-parse',revision+':'+r).decode().strip() for r in declared}
+    files,_=tracked_tree(repo,revision,WORKERS,root)
+    need(all(x in files for x in entries),'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+    return files
+
+
+def _active_paths(target, selector, old):
+    args=selector['ProgramArguments']
+    env=selector.get('EnvironmentVariables',{})
+    names={p.removeprefix('workflow-production/'):old/p.removeprefix('workflow-production/')
+           for p in SPECS[WORKERS][target][0]}
+    if target=='worker-animation':
+        need(env.get('WORKFLOW_WAN_RELEASE')==str(names['native-wan']),'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+    if target=='worker-postprocess':
+        need(args.count('--worker-source')==1 and args[args.index('--worker-source')+1]==str(names['native-postprocess']),
+             'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+    if target=='worker-audio':
+        from audio_cutover import NATIVE, _configured_outer, _config, _verify
+        _, config, _=_config(_configured_outer(args))
+        sidecar=Path(config['release_root'])
+        need(sidecar==old.with_name(old.name.replace('workflows-github-','workflow-native-audio-resident-github-',1)),
+             'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+        _verify(config,sidecar)
+        # Compare both the installed source and the actually selected second
+        # native copy; dormant source alone cannot establish audio equivalence.
+        names[NATIVE]=(names[NATIVE],sidecar)
+    return names
+
+
+def _active_tree(paths, expected):
+    content=[]
+    for name, anchors in sorted(paths.items()):
+        if isinstance(anchors,Path):anchors=(anchors,)
+        prefix='workflow-production/'+name+'/'
+        expected_root={Path(k.removeprefix(prefix)):v for k,v in expected.items() if k.startswith(prefix)}
+        need(bool(expected_root),'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+        expected_dirs={p for rel in expected_root for p in rel.parents if p!=Path('.')}
+        for anchor in anchors:
+            _safe_runtime_dir(anchor)
+            found=set();dirs=set()
+            for f in anchor.rglob('*'):
+                rel=f.relative_to(anchor)
+                attrs=f.lstat()
+                if stat.S_ISDIR(attrs.st_mode):
+                    _safe_runtime_dir(f)
+                    dirs.add(rel)
+                    continue
+                need(rel in expected_root,'WORKER_ACTIVE_TREE_DRIFT')
+                oid,mode=expected_root[rel]
+                # Earlier approved read-only installs may be 0400/0500; only
+                # owner access bits and execute class can differ from 0600/0700.
+                flags=stat.S_IMODE(attrs.st_mode)
+                need(flags in ((0o400,0o600) if mode==0o644 else (0o500,0o700)),
+                     'WORKER_ACTIVE_TREE_DRIFT')
+                raw=read_private(f,8*1024*1024,mode=flags) if attrs.st_size else _empty(f,flags)
+                need(hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==oid,
+                     'WORKER_ACTIVE_TREE_DRIFT')
+                found.add(rel)
+            need(found==set(expected_root) and dirs==expected_dirs,'WORKER_ACTIVE_TREE_DRIFT')
+        content.extend((prefix+p.as_posix(),spec) for p,spec in expected_root.items())
+    need(len(content)==len(expected),'WORKER_ACTIVE_TREE_DRIFT')
+    return digest(json_bytes(sorted(content)))
+
+
+def _safe_runtime_dir(path):
+    attrs=path.lstat()
+    need(path.resolve()==path and attrs.st_uid==os.getuid() and stat.S_ISDIR(attrs.st_mode)
+         and stat.S_IMODE(attrs.st_mode) in (0o500,0o700),'WORKER_ACTIVE_TREE_DRIFT')
+
+
+def _comparison(previous_repo, target, selector, old, current, directory, head):
+    observed=_observation(directory,target,old)
+    previous=current if observed==head else _history(previous_repo(observed),observed,target)
+    active_digest=_active_tree(_active_paths(target,selector,old),previous)
+    candidate_digest=digest(json_bytes(sorted(current.items())))
+    return ('equivalent' if previous==current else 'changed',observed,active_digest,candidate_digest)
+
+
+def _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle, retry_probe,
+          loaded, prior_repo, tracked):
     directory = control/'targets'/target
     private_directory(directory)
     head = verified['proof']['headSha']
     failed=_prior_attempt(directory,target,head)
     need(not failed or target==RETRY_TARGET and retry_probe is not None,'WORKER_ATTEMPT_FAILED')
-    prior, _, _, proposed = _selector(target, home, release)
-    if proposed is None:
-        need(not failed,'WORKER_RETRY_BASELINE_UNPROVEN')
-        return 'current', None
+    prior, selector, old, proposed = _selector(target, home, release)
     prior_hash = digest(prior)
+    need(loaded(target,prior_hash) is True,'WORKER_LOADED_UNPROVEN')
+    verify_worker_runtime(target,selector)
+    try:
+        comparison=_comparison(prior_repo,target,selector,old,tracked[target],directory,head)
+    except (OSError,ValueError,KeyError,IndexError,TypeError,subprocess.SubprocessError) as error:
+        if not failed:
+            code='WORKER_ACTIVE_TREE_DRIFT' if getattr(error,'args',())==('WORKER_ACTIVE_TREE_DRIFT',) else 'WORKER_ACTIVE_PROOF_UNAVAILABLE'
+            raise Refused(code) from None
+        comparison=None # Existing exact Image recovery still requires its separate authority.
+    if proposed is None:
+        need(not failed and comparison and comparison[0]=='equivalent','WORKER_ACTIVE_PROOF_UNAVAILABLE')
+        return 'current',None
+    if comparison and comparison[0]=='equivalent':
+        verification=_runner(target,directory,trusted_deploy)
+        return 'verified', ({'target':target,'sha':head,'archiveSha256':verified['artifactSha256'],
+                            'expectedPriorPlistSha256':prior_hash},verification,prior,failed,comparison)
     if failed:
         last, _ = failed
         previous=last.get('observed')
@@ -181,10 +301,10 @@ def _plan(verified, repo, home, control, release, full_tree, target, trusted_dep
         need(all(staged.get(k)==v for k,v in candidate.items()) and set(staged)==set(candidate)|{'audioBindingSha256'},
              'WORKER_AUDIO_PROOF_DRIFT')
         candidate = staged
-    return 'verified', (candidate, verification, prior, failed)
+    return 'verified', (candidate, verification, prior, failed, comparison)
 
 
-def _publish(directory, candidate, runner, stamp):
+def _publish(directory, candidate, runner, stamp, decision):
     """Ready is the last pointer. Detached candidate proof always binds SHA and ZIP."""
     ready = {'schemaVersion': READY, 'target': candidate['target'], 'sha': candidate['sha'],
              'verifiedAt': stamp, 'artifactSha256': candidate['archiveSha256'], 'runnerSha256': runner,
@@ -210,12 +330,50 @@ def _publish(directory, candidate, runner, stamp):
             need(prior_candidate['archiveSha256']==candidate['archiveSha256'],'WORKER_REGISTERED_CANDIDATE_DRIFT')
     if prior_ready is not None and all(ready[k] == prior_ready.get(k) for k in ready if k != 'verifiedAt'):
         need(prior_candidate == candidate, 'WORKER_REGISTERED_CANDIDATE_DRIFT')
+        _save_decision(directory,decision,candidate)
         return 'already_ready'
     if prior_candidate != candidate:
         atomic_write(directory/'candidate.json', json_bytes(candidate))
+    _save_decision(directory,decision,candidate)
     atomic_write(directory/'ready.json', json_bytes(ready))
     return 'ready'
 
+
+
+def _write_once(path,value):
+    if _optional(path)!=value:
+        atomic_write(path,json_bytes(value))
+
+
+def _save_decision(directory,decision,candidate=None):
+    if candidate is not None:
+        decision={**decision,'manifestSha256':digest(read_private(directory/'candidate.json',4096,mode=0o600))}
+    _write_once(directory/'worker-source-decision.json',decision)
+
+
+def _decision(candidate,runner,comparison):
+    state,revision,old,new=comparison
+    return {'schemaVersion':DECISION,'target':candidate['target'],'sha':candidate['sha'],
+            'artifactSha256':candidate['archiveSha256'],'runnerSha256':runner,
+            'selectorSha256':candidate['expectedPriorPlistSha256'],'observedSha':revision,
+            'activeTreeSha256':old,'candidateTreeSha256':new,'state':state}
+
+
+def _publish_equivalent(directory,candidate,runner,stamp,decision):
+    prior=_optional(directory/'ready.json')
+    if prior and prior.get('sha')==candidate['sha']:
+        need(prior.get('target')==candidate['target'] and prior.get('artifactSha256')==candidate['archiveSha256']
+             and prior.get('runnerSha256')==runner,'WORKER_REGISTERED_CANDIDATE_DRIFT')
+        stamp=prior['verifiedAt']
+    ready={'schemaVersion':READY,'target':candidate['target'],'sha':candidate['sha'],
+           'verifiedAt':stamp,'artifactSha256':candidate['archiveSha256'],'runnerSha256':runner,'manualOnly':True}
+    equivalent={k:decision[k] for k in ('target','sha','observedSha','artifactSha256','runnerSha256','selectorSha256')}
+    equivalent.update(schemaVersion='ops.deploy-target-equivalent.v1',verifiedAt=stamp,
+                      runtimeTreeSha256=decision['activeTreeSha256'])
+    _write_once(directory/'equivalent.json',equivalent)
+    _save_decision(directory,decision)
+    _write_once(directory/'ready.json',ready)
+    return 'current'
 
 
 def _publish_retry(directory,candidate,runner,failed):
@@ -243,7 +401,7 @@ def _publish_retry(directory,candidate,runner,failed):
     return 'ready'
 
 
-def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle, trusted_deploy=None, retry_probe=None):
+def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle, trusted_deploy=None, retry_probe=None, loaded=None, prior_repo=None):
     """Accept exact authenticated metadata/ZIP; publish only after trusted idle and CAS checks.
 
     Transport and process supervision are separate. `read_main()` fetches the
@@ -255,6 +413,7 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
     trusted_deploy = Path(trusted_deploy) if trusted_deploy is not None else Path(__file__).resolve().parent
     private_directory(control)
     private_directory(control/'targets')
+    need(callable(loaded) and callable(prior_repo),'WORKER_ACTIVE_PROOF_UNAVAILABLE')
     need(type(evidence) is dict and set(evidence) == {'head','workflow','run','artifact','raw'},
          'WORKER_EVIDENCE_INVALID')
     head = evidence['head']
@@ -273,7 +432,7 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
         plans, rows = {}, {}
         for target in TARGET_IDS:
             try:
-                state, plan = _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle, retry_probe)
+                state, plan = _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle, retry_probe, loaded, prior_repo, tracked)
                 rows[target] = {'state': state}
                 if plan:
                     plans[target] = plan
@@ -285,26 +444,33 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
             need(not os.path.lexists(control/'active.json'), 'WORKER_DEPLOY_ACTIVE_OR_UNVERIFIED')
             need(_exact_source(release, tracked) == full_tree, 'WORKER_RELEASE_SOURCE_DRIFT')
             verified_plans = {}
-            for target, (candidate, pins, prior, failed) in plans.items():
+            for target, (candidate, pins, prior, failed, comparison) in plans.items():
                 try:
                     updated_state, updated_plan = _plan(verified, repo, home, control, release, full_tree,
-                                                       target, trusted_deploy, idle, retry_probe)
-                    need(updated_state == 'verified' and updated_plan == (candidate,pins,prior,failed),
+                                                       target, trusted_deploy, idle, retry_probe, loaded, prior_repo, tracked)
+                    need(updated_state == 'verified' and updated_plan == (candidate,pins,prior,failed,comparison),
                          'WORKER_ADMISSION_INPUT_DRIFT')
-                    verified_plans[target] = (candidate, pins[0], failed)
+                    verified_plans[target] = (candidate, pins[0], failed, comparison)
                 except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
                     rows[target] = {'state': 'blocked', 'code': _safe_reason(exc)}
             if verified_plans:
                 need(read_main() == head, 'WORKER_MAIN_ADVANCED')
                 stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                for target, (candidate, runner, failed) in verified_plans.items():
+                for target, (candidate, runner, failed, comparison) in verified_plans.items():
                     directory = control/'targets'/target
                     try:
                         prior, _, _, proposed = _selector(target, home, release)
-                        need(proposed is not None and digest(prior) == candidate['expectedPriorPlistSha256']
+                        pin=candidate['expectedPriorPlistSha256']
+                        need(proposed is not None and digest(prior)==pin and loaded(target,pin) is True
                              and _prior_attempt(directory,target,head)==failed,'WORKER_ADMISSION_INPUT_DRIFT')
-                        state=(_publish_retry(directory,candidate,runner,failed) if failed else
-                               _publish(directory,candidate,runner,stamp))
+                        if not comparison or comparison[0]!='equivalent':
+                            need(idle(target,pin) is True,'WORKER_IDLE_UNPROVEN')
+                        if comparison and comparison[0]=='equivalent':
+                            state=_publish_equivalent(directory,candidate,runner,stamp,_decision(candidate,runner,comparison))
+                        elif failed:
+                            state=_publish_retry(directory,candidate,runner,failed)
+                        else:
+                            state=_publish(directory,candidate,runner,stamp,_decision(candidate,runner,comparison))
                         rows[target] = {'state':state}
                     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
                         rows[target] = {'state': 'blocked', 'code': _safe_reason(exc)}
@@ -315,7 +481,8 @@ SAFE_CODES = frozenset(('WORKER_RUNNER_UNVERIFIED WORKER_RUNNER_DEPENDENCY_UNVER
     'WORKER_SELECTOR_INVALID WORKER_RUNTIME_PATH_INVALID WORKER_RUNTIME_DEPENDENCY_UNVERIFIED '
     'WORKER_DATABASE_UNVERIFIED WORKER_IMAGE_CONFIG_UNVERIFIED WORKER_OUTCOME_UNVERIFIED '
     'WORKER_ATTEMPT_FAILED WORKER_RETRY_BASELINE_UNPROVEN WORKER_IDLE_UNPROVEN WORKER_AUDIO_PROOF_DRIFT '
-    'WORKER_ADMISSION_INPUT_DRIFT WORKER_REGISTERED_CANDIDATE_DRIFT '
+    'WORKER_ADMISSION_INPUT_DRIFT WORKER_REGISTERED_CANDIDATE_DRIFT WORKER_ACTIVE_PROOF_UNAVAILABLE '
+    'WORKER_ACTIVE_TREE_DRIFT WORKER_LOADED_UNPROVEN '
     'TARGET_SELECTOR_LABEL TARGET_SELECTOR_ARGUMENTS TARGET_SELECTOR_ENTRY TARGET_SELECTOR_WORKDIR '
     'TARGET_UNHANDLED_RELEASE_ARG TARGET_UNHANDLED_RELEASE_REFERENCE TARGET_RELEASE_ENTRY_MISSING '
     'TARGET_AUDIO_ADAPTER TARGET_AUDIO_BINDING_INVALID TARGET_AUDIO_BINDING_RELEASE '
