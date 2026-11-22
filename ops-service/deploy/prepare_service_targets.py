@@ -224,8 +224,23 @@ def equivalent_record(verified, target, observed_sha, runner, selector, expected
             "verifiedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
-RS_NON_MIGRATION = ("request-service/request-service.mjs", "request-service/official-inbox-schema.mjs",
-                    "request-service/official-inbox.mjs")
+def request_storage_identity(selector):
+    args, env = selector["ProgramArguments"], selector.get("EnvironmentVariables")
+    need(args[2:] == [] and type(env) is dict and isinstance(env.get("REQUEST_OFFICIAL_INBOX_DIR"), str),
+         "REQUEST_SELECTOR_STORAGE_DRIFT")
+    directory = Path(env["REQUEST_OFFICIAL_INBOX_DIR"])
+    ledger = directory / "official-requests.sqlite"
+    need(directory.is_absolute() and str(directory) == env["REQUEST_OFFICIAL_INBOX_DIR"]
+         and directory != directory.parent, "REQUEST_SELECTOR_STORAGE_DRIFT")
+    # Stat the existing owner-private ledger only. Never run candidate
+    # JavaScript or open the database during preparation.
+    try:
+        private_directory(directory)
+        private_file(ledger, 0o600)
+        folder, db = directory.lstat(), ledger.lstat()
+    except (OSError, ValueError) as error:
+        raise ValueError("REQUEST_SELECTOR_STORAGE_DRIFT") from error
+    return directory, folder.st_dev, folder.st_ino, db.st_dev, db.st_ino
 
 
 def request_candidate(verified, repo, release, home, expected_selector_sha):
@@ -257,16 +272,9 @@ def request_candidate(verified, repo, release, home, expected_selector_sha):
     private_file(selector)
     raw = selector.read_bytes()
     need(digest(raw) == expected_selector_sha, "TARGET_SELECTOR_CHANGED")
-    validate_and_rewrite(raw, release, old_catalog, base)
-    plist = plistlib.loads(raw)
-    args, env = plist["ProgramArguments"], plist.get("EnvironmentVariables")
-    old = Path(args[1]).parent.parent
-    need(args[2:] == [] and type(env) is dict and isinstance(env.get("REQUEST_OFFICIAL_INBOX_DIR"), str)
-         and Path(env["REQUEST_OFFICIAL_INBOX_DIR"]).is_absolute(), "REQUEST_SELECTOR_STORAGE_DRIFT")
-    for name_ in RS_NON_MIGRATION:
-        old_file = old / name_
-        private_file(old_file)
-        need(old_file.read_bytes() == (release / name_).read_bytes(), "REQUEST_STORAGE_MIGRATION_NOT_VERIFIED")
+    proposed = validate_and_rewrite(raw, release, old_catalog, base)
+    need(request_storage_identity(plistlib.loads(raw)) == request_storage_identity(plistlib.loads(proposed)),
+         "REQUEST_SELECTOR_STORAGE_DRIFT")
     return {"schemaVersion": "ops.mac-target-candidate.v1", "target": name, "sha": p["headSha"],
             "archiveSha256": verified["artifactSha256"], "treeSha256": tree_sha(release),
             "expectedPriorPlistSha256": expected_selector_sha}

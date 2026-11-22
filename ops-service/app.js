@@ -38,6 +38,9 @@ async function load(){
    const target=cell(r.targetName||r.targetNpcId);
    if(r.targetName&&r.targetNpcId){const id=document.createElement('small');id.textContent=r.targetNpcId;target.append(id);}
    const state=cell(statusLabels.get(r.status)??r.status);state.className='request-status';
+   if(r.status==='failed'&&r.failureReason==='REQUEST_UNSUPPORTED_RECREATE'){
+    const reason=document.createElement('small');reason.textContent='이 버전에서 지원하지 않는 요청입니다. 새로 요청해 주세요.';state.append(reason);
+   }
    const detail=cell(''),button=document.createElement('button');
    button.type='button';button.className='progress-open';button.textContent='상세 보기';
    button.setAttribute('aria-label',(r.targetName||r.targetNpcId||'요청')+' 진행 상세');

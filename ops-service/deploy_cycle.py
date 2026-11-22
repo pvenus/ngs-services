@@ -128,6 +128,7 @@ PREPARATION='ops.candidate-preparation-status.v1'
 PREPARATION_IDS={id for id,_,group in TARGETS if group in ('workers','services')} | {'filex-writer'}
 PREPARATION_STATES={'ready','current','blocked','pending','auth_required','failed',
                     'in_progress','equivalent','not_configured'}
+SUPERVISED_SERVICE_PREP={'request-service','workflow-planner'}
 PREPARATION_CODE=re.compile(r'[A-Z][A-Z0-9_]{1,79}')
 
 RETRY_RUNNER='ops.ngs-local-retry-runner.v1'
@@ -402,6 +403,24 @@ class DeploymentCycle:
                       retry_id(item['attemptId']) and sha256(item['offerSha256']),'OPS_DEPLOY_JOURNAL_INVALID')
         return value
 
+    def _service_preparation(self,target,record,initial,phase):
+        if target not in SUPERVISED_SERVICE_PREP:
+            return phase
+        status=preparation_status(self.root)
+        item=status['targets'].get(target) if status else None
+        if item is None:
+            if phase=='ready' and (record.get('manualOnly') is True or
+                    status is None and os.path.lexists(self.root/'ops-candidate-preparation-status.json')):
+                return 'pending'  # Do not resurrect a supervised candidate without its status.
+            return phase  # Previously trusted, explicitly registered manual plan.
+        requested=item.get('sha')
+        if requested and (not initial or initial['sha']!=requested) and item['state'] in ('blocked','failed'):
+            return 'blocked'
+        if phase=='ready' and (item!={'state':'ready','sha':record['sha']} or
+              not 0<=(stamp(now())-stamp(status['checkedAt'])).total_seconds()<=900):
+            return 'pending'
+        return phase
+
     def _target(self,target):
         path=self.root/'targets'/target
         secure_directory(path)
@@ -451,7 +470,7 @@ class DeploymentCycle:
             # Distinguish a provisioned runner waiting for artifacts from a missing runner.
             try: verified_runner(path/'run-once')
             except (OSError,ValueError):return (None,initial,'not_configured')
-            return (None,initial,'pending')
+            return (None,initial,self._service_preparation(target,None,initial,'pending'))
         failed=state and state['attemptedSha']==record['sha'] and state['state']=='failed'
         if target in WORKER_IDS:
             # Prepared worker deployments must prove a real per-target delta,
@@ -480,9 +499,9 @@ class DeploymentCycle:
             return (record,initial,'pending')
         if failed:
             return (record,initial,'failed')
-        if initial and (initial['sha']==record['sha'] or equivalent_release(path,target,record,initial)):
-            return (record,initial,'current')
-        return (record,initial,'ready')
+        phase='current' if initial and (initial['sha']==record['sha'] or
+                                       equivalent_release(path,target,record,initial)) else 'ready'
+        return (record,initial,self._service_preparation(target,record,initial,phase))
 
     def _worker_decision(self,path,target,record,initial):
         file=path/'worker-source-decision.json'
@@ -579,8 +598,10 @@ class DeploymentCycle:
             except (OSError,ValueError,TypeError,OverflowError):record,initial,phase=None,None,'unknown'
             if journal and target in journal['targets']:
                 phase='unknown' if unknown else 'running'
+            prepared=preparation['targets'].get(target) if preparation and target in SUPERVISED_SERVICE_PREP else None
+            candidate_sha=prepared.get('sha') if phase=='blocked' and prepared else record['sha'] if record else None
             row={'id':target,'label':label,'group':group,'state':phase,
-                 'candidateSha':record['sha'] if record else None,'observed':initial,
+                 'candidateSha':candidate_sha,'observed':initial,
                  'ready':phase in ('ready','current') and not locked and not unknown,
                  'canDeploy':phase=='ready' and not (locked or journal)}
             if record is not None and record.get('manualOnly') is True:

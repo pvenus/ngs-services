@@ -94,7 +94,7 @@ class ServiceTargets(unittest.TestCase):
             self.assertFalse(any(d.rglob("ready.json")))
 
 
-    def test_request_selector_and_schema_immutable(self):
+    def test_request_selector_and_storage_identity(self):
         result = self.verified()
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp).resolve()
@@ -107,10 +107,14 @@ class ServiceTargets(unittest.TestCase):
             selectors = home / "Library/LaunchAgents"
             selectors.mkdir(parents=True)
             path = selectors / "com.vinus.ngs.request-service.plist"
+            inbox = home/'inbox'; inbox.mkdir(mode=0o700)
+            ledger = inbox/'official-requests.sqlite'
+            ledger.write_bytes(b'owner fixture ledger')
+            ledger.chmod(0o600)
             raw = plistlib.dumps({"Label":"com.vinus.ngs.request-service",
                                   "ProgramArguments":["/bin/node", str(old / "request-service/request-service.mjs")],
                                   "WorkingDirectory":str(old / "request-service"),
-                                  "EnvironmentVariables":{"REQUEST_OFFICIAL_INBOX_DIR":"/canonical/fixture"}})
+                                  "EnvironmentVariables":{"REQUEST_OFFICIAL_INBOX_DIR":str(inbox)}})
             path.write_bytes(raw)
             path.chmod(0o600)
             sha = p.digest(raw)
@@ -120,8 +124,8 @@ class ServiceTargets(unittest.TestCase):
             self.assertEqual(path.read_bytes(), raw)
             with self.assertRaisesRegex(ValueError, "SELECTOR_CHANGED"):
                 p.request_candidate(result, self.repo, stage, home, "1" * 64)
-            (old / "request-service/official-inbox-schema.mjs").write_text("migration drift")
-            with self.assertRaisesRegex(ValueError, "MIGRATION_NOT_VERIFIED"):
+            ledger.chmod(0o640)
+            with self.assertRaisesRegex(ValueError, "REQUEST_SELECTOR_STORAGE_DRIFT"):
                 p.request_candidate(result, self.repo, stage, home, sha)
 
 

@@ -48,6 +48,11 @@ class ServiceCandidates(unittest.TestCase):
         self.control.mkdir(mode=0o700)
         (self.control/'targets').mkdir(mode=0o700)
         self.host = ReadOnlyHost()
+        self.inbox = self.home/'requests'
+        self.inbox.mkdir(mode=0o700)
+        self.rs_db=self.inbox/'official-requests.sqlite'
+        self.rs_db.write_bytes(b'owner fixture; must not open')
+        self.rs_db.chmod(0o600)
         self.storage = self.home/'Workspaces/PDS/data'
         self.storage.mkdir(parents=True)
         self.db = self.home/'Workspaces/Workers/data/workflow-planner/workflow.sqlite'
@@ -122,10 +127,40 @@ class ServiceCandidates(unittest.TestCase):
         result = self.run_prepare(filex_ready=lambda sha: checked.append(sha) or True)
         self.assertEqual(result['backend-stack']['state'], 'registered')
         self.assertEqual(checked, [self.head]*3)
-        (self.old/app.PLAN_ABI[0]).write_text('db migration drift')
-        result = self.run_prepare(filex_ready=lambda _:True)
-        self.assertEqual(result['workflow-planner']['code'], 'PLANNER_STARTUP_OR_STORAGE_ABI_CHANGED')
 
+    def test_changed_request_business_logic_and_planner_are_eligible_on_same_storage(self):
+        for role,module,business in (
+            ('request-service','official-inbox.mjs',b'function register('),
+            ('workflow-planner','planner.mjs',b'function materializePlan('),
+        ):
+            path=self.old/role/module
+            existing=path.read_bytes()
+            self.assertIn(business,existing)
+            path.write_bytes(existing.replace(business,b'/* prior release */ '+business,1))
+        def files():
+            return {path:(path.stat().st_ino,path.read_bytes())
+                    for path in (self.rs_db,self.db,*self.selectors.values())}
+        before=files()
+        result=self.run_prepare()
+        self.assertEqual(result['request-service']['state'],'registered')
+        self.assertEqual(result['workflow-planner']['state'],'registered')
+        self.assertEqual(files(),before)
+
+    def test_storage_identity_race_refused_without_opening_ledgers(self):
+        calls=[]
+        def advance(sha):
+            self.assertEqual(sha,self.head)
+            calls.append(sha)
+            if len(calls)==2:
+                self.rs_db.rename(self.rs_db.with_suffix('.old'))
+                self.rs_db.write_bytes(b'new different inode')
+                self.rs_db.chmod(0o600)
+        self.db.chmod(0o644)
+        result=self.run_prepare(assert_current=advance)
+        self.assertEqual(result['request-service']['code'],'REQUEST_SELECTOR_STORAGE_DRIFT')
+        self.assertFalse((self.control/'targets/request-service/ready.json').exists())
+        self.assertEqual(result['workflow-planner']['code'],'TARGET_PLANNER_DATABASE_IDENTITY')
+        self.assertFalse((self.control/'targets/workflow-planner/ready.json').exists())
     def test_runner_selector_main_and_active_attempt_fail_closed(self):
         labels = self.host.reports.copy()
         t='request-service'

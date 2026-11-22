@@ -167,6 +167,16 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(S.request_list({'limit':25},call),{'requests':[ROW],'nextCursor':'p2'})
         self.assertEqual(seen,[('tools/call',{'name':'request_list','arguments':{'limit':25}})])
 
+    def test_only_explicit_unsupported_failure_reason_is_forwarded(self):
+        code='REQUEST_UNSUPPORTED_RECREATE'
+        for state,reason,expected in [('failed',code,True),('registered',code,False),
+                                      ('failed','unknown details',False),('failed',{'secret':'no'},False)]:
+            row={**ROW,'status':state,'failureReason':reason,'payload':{'secret':'no'}}
+            result=S.request_list({},lambda *_:{'isError':False,'structuredContent':{'requests':[row],'nextCursor':None}})
+            clean={**ROW,'status':state}
+            if expected:clean['failureReason']=code
+            self.assertEqual(result['requests'],[clean])
+
     def test_workflow_statuses_pass_through_with_filters(self):
         for state in ('planned','completed','failed'):
             filters={'status':state}

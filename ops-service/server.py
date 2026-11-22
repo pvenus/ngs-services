@@ -19,6 +19,7 @@ HOST, PORT, MCP_PORT = '127.0.0.1', 8090, 8770
 MAX_REPLY = 1024 * 1024
 FIELDS = ('officialRequestId','sourceId','projectId','requestType','schemaVersion',
           'status','registeredAt','targetNpcId','targetName')
+UNSUPPORTED_RECREATE = 'REQUEST_UNSUPPORTED_RECREATE'
 STATES = ('registered','planned','completed','failed','cancelled')
 ASSETS = {'/': ('index.html','text/html; charset=utf-8'),
           '/requests': ('index.html','text/html; charset=utf-8'),
@@ -97,6 +98,8 @@ def request_list(filters, call=mcp_call):
             or any(row[k] is not None and (not isinstance(row[k],str) or len(row[k])>1024) for k in FIELDS[7:])):
             raise MCPFailure('REQUEST_MCP_INVALID_RESPONSE')
         clean.append({k:row[k] for k in FIELDS})
+        if row['status']=='failed' and row.get('failureReason')==UNSUPPORTED_RECREATE:
+            clean[-1]['failureReason']=UNSUPPORTED_RECREATE
     return {'requests':clean,'nextCursor':next_cursor}
 
 

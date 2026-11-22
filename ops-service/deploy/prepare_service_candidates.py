@@ -14,13 +14,12 @@ from prepare_ngs_local_once import lock, read_optional, read_private, runner_dig
 from prepare_ngs_release import DIGEST, SHA, atomic_write, digest, json_bytes, matches, need, private_directory, private_file, tree_sha
 from prepare_rs_relay import prepare_rs_relay
 from prepare_service_targets import (SERVICES, assemble_source, request_candidate, tracked_targets,
-                                     verify_equivalent, equivalent_record)
+                                     verify_equivalent, equivalent_record, request_storage_identity)
 
 ORDER = ('request-service', 'workflow-planner', 'backend-stack')
 READY = 'ops.deploy-target-ready.v1'
 CANDIDATE = 'ops.mac-target-candidate.v1'
 NODE = '.nvm/versions/node/v24.21.0/bin/node'
-PLAN_ABI = tuple('workflow-planner/'+n for n in ('package.json', 'cli.mjs', 'planner.mjs', 'audio-task-schema.mjs'))
 # These routes/transport carry the paired PDS/Filex ABI. A changed required writer
 # must be active before exposing the independently clickable Backend Stack action.
 FILEX_ABI = tuple('data-service/project_data_service/'+n for n in (
@@ -112,15 +111,18 @@ def verify_source(release, scopes):
     return tree_sha(release)
 
 
-def gate(target, value, replacement, home, old, release, scope, head, filex_ready):
+def gate(target, value, replacement, home, old, release, scope, head, filex_ready, expected_storage=None):
     if target == 'workflow-planner':
-        # Capture existing database identity by stat only. Do not open SQLite
-        # or execute a candidate schema/startup module during preparation.
-        need(runtime_matches(old, release, PLAN_ABI), 'PLANNER_STARTUP_OR_STORAGE_ABI_CHANGED')
+        # Preserve the same database and executable/launch inputs. Canonical
+        # CI authenticates candidate code; byte equality to the older
+        # application is not an acceptance condition.
         proposed = plistlib.loads(replacement)
         proposed.setdefault('EnvironmentVariables', {})[REVISION] = head
-        need(planner_identity(value, home)[2] == planner_identity(proposed, home)[2],
+        need(planner_identity(value, home)[2] == planner_identity(proposed, home)[2] == expected_storage,
              'TARGET_PLANNER_DATABASE_IDENTITY')
+    elif target == 'request-service':
+        need(request_storage_identity(value) == request_storage_identity(plistlib.loads(replacement)) == expected_storage,
+             'REQUEST_SELECTOR_STORAGE_DRIFT')
     elif target == 'backend-stack':
         storage = home / 'Workspaces/PDS/data'
         need(value['ProgramArguments'][2:] == ['--storage-root', str(storage)]
@@ -227,7 +229,9 @@ def prepare_service_candidates(verified, repo, home, control, *, assert_current,
                     outcomes[t] = outcome(t, h, 'current')
                     continue
                 proposed = validate_and_rewrite(raw, release, cat, base)
-                guard = lambda: gate(t, value, proposed, home, old, release, scopes[t], h, filex_ready)
+                expected_storage = (request_storage_identity(value) if t == 'request-service' else
+                                    planner_identity(value, home)[2] if t == 'workflow-planner' else None)
+                guard = lambda: gate(t, value, proposed, home, old, release, scopes[t], h, filex_ready, expected_storage)
                 guard()
                 if t == 'request-service':
                     c = request_candidate(verified, repo, release, home, digest(raw))

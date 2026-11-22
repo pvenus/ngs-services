@@ -200,6 +200,36 @@ class Cycle(unittest.TestCase):
             self.assertNotIn('preparation',c.status())
         self.assertEqual(self.hits,[])
 
+    def test_fresh_blocked_service_prep_is_not_old_current_or_actionable(self):
+        c=self.cycle(runner=self.receipt)
+        for target in ('request-service','workflow-planner'):
+            folder=self.stage(target)
+            C.persist(folder/'observed.json',{'sha':A,'deployedAt':STAMP})
+            self.assertEqual(self.target(c,target)['state'],'current')
+            status=self.root/'ops-candidate-preparation-status.json'
+            def prep(state, revision, **kw):
+                C.persist(status,{'schemaVersion':C.PREPARATION,'checkedAt':C.now(),
+                                  'targets':{target:{'state':state,'sha':revision,**kw}}})
+            prep('blocked',B,code='REQUEST_SELECTOR_STORAGE_DRIFT')
+            row=self.target(c,target)
+            self.assertEqual((row['state'],row['candidateSha'],row['observed']['sha']),('blocked',B,A))
+            self.assertFalse(row['canDeploy'])
+            with self.assertRaises(Rejected):c.trigger(target)
+            ready=C.optional(folder/'ready.json')
+            C.persist(folder/'ready.json',{**ready,'sha':B,'manualOnly':True})
+            self.assertFalse(self.target(c,target)['canDeploy'])
+            prep('ready',A)
+            self.assertEqual(self.target(c,target)['state'],'pending')
+            prep('ready',B)
+            self.assertTrue(self.target(c,target)['canDeploy'])
+            # The click can race a newly blocked preparation; the runner must revalidate.
+            prep('failed',B,code='PREP_FAILED')
+            c.trigger('all')
+            self.assertFalse(self.target(c,target)['canDeploy'])
+            self.assertEqual(self.hits,[])
+            status.unlink()
+            self.assertFalse(self.target(c,target)['canDeploy'])
+
     def test_failure_receipt_preserves_only_exact_phase_code_and_rollback(self):
         data={'phase':'start','code':'TARGET_BOOTSTRAP_FAILED','rollback':'restored'}
         raw={'schemaVersion':C.ERROR,'target':'rs-mcp','sha':A,**data}
