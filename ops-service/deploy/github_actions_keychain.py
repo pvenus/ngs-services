@@ -4,12 +4,13 @@ import os
 from pathlib import Path
 import re
 import ssl
+import tempfile
 import subprocess
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
-from prepare_ngs_release import OUTER_LIMIT, REPO, Refused, json_load, need
+from prepare_ngs_release import OUTER_LIMIT, REPO, Refused, json_bytes, json_load, need
 
 KEYCHAIN_SERVICE = "com.vinus.ops.ngs-local.github-actions-read"
 KEYCHAIN_ACCOUNT = "pvenus/ngs-platform"
@@ -25,6 +26,40 @@ ACTIONS = re.compile(
     rf"|runs/{ID}/artifacts\?name=ngs-local-source-{SHA}-{ID}&per_page=2|artifacts/{ID}(?:/zip)?)"
 )
 DOWNLOAD = re.compile(rf"actions/artifacts/{ID}/zip")
+
+
+PUBLIC_MAIN_REPOS = frozenset(("pvenus/ngs-platform", "pvenus/ngs-workers", "pvenus/ngs-services"))
+PUBLIC_REF = "refs/heads/main"
+
+
+def git_public_main(repo):
+    """Read a fixed public Git ref without using either the REST quota or credentials."""
+    need(repo in PUBLIC_MAIN_REPOS, "GITHUB_PUBLIC_MAIN_REPO_DENIED")
+    argv = ["/usr/bin/git", "-c", "credential.helper=", "-c", "core.askPass=/usr/bin/false",
+            "-c", "http.followRedirects=false", "-c", "http.sslVerify=true",
+            "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+            "ls-remote", "--exit-code", "--refs", f"https://github.com/{repo}.git", PUBLIC_REF]
+    env = {"PATH":"/usr/bin:/bin", "HOME":"/var/empty", "XDG_CONFIG_HOME":"/var/empty", "LANG":"C",
+           "GIT_CONFIG_NOSYSTEM":"1", "GIT_CONFIG_SYSTEM":"/dev/null", "GIT_CONFIG_GLOBAL":"/dev/null",
+           "GIT_TERMINAL_PROMPT":"0", "GIT_ASKPASS":"/usr/bin/false"}
+    try:
+        with tempfile.TemporaryFile() as stdout:
+            proc = subprocess.run(argv, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=stdout,
+                                  stderr=subprocess.DEVNULL, check=False, timeout=12)
+            stdout.seek(0)
+            payload = stdout.read(128)
+    except (OSError, subprocess.SubprocessError):
+        raise Refused("GITHUB_PUBLIC_MAIN_UNAVAILABLE") from None
+    need(proc.returncode == 0, "GITHUB_PUBLIC_MAIN_UNAVAILABLE")
+    match = re.fullmatch(rb"([a-f0-9]{40})\trefs/heads/main\n", payload)
+    need(match, "GITHUB_PUBLIC_MAIN_INVALID")
+    return match[1].decode("ascii")
+
+
+def public_main_metadata(repo, read_ref):
+    sha = read_ref(repo)
+    need(type(sha) is str and re.fullmatch(SHA, sha), "GITHUB_PUBLIC_MAIN_INVALID")
+    return {"ref":PUBLIC_REF, "object":{"type":"commit", "sha":sha}}
 
 
 def keychain_token():
@@ -97,7 +132,8 @@ def one_header(headers, name):
 class KeychainGitHubEvidence:
     """Exact read-only routes; manual artifact redirect sends only noncredential headers."""
 
-    def __init__(self, *, token=keychain_token, opener=None):
+    def __init__(self, *, token=keychain_token, opener=None, main_ref=git_public_main):
+        self._main_ref = main_ref
         self._get_token = token
         self._pat = None
         if opener is None:
@@ -142,15 +178,18 @@ class KeychainGitHubEvidence:
         path = route[len(PREFIX):]
         main = route == MAIN_ROUTE
         need(main or ACTIONS.fullmatch(path), "GITHUB_ROUTE_DENIED")
+        if main:
+            raw = json_bytes(public_main_metadata(REPO, self._main_ref))
+            need(len(raw) <= limit, "GITHUB_RESPONSE_TOO_LARGE")
+            return raw
         request_headers = {"Accept": "application/vnd.github+json", "User-Agent": "ngs-ops-local-candidate",
                            "X-GitHub-Api-Version": "2022-11-28"}
-        if not main:
-            if self._pat is None:
-                token = self._get_token()
-                need(isinstance(token, str) and token.isascii() and FINE_GRAINED.fullmatch(token.encode()) and "\n" not in token,
-                     "GITHUB_KEYCHAIN_ITEM_INVALID")
-                self._pat = token
-            request_headers["Authorization"] = "Bearer " + self._pat
+        if self._pat is None:
+            token = self._get_token()
+            need(isinstance(token, str) and token.isascii() and FINE_GRAINED.fullmatch(token.encode()) and "\n" not in token,
+                 "GITHUB_KEYCHAIN_ITEM_INVALID")
+            self._pat = token
+        request_headers["Authorization"] = "Bearer " + self._pat
         artifact = DOWNLOAD.fullmatch(path)
         response = self._request("https://" + API + "/" + route, headers=request_headers,
                                  status=302 if artifact else 200, limit=limit, timeout=12)

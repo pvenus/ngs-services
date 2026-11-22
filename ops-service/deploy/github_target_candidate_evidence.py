@@ -5,7 +5,7 @@ import zipfile
 
 from github_actions_keychain import (
     API, FINE_GRAINED, ID, SHA as SHA_TEXT, KeychainGitHubEvidence,
-    artifact_location, keychain_token,
+    artifact_location, git_public_main, keychain_token, public_main_metadata,
 )
 from prepare_ngs_release import DIGEST, REF, SHA, Refused, json_load, matches, need, number, shape
 from prepare_service_targets import LIMIT, WORKERS, SERVICES, WORKFLOWS, verify_target_artifact
@@ -45,8 +45,8 @@ def _route(route):
 class TargetGitHubEvidence(KeychainGitHubEvidence):
     """Fixed pair of repositories using the existing narrow three-repo Keychain item."""
 
-    def __init__(self, *, token=keychain_token, opener=None):
-        super().__init__(token=token,opener=opener)
+    def __init__(self, *, token=keychain_token, opener=None, main_ref=git_public_main):
+        super().__init__(token=token,opener=opener,main_ref=main_ref)
 
     def _headers(self, method):
         headers = dict(_HEADERS)
@@ -67,6 +67,8 @@ class TargetGitHubEvidence(KeychainGitHubEvidence):
         kind = self.route_kind(route)
         need(kind != 'archive' and (authorized is None or authorized is (kind=='actions')),
              'GITHUB_TARGET_ROUTE_DENIED')
+        if kind == 'main':
+            return public_main_metadata(_repo(route.split('/')[1]+'/'+route.split('/')[2]), self._main_ref)
         raw = self._request('https://'+API+'/'+route,headers=self._headers(kind),
                             status=200,limit=METADATA_LIMIT,timeout=12)
         try:

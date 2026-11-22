@@ -30,7 +30,7 @@ class Tests(unittest.TestCase):
     def make(self, *response):
         opener, lookup = Mock(), Mock(return_value=PAT)
         opener.open.side_effect = list(response)
-        return gh.KeychainGitHubEvidence(token=lookup, opener=opener), opener, lookup
+        return gh.KeychainGitHubEvidence(token=lookup, opener=opener, main_ref=lambda repo: "a"*40), opener, lookup
 
     def test_exact_api_only_and_blob_get_has_no_github_authorization_or_referer(self):
         headers = Message()
@@ -45,10 +45,43 @@ class Tests(unittest.TestCase):
         self.assertEqual({k.lower() for k in b.headers},{"accept","user-agent"})
         lookup.assert_called_once_with()
 
+    def test_native_git_public_main_uses_only_exact_fenced_repository_and_ref(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        def run(argv, **kw):
+            self.assertEqual(argv[-4:], ["--exit-code","--refs","https://github.com/pvenus/ngs-platform.git","refs/heads/main"])
+            self.assertIn("credential.helper=",argv)
+            self.assertIn("http.followRedirects=false",argv)
+            self.assertEqual(kw["env"]["HOME"],"/var/empty")
+            self.assertEqual(kw["env"]["GIT_CONFIG_GLOBAL"],"/dev/null")
+            self.assertNotIn("GH_TOKEN",kw["env"])
+            self.assertNotIn("HTTPS_PROXY",kw["env"])
+            self.assertEqual(kw["cwd"],"/")
+            self.assertEqual(kw["timeout"],12)
+            kw["stdout"].write(b"a"*40+b"\trefs/heads/main\n")
+            return SimpleNamespace(returncode=0)
+        with patch.object(gh.subprocess,"run",side_effect=run) as native:
+            self.assertEqual(gh.git_public_main("pvenus/ngs-platform"),"a"*40)
+            with self.assertRaisesRegex(Refused,"GITHUB_PUBLIC_MAIN_REPO_DENIED"):
+                gh.git_public_main("pvenus/ngs-platform.git/../../other")
+            native.assert_called_once()
+
+    def test_native_git_rejects_extra_ref_bad_format_and_missing_ref(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        for payload,status,error in [(b"a"*40+b"\trefs/heads/main\nextra",0,"INVALID"),
+                                     (b"a"*40+b"\trefs/heads/old\n",0,"INVALID"),
+                                     (b"",2,"UNAVAILABLE")]:
+            def run(_argv, **kw):
+                kw["stdout"].write(payload)
+                return SimpleNamespace(returncode=status)
+            with patch.object(gh.subprocess,"run",side_effect=run), self.assertRaisesRegex(Refused,"GITHUB_PUBLIC_MAIN_"+error):
+                gh.git_public_main("pvenus/ngs-workers")
+
     def test_public_ref_and_bad_routes_never_retrieve_secret(self):
         evidence, opener, lookup = self.make(Response(200,b'{"ref":"refs/heads/main"}'))
-        self.assertEqual(evidence.metadata(gh.MAIN_ROUTE),{"ref":"refs/heads/main"})
-        self.assertNotIn("Authorization",opener.open.call_args.args[0].headers)
+        self.assertEqual(evidence.metadata(gh.MAIN_ROUTE),{"ref":"refs/heads/main","object":{"type":"commit","sha":"a"*40}})
+        opener.open.assert_not_called()
         attempts=["repos/attacker/other/actions/artifacts/42/zip", gh.PREFIX+"actions/artifacts/42/zip?extra=1",
                   gh.PREFIX+"actions/artifacts/042/zip", gh.PREFIX+"actions/artifacts/42/%7Aip",
                   gh.PREFIX+"actions/runs/42/artifacts?name=other&per_page=2",
@@ -56,7 +89,7 @@ class Tests(unittest.TestCase):
         for route in attempts:
             with self.assertRaisesRegex(Refused,"GITHUB_ROUTE_DENIED"): evidence.read(route)
         lookup.assert_not_called()
-        self.assertEqual(opener.open.call_count,1)
+        self.assertEqual(opener.open.call_count,0)
 
     def test_reject_untrusted_redirect_shapes_before_second_request(self):
         for target in ("http://productionresultssa12.blob.core.windows.net/path?sig=fake",

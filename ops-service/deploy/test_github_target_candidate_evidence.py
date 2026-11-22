@@ -132,21 +132,21 @@ class EvidenceTests(unittest.TestCase):
     def test_filex_transport_only_uses_own_routes_and_keeps_bearer_off_redirect(self):
         prefix='repos/pvenus/ngs-services/'
         url='https://productionresultssa12.blob.core.windows.net/pkg?sig=fixture'
-        wire=Wire(Response(raw=b'{}'),Response(raw=b'{}'),Response(status=302,location=url),Response(raw=b'abc'))
+        wire=Wire(Response(raw=b'{}'),Response(status=302,location=url),Response(raw=b'abc'))
         reads=[]
         def keychain():
             reads.append(1)
             return 'github_pat_'+'f'*40
-        gh=candidate.FilexGitHubEvidence(token=keychain,opener=wire)
-        self.assertEqual(gh.metadata(prefix+candidate.MAIN),{})
+        gh=candidate.FilexGitHubEvidence(token=keychain,opener=wire,main_ref=lambda repo:'a'*40)
+        self.assertEqual(gh.metadata(prefix+candidate.MAIN)['object']['sha'],'a'*40)
+        self.assertEqual(wire.calls,[])
         self.assertEqual(reads,[])
         self.assertEqual(gh.metadata(prefix+'actions/workflows/prepare-filex-writer.yml'),{})
         self.assertEqual(gh.read(prefix+'actions/artifacts/7/zip',limit=3),b'abc')
         self.assertEqual(reads,[1])
-        self.assertNotIn('Authorization',wire.calls[0][1])
+        self.assertIn('Authorization',wire.calls[0][1])
         self.assertIn('Authorization',wire.calls[1][1])
-        self.assertIn('Authorization',wire.calls[2][1])
-        self.assertNotIn('Authorization',wire.calls[3][1])
+        self.assertNotIn('Authorization',wire.calls[2][1])
         for denied in (
             prefix+'actions/workflows/prepare-service-targets.yml',
             prefix+'actions/runs/3/artifacts?name=service-targets-'+'a'*40+'-1&per_page=2',
@@ -155,28 +155,37 @@ class EvidenceTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(Refused,'ROUTE_DENIED'):
                 gh.route_kind(denied)
-        self.assertEqual(len(wire.calls),4)
+        self.assertEqual(len(wire.calls),3)
 
     def test_fixed_transport_keeps_token_off_public_read_and_asset_redirect(self):
         fx=EvidenceFixture()
         url='https://productionresultssa12.blob.core.windows.net/pkg?sig=fixture'
-        wire=Wire(Response(raw=b'{}'),Response(status=302,location=url),Response(raw=b'abc'))
+        wire=Wire(Response(status=302,location=url),Response(raw=b'abc'))
         looked=[]
         def token():
             looked.append(1)
             return 'github_pat_'+'f'*40
-        io_=candidate.TargetGitHubEvidence(token=token,opener=wire)
-        self.assertEqual(io_.metadata(fx.head_route,authorized=False),{})
+        io_=candidate.TargetGitHubEvidence(token=token,opener=wire,main_ref=lambda repo: fx.head)
+        self.assertEqual(candidate.canonical_target_main(fx.repo,transport=io_),fx.head)
+        self.assertEqual(wire.calls,[])
         self.assertEqual(looked,[])
         self.assertEqual(io_.archive(fx.download,3),b'abc')
         self.assertEqual(looked,[1])
-        self.assertNotIn('Authorization',wire.calls[0][1])
-        self.assertIn('Authorization',wire.calls[1][1])
-        self.assertEqual(set(wire.calls[2][1]),{'Accept','User-agent'})
+        self.assertIn('Authorization',wire.calls[0][1])
+        self.assertEqual(set(wire.calls[1][1]),{'Accept','User-agent'})
         with self.assertRaisesRegex(Refused,'REPO_DENIED'):
             candidate.canonical_target_main('pvenus/unrelated',transport=io_)
         with self.assertRaisesRegex(Refused,'ROUTE_DENIED'):
             io_.metadata(fx.base+'actions/workflows/prepare-service-targets.yml')
+
+    def test_filex_canonical_main_uses_same_git_reader_without_rest(self):
+        wire=Wire()
+        repos=[]
+        reader=lambda repo: (repos.append(repo) or 'f'*40)
+        evidence=candidate.FilexGitHubEvidence(token=lambda:self.fail('no keychain'),opener=wire,main_ref=reader)
+        self.assertEqual(candidate.canonical_target_main('ngs-services',transport=evidence),'f'*40)
+        self.assertEqual(repos,['pvenus/ngs-services'])
+        self.assertEqual(wire.calls,[])
 
     def test_transport_denies_second_redirect_and_wrong_origin(self):
         fx=EvidenceFixture()
