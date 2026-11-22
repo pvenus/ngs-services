@@ -1,10 +1,13 @@
 import json
-import os
 from pathlib import Path
 import plistlib
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
+from urllib.parse import urlsplit
+from test_github_actions_keychain import Response, PAT, LOCATION
+import github_actions_keychain as transport
+from check_ngs_local_github_auth import check
 
 import prepare_ngs_local_once as auto
 import prepare_ngs_release as prep
@@ -21,20 +24,21 @@ class Tests(unittest.TestCase):
         self.releases, self.scratch = base / 'releases', base / 'execution'
         self.target = control / 'targets/ngs-local'
         self.selector, self.node = base / 'ngs.plist', base / 'node'
-        self.inbox = control / 'ngs-local-evidence'
         for folder in (control, control / 'targets', self.target, control / 'mac-releases', control / 'bin',
-                       self.inbox, self.releases, self.scratch):
+                       self.releases, self.scratch):
             folder.mkdir(mode=0o700)
         self.write(self.target / 'run-once', b'REFUSE TO RUN ME', 0o500)
         self.old = '0' * 40
         self.select(self.old)
         self.fix = proof.EvidenceFixture()
         self.fix.setUp()
-        self.fix.run['workflow_id'] = auto.CONNECTOR_WORKFLOW
         self.head = self.fix.head
         self.latest = self.head
-        self.write_evidence()
-        self.github = auto.ConnectorEvidence(self.inbox, self.ref)
+        self.zip = self.fix.zip
+        self.lookup = Mock(return_value=PAT)
+        self.get = Mock(side_effect=self.open)
+        opener = Mock(open=self.get)
+        self.github = transport.KeychainGitHubEvidence(token=self.lookup, opener=opener)
         self.assembler = Mock()
         self.assembler.assemble_verified.side_effect = self.assemble
         self.on_assemble = lambda: None
@@ -49,15 +53,25 @@ class Tests(unittest.TestCase):
                 'WorkingDirectory': str(self.scratch / head)}
         self.write(self.selector, plistlib.dumps(data))
 
-    def write_evidence(self, **updates):
-        shape = {'schemaVersion': auto.CONNECTOR_SCHEMA, 'headSha': self.head,
-                 'run': self.fix.run, 'artifact': self.fix.artifact, **updates}
-        self.write(self.inbox / 'evidence.json', json.dumps(shape).encode())
-        self.write(self.inbox / 'ci.zip', self.fix.zip)
-
-    def ref(self, route):
-        self.assertEqual(route, auto.MAIN_ROUTE)
-        return {'ref': prep.REF, 'object': {'type': 'commit', 'sha': self.latest}}
+    def open(self, request, *, timeout):
+        url=urlsplit(request.full_url)
+        if request.full_url == LOCATION:
+            self.assertNotIn("Authorization",request.headers)
+            return Response(200,self.zip)
+        self.assertEqual(url.netloc,'api.github.com')
+        route=url.path[1:]
+        if route==auto.MAIN_ROUTE:
+            self.assertNotIn("Authorization",request.headers)
+            return Response(200,prep.json_bytes({'ref':prep.REF,'object':{'type':'commit','sha':self.latest}}))
+        self.assertEqual(request.get_header("Authorization"),"Bearer "+PAT)
+        name=route.removeprefix(transport.PREFIX)
+        if name=='actions/workflows/prepare-ngs-release.yml': result=self.fix.workflow
+        elif name=='actions/workflows/5/runs': result={'workflow_runs':[self.fix.run]}
+        elif name=='actions/runs/14/artifacts': result={'artifacts':[self.fix.artifact],'total_count':1}
+        elif name=='actions/artifacts/63': result=self.fix.artifact
+        elif name=='actions/artifacts/63/zip': return Response(302,headers=[('Location',LOCATION)])
+        else: self.fail(name)
+        return Response(200,prep.json_bytes(result))
 
     def assemble(self, verified, *, control, releases, scratch, prior_plist, expected_prior_sha256, node, npm_cache):
         self.assertEqual(prep.digest(prior_plist.read_bytes()), expected_prior_sha256)
@@ -75,16 +89,16 @@ class Tests(unittest.TestCase):
         self.on_assemble()
         return source, execution
 
-    def run_once(self, verify=None):
+    def run_once(self):
         return auto.prepare_once(self.github, self.assembler, control=self.control, releases=self.releases,
                                  scratch=self.scratch, prior_plist=self.selector, node=self.node,
-                                 npm_cache=self.base / 'cache', verify=self.github.verify if verify is None else verify)
+                                 npm_cache=self.base / 'cache')
 
     def not_published(self):
         self.assertFalse((self.control / 'prepared.json').exists())
         self.assertFalse((self.target / 'ready.json').exists())
 
-    def test_connectors_exact_proof_becomes_button_candidate_only_and_never_downloads_same_ready(self):
+    def test_keychain_transport_exact_proof_becomes_button_candidate_only_and_never_downloads_same_ready(self):
         before = self.selector.read_bytes()
         self.assertEqual(self.run_once(), {'target':'ngs-local','sha':self.head,'state':'registered'})
         self.assertEqual(self.selector.read_bytes(), before)
@@ -92,24 +106,28 @@ class Tests(unittest.TestCase):
         ready = (self.target / 'ready.json').read_bytes()
         self.assertEqual(json.loads(ready)['sha'], self.head)
         self.assertEqual(json.loads(ready)['runnerSha256'], prep.digest(b'REFUSE TO RUN ME'))
-        self.assertEqual(self.run_once(Mock(side_effect=AssertionError('no second proof download')))['state'],'ready')
+        before_calls=self.get.call_count
+        self.assertEqual(self.run_once()['state'],'ready')
+        self.assertEqual(self.get.call_count-before_calls,1)
         self.assembler.assemble_verified.assert_called_once()
         self.assertEqual((self.target / 'ready.json').read_bytes(), ready)
 
     def test_already_selected_never_registers_or_fetches_zip(self):
         self.select(self.head)
-        self.assertEqual(self.run_once(Mock(side_effect=AssertionError('no proof download')))['state'],'current')
+        self.assertEqual(self.run_once()['state'],'current')
+        self.lookup.assert_not_called()
         self.not_published()
         self.assembler.assemble_verified.assert_not_called()
 
     def test_deny_tampered_zip_foreign_workflow_or_not_current_before_assembly(self):
-        self.write(self.inbox / 'ci.zip', self.fix.zip + b'X')
+        self.zip=self.fix.zip[:-1] + b'X'
         with self.assertRaisesRegex(auto.Refused, 'ZIP_DIGEST_MISMATCH'): self.run_once()
-        self.write_evidence(run={**self.fix.run, 'workflow_id': 5})
+        self.zip=self.fix.zip
+        self.fix.run['workflow_id']=6
         with self.assertRaisesRegex(auto.Refused, 'RUN_NOT_VERIFIED'): self.run_once()
-        self.write_evidence()
+        self.fix.run['workflow_id']=5
         self.latest = 'b' * 40
-        with self.assertRaisesRegex(auto.Refused, 'MAIN_ADVANCED'): self.run_once()
+        with self.assertRaisesRegex(auto.Refused, 'CI_CANDIDATE_NOT_READY'): self.run_once()
         self.assembler.assemble_verified.assert_not_called()
         self.not_published()
 
@@ -140,27 +158,38 @@ class Tests(unittest.TestCase):
         self.write(self.control/'bin/assemble_mac_release.py',b'raise AssertionError("never execute")')
         with self.assertRaisesRegex(auto.Refused, 'NGS_ASSEMBLER_PIN_MISMATCH'): auto.load_assembler(self.control)
 
-    def test_no_artifact_or_untrusted_permissions_never_assemble(self):
-        (self.inbox/'ci.zip').unlink()
-        with self.assertRaisesRegex(auto.Refused, 'UPSTREAM_ARTIFACT_UNAVAILABLE'): self.run_once()
-        self.write(self.inbox/'ci.zip', self.fix.zip, 0o644)
-        with self.assertRaises(prep.Refused): self.run_once()
+    def test_keychain_absent_no_artifact_or_assembly(self):
+        self.lookup.side_effect=auto.Refused("GITHUB_KEYCHAIN_ITEM_MISSING")
+        with self.assertRaisesRegex(auto.Refused, "GITHUB_KEYCHAIN_ITEM_MISSING"): self.run_once()
         self.assembler.assemble_verified.assert_not_called()
         self.not_published()
 
-    def test_git_fallback_fixed_ref_no_credentials_and_only_loopback_proxy(self):
-        local='http://127.0.0.1:8080'
-        raw=(self.head+'\trefs/heads/main\n').encode()
-        with patch.dict(os.environ,{'HTTPS_PROXY':local,'https_proxy':'https://secret@example.org:443',
-                                    'NO_PROXY':'github.com','GH_TOKEN':'never forward'},clear=True), \
-             patch.object(auto.subprocess,'run',return_value=Mock(stdout=raw,returncode=0)) as call:
-            self.assertEqual(auto.read_git_main(),self.ref(auto.MAIN_ROUTE))
-        args=call.call_args.args[0]
-        self.assertIn('credential.helper=',args)
-        self.assertEqual(args[-2:],[auto.REMOTE,prep.REF])
-        self.assertEqual(call.call_args.kwargs['env'],{'PATH':'/usr/bin:/bin','GIT_CONFIG_NOSYSTEM':'1',
-              'GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0','HTTPS_PROXY':local})
-        self.assertEqual(auto.loopback_https_proxy({'https_proxy':'https://[::1]:9000'}),{'https_proxy':'https://[::1]:9000'})
-        for value in ('http://127.0.0.1:1/path','http://127.0.0.1:99999','https://127.0.0.1:9?q=1',
-                      'http://someone@127.0.0.1:9','http://127.0.0.1:9#fragment'):
-            self.assertEqual(auto.loopback_https_proxy({'https_proxy':value}),{})
+    def test_prior_attempt_blocks_before_keychain_and_probe_is_independent_read_only(self):
+        release=self.control/'mac-releases'/self.head
+        release.mkdir(mode=0o700)
+        self.write(release/'result.json',b'{"state":"rolled-back"}')
+        with self.assertRaisesRegex(auto.Refused, 'PREP_RECONCILE_REQUIRED'): self.run_once()
+        self.lookup.assert_not_called()
+        self.assertEqual(check(self.github),{'target':'ngs-local','state':'artifact_read_verified','sha':self.head})
+        self.lookup.assert_called_once()
+        self.not_published()
+        self.assembler.assemble_verified.assert_not_called()
+        self.assertEqual((release/'result.json').read_bytes(),b'{"state":"rolled-back"}')
+
+    def test_status_states_are_bounded_and_sanitized_without_readiness(self):
+        stamp='2026-11-22T00:00:00Z'
+        statuses={'GITHUB_KEYCHAIN_ITEM_MISSING':'auth_missing','GITHUB_KEYCHAIN_LOCKED_OR_DENIED':'auth_locked_or_denied',
+                  'GITHUB_ACTIONS_READ_DENIED':'auth_rejected','CI_CANDIDATE_NOT_READY':'pending',
+                  'https://private?token=secret':'blocked'}
+        for code,state in statuses.items():
+            result=auto.status_record({'code':code}, self.control, stamp=stamp)
+            self.assertEqual(result['state'],state)
+            path=self.control/auto.STATUS
+            self.assertEqual(path.stat().st_mode & 0o777,0o600)
+            raw=path.read_bytes()
+            self.assertLess(len(raw),4096)
+            self.assertNotIn(b'secret',raw)
+        status=auto.status_record({'sha':self.head,'state':'registered'},self.control,stamp=stamp)
+        self.assertEqual(status['sha'],self.head)
+        self.assertEqual(status['state'],'ready')
+        self.not_published()

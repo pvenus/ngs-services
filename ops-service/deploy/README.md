@@ -117,36 +117,51 @@ already approved owner-private (0700) npm cache at
 `deploy-control/ngs-local-npm-cache`; do not let the assembler install
 online or run dependency lifecycle scripts.
 
-If the Mac already provides a read-authorized `/opt/homebrew/bin/gh`, the
-existing read-only verifier can obtain the CI ZIP directly. Otherwise the
-owner-trusted connector coordinator writes private (0600) `ci.zip`, then
-`evidence.json` (both atomic replacements) in the private (0700)
-`deploy-control/ngs-local-evidence` directory. The exact evidence schema is:
+The Mac acquires the artifact directly; no Dot automation, connector handoff,
+`gh` session, external mirror, token file or fallback credential is used.
+The owner must manually enroll a **fine-grained** GitHub PAT restricted to
+`pvenus/ngs-platform` and **Actions: read** (GitHub's mandatory Metadata
+permission is implicit). The public main-ref read is unauthenticated.
+The fixed login Keychain generic-password identifiers are:
 
-```json
-{"schemaVersion":"ops.ngs-local-connector-evidence.v1","headSha":"<40 hex>","run":{},"artifact":{}}
-```
+- Service: `com.vinus.ops.ngs-local.github-actions-read`
+- Account: `pvenus/ngs-platform`
 
-Use the authenticated first-party connector's exact CI run and artifact
-metadata, including workflow ID, repo/head repo, attempt, event, ref, result,
-artifact ID, digest, byte size, expiry and run association. The fixed expected
-workflow ID is 426191244. The connector must not accept an uploaded or
-browser-supplied ZIP. The Mac independently reads canonical current main both
-before staging and just before registration using public GitHub HTTPS or the
-fixed configuration-free Git remote (only provisioned loopback HTTPS proxy
-transport may be inherited; no Git or credential config). Failure to verify means no new ready
-record. No new credentials, API grants, or external artifact mirrors are
-provisioned by this feature.
+Put the value directly into the login Keychain using the secure password
+prompt or Keychain Access; do not put the value in chat, an argv string,
+shell history, or an environment variable. Grant access only to the fixed
+`/usr/bin/security` application, not all applications. This code does not
+create/modify/unlock a Keychain or provision credentials. Keychain reads and the
+fixed Actions REST URLs are bound to this repo only. The verified API's sole
+artifact redirect is limited to GitHub Actions' known HTTPS artifact hosts.
+The cross-origin GET does **not** send Authorization, cookies, referrer, or
+allow any further redirect. The existing exact digest/size and run/main checks
+still apply.
 
-Run with `/opt/homebrew/bin/python3.12 -B -u <fixed-bin>/prepare_ngs_local_once.py`.
-The source includes a detached, optional 300-second launchd template, but
-neither it nor any timer is installed by checkout. A connector timer may
-instead invoke this fixed command after handoff. Do not install both timers
-to do the same polling. Public main movement, changed plist/runner, active or
-uncertain deploy, partial packages and npm-cache misses do not produce new
-readiness. Review incomplete private staging manually; do not remove an apply
-attempt marker or overwrite a staged tree. Existing verified readiness and
-prior deployed observations are not cleared by polling.
+Place the reviewed companion `github_actions_keychain.py` and optional
+`check_ngs_local_github_auth.py` into the same private bin directory as the
+preparer and verifier (0600). Install the separate, no-arguments 300-second
+LaunchAgent from the source template only after review, with private working
+directory and fixed entry path. It never wakes or changes the OPS self-update
+agent or the existing NGS deploy button runner. No source publication or
+checkout installs the timer. Do not run the former Dot timer for this lane.
+
+Run prep with `/opt/homebrew/bin/python3.12 -B -u <fixed-bin>/prepare_ngs_local_once.py`.
+The private status at `deploy-control/ngs-local-preparation-status.json` has a
+bounded fixed schema: `ready` (with exact candidate SHA/outcome), `pending`,
+`auth_missing`, `auth_locked_or_denied`, `auth_rejected`, or `blocked`.
+It contains only safe error codes, never GitHub responses or signed URLs.
+An already-selected, already-ready or already-attempted SHA does not acquire
+the credential or download again. Past failures are not rearmed.
+Use the fixed no-arguments `check_ngs_local_github_auth.py` to deliberately
+test the exact authorized artifact read even for an unchanged main; the probe
+does not assemble, register or write status. Only
+`artifact_read_verified` proves full CI ZIP access.
+
+Public main movement, changed plist/runner, active or uncertain deploy,
+partial packages and npm-cache misses do not produce new readiness. Review
+incomplete private staging manually; do not remove an apply attempt marker or
+overwrite a staged tree. Polling never clears prior deployed observations.
 
 Tests: `python3 -B -m unittest discover -s ops-service/deploy -p 'test_prepare_ngs_local_once.py'`.
 

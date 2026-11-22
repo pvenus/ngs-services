@@ -1,7 +1,7 @@
 """Launchd entry for NGS Local candidate preparation, never an apply adapter."""
 import contextlib
+import datetime as dt
 import fcntl
-import http.client
 import json
 import os
 from pathlib import Path
@@ -14,9 +14,10 @@ import tarfile
 import types
 import zipfile
 
-from prepare_ngs_release import (DIGEST, REF, REPO, SHA, OUTER_LIMIT, WORKFLOW, Refused, atomic_write, digest, json_bytes, json_load,
-                                 GitHubEvidence, matches, need, private_directory,
-                                 private_file, tree_sha, verified_main_candidate, verify_release, write_prepared)
+from github_actions_keychain import KeychainGitHubEvidence, MAIN_ROUTE
+from prepare_ngs_release import (DIGEST, REF, REPO, SHA, Refused, atomic_write, digest, json_bytes, json_load,
+                                 matches, need, private_directory, private_file, tree_sha,
+                                 verified_main_candidate, write_prepared)
 
 HOME = Path.home()
 CONTROL = HOME / "Workspaces/OPS/runtime/deploy-control"
@@ -26,17 +27,13 @@ EXECUTION = NGS / "runtime/local-miniflare-execution"
 PLIST = HOME / "Library/LaunchAgents/com.vinus.ngs.local-mcp.plist"
 NODE = HOME / ".nvm/versions/node/v24.21.0/bin/node"
 CACHE = CONTROL / "ngs-local-npm-cache"
-GH = Path("/opt/homebrew/bin/gh")
-REMOTE = "https://github.com/" + REPO + ".git"
 SELECTOR = "com.vinus.ngs.local-mcp"
 ENTRY = Path("sites/npcgen/build/local-miniflare-app.mjs")
 ASSEMBLER_SHA = "959547928ccafe7a27f6d05e0649ba6e24d770feaba3ea8a63b961d777765547"
 ASSEMBLY = "ops.ngs-local-assembly.v1"
-MAIN_ROUTE = "repos/" + REPO + "/git/ref/heads/main"
-CONNECTOR_SCHEMA = "ops.ngs-local-connector-evidence.v1"
-CONNECTOR_WORKFLOW = 426191244
 READY = "ops.deploy-target-ready.v1"
 PLAN = "ops.ngs-prepared-deploy.v1"
+STATUS = "ngs-local-preparation-status.json"
 
 
 def read_private(path, limit, *, mode=None):
@@ -106,86 +103,6 @@ def main_head(github):
     return head
 
 
-def read_api_main(route):
-    """Only canonical public GitHub ref, no credentials, redirects or proxies."""
-    need(route == MAIN_ROUTE, "MAIN_REF_ROUTE_INVALID")
-    connection = http.client.HTTPSConnection("api.github.com", 443, timeout=4)
-    try:
-        connection.request("GET", "/" + route, headers={
-            "Accept": "application/vnd.github+json", "User-Agent": "ngs-ops-local-candidate",
-            "X-GitHub-Api-Version": "2022-11-28",
-        })
-        with connection.getresponse() as response:
-            need(response.status == 200, "MAIN_REF_UNAVAILABLE")
-            body = response.read(32769)
-        need(len(body) <= 32768, "MAIN_REF_INVALID")
-        return json_load(body)
-    except (OSError, http.client.HTTPException):
-        raise Refused("MAIN_REF_UNAVAILABLE") from None
-    finally:
-        connection.close()
-
-
-def loopback_https_proxy(env):
-    # Preserve only the provisioned local transport, never a userinfo URL,
-    # a remote proxy, proxy exclusions, or arbitrary Git config.
-    out = {}
-    for key in ("HTTPS_PROXY", "https_proxy"):
-        value = env.get(key, "")
-        match = re.fullmatch(r"https?://(?:127\.0\.0\.1|\[::1\]):([0-9]{1,5})", value)
-        if match and 1 <= int(match[1]) <= 65535:
-            out[key] = value
-    return out
-
-
-def read_git_main():
-    env = {"PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
-           "GIT_TERMINAL_PROMPT": "0", **loopback_https_proxy(os.environ)}
-    try:
-        result = subprocess.run(["/usr/bin/git", "-c", "http.followRedirects=false", "-c", "credential.helper=",
-                                 "ls-remote", "--exit-code",
-                                 "--refs", REMOTE, REF],
-                                cwd="/", env=env, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, check=False, timeout=18)
-    except (OSError, subprocess.SubprocessError):
-        raise Refused("MAIN_REF_UNAVAILABLE") from None
-    value = re.fullmatch(rb"([0-9a-f]{40})\trefs/heads/main\n", result.stdout)
-    need(result.returncode == 0 and value, "MAIN_REF_UNAVAILABLE")
-    return {"ref": REF, "object": {"type": "commit", "sha": value[1].decode("ascii")}}
-
-
-def read_public_main(route):
-    try:
-        return read_api_main(route)
-    except Refused as error:
-        if str(error) != "MAIN_REF_UNAVAILABLE":
-            raise
-    return read_git_main()
-
-
-class ConnectorEvidence:
-    """Exact bytes handed off by existing owner-trusted GitHub connector orchestration."""
-    def __init__(self, directory, current=read_public_main):
-        self.directory = directory
-        self.current = current
-
-    def metadata(self, route):
-        return self.current(route)
-
-    def verify(self):
-        try:
-            private_directory(self.directory)
-            item = json_load(read_private(self.directory / "evidence.json", 65536, mode=0o600))
-            need(type(item) is dict and set(item) == {"schemaVersion", "headSha", "run", "artifact"}
-                 and item["schemaVersion"] == CONNECTOR_SCHEMA and matches(SHA, item["headSha"]),
-                 "CONNECTOR_EVIDENCE_INVALID")
-            raw = read_private(self.directory / "ci.zip", OUTER_LIMIT, mode=0o600)
-        except FileNotFoundError:
-            raise Refused("UPSTREAM_ARTIFACT_UNAVAILABLE") from None
-        return verify_release(item["headSha"], {"id": CONNECTOR_WORKFLOW, "path": WORKFLOW},
-                              item["run"], item["artifact"], raw)
-
-
 def read_selector(prior_plist, releases, scratch, node):
     raw = read_private(prior_plist, 65536, mode=0o600)
     p = plistlib.loads(raw)
@@ -240,7 +157,7 @@ def receipt(head, status):
 
 
 def prepare_once(github, assembler, *, control=CONTROL, releases=RELEASES, scratch=EXECUTION,
-                 prior_plist=PLIST, node=NODE, npm_cache=CACHE, verify=None):
+                 prior_plist=PLIST, node=NODE, npm_cache=CACHE):
     target = control / "targets/ngs-local"
     for p in (control, control / "targets", target, control / "mac-releases", releases, scratch):
         private_directory(p)
@@ -252,11 +169,14 @@ def prepare_once(github, assembler, *, control=CONTROL, releases=RELEASES, scrat
         source, execution = releases / ("project-page-github-" + head), scratch / head
         if selected == source and workdir == execution:
             return receipt(head, "current")
+        folder = control / "mac-releases" / head
+        if os.path.lexists(folder):
+            private_directory(folder)
+            need(not any(os.path.lexists(folder / n) for n in ("prior.plist", "result.json")), "PREP_RECONCILE_REQUIRED")
         if already_ready(control, target, expected, head, runner):
             return receipt(head, "ready")
-        verified = verified_main_candidate(github) if verify is None else verify()
+        verified = verified_main_candidate(github)
         need(verified["head"] == head, "MAIN_ADVANCED")
-        folder = control / "mac-releases" / head
         folder.mkdir(mode=0o700, exist_ok=True)
         private_directory(folder)
         need(not any(os.path.lexists(folder / n) for n in ("prior.plist", "result.json")), "PREP_RECONCILE_REQUIRED")
@@ -291,29 +211,70 @@ def prepare_once(github, assembler, *, control=CONTROL, releases=RELEASES, scrat
 
 
 EXPECTED_WAIT = {
-    "PREP_LOCK_BUSY", "PREP_ACTIVE_DEPLOYMENT", "UPSTREAM_ARTIFACT_UNAVAILABLE", "GH_READ_TRANSPORT_UNAVAILABLE",
-    "GH_READ_FAILED", "CI_CANDIDATE_NOT_AVAILABLE", "CI_CANDIDATE_NOT_READY", "CI_ARTIFACT_AMBIGUOUS",
-    "MAIN_ADVANCED", "MAIN_REF_UNAVAILABLE", "CONNECTOR_EVIDENCE_INVALID", "PRIOR_PLIST_CHANGED", "PRIOR_SELECTOR_CHANGED", "PREP_RECONCILE_REQUIRED",
+     "PREP_LOCK_BUSY", "PREP_ACTIVE_DEPLOYMENT", "GITHUB_KEYCHAIN_UNAVAILABLE", "GITHUB_KEYCHAIN_ITEM_MISSING",
+    "GITHUB_KEYCHAIN_LOCKED_OR_DENIED", "GITHUB_KEYCHAIN_ITEM_INVALID", "GITHUB_ACTIONS_READ_DENIED",
+    "GITHUB_ARTIFACT_EXPIRED", "GITHUB_ARTIFACT_REDIRECT_DENIED", "GITHUB_TRANSPORT_UNAVAILABLE",
+    "GITHUB_HTTP_RESPONSE_INVALID", "CI_CANDIDATE_NOT_AVAILABLE", "CI_CANDIDATE_NOT_READY", "CI_ARTIFACT_AMBIGUOUS",
+    "MAIN_ADVANCED", "PRIOR_PLIST_CHANGED", "PRIOR_SELECTOR_CHANGED", "PREP_RECONCILE_REQUIRED",
     "PINNED_NPM_CACHE_OR_INSTALL_UNAVAILABLE", "NATIVE_SCHEMA_OR_RUNTIME_CHANGE_OUTSIDE_SCOPE",
 }
 
 
+def status_record(outcome, control=CONTROL, *, stamp=None):
+    # The source runner emits only the fixed private schema; never write raw errors.
+    code = outcome.get("code")
+    if code is None:
+        state = "ready"
+    elif code == "GITHUB_KEYCHAIN_ITEM_MISSING":
+        state = "auth_missing"
+    elif code == "GITHUB_KEYCHAIN_LOCKED_OR_DENIED":
+        state = "auth_locked_or_denied"
+    elif code in ("GITHUB_KEYCHAIN_ITEM_INVALID", "GITHUB_ACTIONS_READ_DENIED"):
+        state = "auth_rejected"
+    elif code in ("CI_CANDIDATE_NOT_AVAILABLE", "CI_CANDIDATE_NOT_READY", "GITHUB_ARTIFACT_EXPIRED",
+                  "MAIN_ADVANCED", "PREP_LOCK_BUSY", "PREP_ACTIVE_DEPLOYMENT"):
+        state = "pending"
+    else:
+        state = "blocked"
+    result = {"schemaVersion": "ops.ngs-local-preparation-status.v1", "target": "ngs-local", "state": state,
+              "checkedAt": stamp or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if state == "ready":
+        head = outcome.get("sha")
+        need(matches(SHA, head) and outcome.get("state") in ("ready", "current", "registered"), "NGS_LOCAL_PREP_REFUSED")
+        result.update(sha=head, outcome=outcome["state"])
+    else:
+        result["code"] = code if code in EXPECTED_WAIT else "NGS_LOCAL_PREP_REFUSED"
+    private_directory(control)
+    path = control / STATUS
+    if os.path.lexists(path):
+        read_private(path, 4096, mode=0o600)
+    atomic_write(path, json_bytes(result))
+    return result
+
+
 def main():
     need(len(sys.argv) == 1, "NO_NGS_PREP_ARGUMENTS")
-    assembler = load_assembler(CONTROL)
-    if GH.is_file():
-        return prepare_once(GitHubEvidence(GH), assembler)
-    github = ConnectorEvidence(CONTROL / "ngs-local-evidence")
-    return prepare_once(github, assembler, verify=github.verify)
+    return prepare_once(KeychainGitHubEvidence(), load_assembler(CONTROL))
 
 
 if __name__ == "__main__":
+    failed = False
     try:
-        print(json.dumps(main(), separators=(",", ":")), flush=True)
+        result = main()
     except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError,
-            tarfile.TarError, zipfile.BadZipFile) as e:
+            tarfile.TarError, zipfile.BadZipFile, RecursionError) as e:
         code = str(e)
-        print(json.dumps({"target": "ngs-local", "state": "not_registered",
-                          "code": code if code in EXPECTED_WAIT else "NGS_LOCAL_PREP_REFUSED"},
-                         separators=(",", ":")), flush=True)
+        result = {"target": "ngs-local", "state": "not_registered",
+                  "code": code if code in EXPECTED_WAIT else "NGS_LOCAL_PREP_REFUSED"}
+        failed = True
+    try:
+        # A second runner observing the existing exclusive lock is not the owner
+        # of preparation status and must not replace the active run's result.
+        if result.get("code") != "PREP_LOCK_BUSY":
+            status_record(result)
+    except (OSError, ValueError):
+        result = {"target": "ngs-local", "state": "not_registered", "code": "NGS_LOCAL_PREP_STATUS_UNAVAILABLE"}
+        failed = True
+    print(json.dumps(result, separators=(",", ":")), flush=True)
+    if failed:
         sys.exit(1)
