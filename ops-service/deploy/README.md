@@ -230,3 +230,70 @@ pins. A dedicated fixed Compose executor must be reviewed separately to
 verify those pins and safely support owner-click-only switch and rollback
 without touching other Filex roles. The native launchctl target executor
 cannot be used for this container.
+
+
+### Automatic candidate registration for Mac services
+
+The owner-local coordinator supplies exact authenticated service workflow
+evidence and a canonical checkout to `prepare_service_candidates`. The
+preparer stages source only, verifies the currently loaded selector and
+runtime, checks comparable startup/storage ABI bytes, and writes sealed
+candidate/readiness records under the existing cycle lock. Planner retains
+the live database inode without opening it; Backend Stack is checked as one
+target. Changes to the paired PDS/Filex publication ABI remain blocked until
+the compatible writer is verified active. A source archive or a staged image
+is not an active writer.
+
+`prepare_rs_mcp_candidate` uses the already-prepared exact NGS Local artifact,
+not the service archive, and keeps the relay's private launch configuration.
+An authenticated exact match to a prior observed runtime is recorded as
+equivalent, not reported as a new deployment. All readiness produced by
+automatic service preparation is manual-only: an existing explicit OPS
+button can apply it, but the preparation path cannot start or stop services,
+change selectors, or modify an owner binding.
+
+### Private Mac candidate-only supervisor
+
+`prepare_ops_candidates_once.py` is a separate detector/preparer for the six
+worker targets, Request Service, Workflow Planner, Backend Stack, and RS-MCP.
+It does not replace Local NGS preparation or the existing manual publish/apply
+entrypoints. It does not run a candidate, call an apply runner, use `launchctl`
+to change state, rebuild an image, deploy OPS itself, or publish to Space.
+Every target registration through its reviewed helpers must be `manualOnly`.
+
+To provision after review, install the exact independently reviewed supervisor
+and its fixed `HELPERS` Python files under `OPS/runtime/deploy-control/bin`.
+The control and bin directories must be owned by the running user with mode
+0700, and all module files and the SHA manifest must be regular, non-linked,
+owner-mode 0600 files. The reviewed installer writes
+`bin/ops-candidate-preparer-helpers.json` with exact keys
+`{"schemaVersion":"ops.candidate-preparer-helpers.v1","files":{"filename.py":"<sha256>",...}}`
+using the complete fixed filename set in the supervisor. Record checksums from
+the **reviewed installed release**, never from remote candidate code. The
+supervisor refuses missing, mismatched, extra or preloaded modules, and accepts
+no CLI arguments or environment-controlled working paths. The LaunchAgent
+template has only two placeholders (absolute private preparer path and its
+directory), starts every 300 seconds, and does not provision itself. Do not
+install or load it until the services, worker, evidence and UI/manual-only
+guard changes are integrated and the designated owner approves rollout.
+
+The existing read-only Actions Keychain item is reused. Metadata and CI claims
+come only from the fixed canonical repositories. Each run uses a clean temporary
+bare Git object database with disabled hooks, credentials, system/user
+configuration and non-HTTPS protocols; it binds fetched main to independently
+verified evidence and never checks out or executes source. The target helpers
+re-check the same canonical main and the exact selector while registering.
+The Worker idle proof uses exact loaded launchd arguments/cwd, stable PID,
+selector pin and a narrowly scoped read-only workflow-status query. RS-MCP
+requires its existing verified Local NGS artifact for the exact canonical NGS
+head. A no-op cache is intentionally absent: the previous UI status does not
+prove the current GitHub run/attempt or continued admissibility.
+
+The supervisor owns a separate non-blocking owner-only flock for its whole run.
+It writes private, atomic `deploy-control/ops-candidate-preparation-status.json`
+(`ops.candidate-preparation-status.v1`), with a UTC `checkedAt` and exact fixed
+`targets` rows `{state, sha?, code?}`. No paths, raw output, auth headers or
+secrets are emitted. The Filex writer source-preparation helper is separate;
+the supervisor does not provision or run it, registers no Filex apply target,
+and returns `filex-writer: not_configured`. A staged Filex receipt must never
+be interpreted as active compatibility for a Backend Stack candidate.

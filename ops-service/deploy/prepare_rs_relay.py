@@ -1,5 +1,7 @@
 """Prepare RS-MCP only from an already verified, installed Local NGS release."""
 import stat
+import plistlib
+from pathlib import Path
 from datetime import datetime, timezone
 
 from mac_target_apply import TARGETS, validate_and_rewrite
@@ -10,7 +12,49 @@ from prepare_ngs_release import (
 )
 
 
-def prepare_rs_relay(control, home, *, sha, expected_prior_sha256):
+RELAY_CLOSURE = tuple('sites/npcgen/build/' + n for n in (
+    'rs-mcp.mjs', 'rs-ops-ngs-health.mjs', 'local-ops-health-report.mjs',
+    'folder-mcp-loopback.mjs', 'space-machine-mcp.mjs', 'file-sync-raw-client.mjs'))
+
+
+def _equivalent(files, prior, folder, sha, ready, prior_digest):
+    # Compare the fixed entry (and all of its current relative imports) byte
+    # for byte. A future changed importer fails this no-op check, not execution.
+    v = plistlib.loads(prior)
+    old = Path(v['WorkingDirectory'])
+    suffix = old.name.removeprefix(TARGETS['rs-mcp'].release_prefix)
+    rows = [_read_existing(folder/'observed.json'), (_read_existing(folder/'last-result.json') or {}).get('observed')]
+    rows = [row for row in rows if isinstance(row,dict) and set(row)=={'sha','deployedAt'}
+            and matches(SHA,row['sha']) and isinstance(row['deployedAt'],str)]
+    observed = max(rows,key=lambda r:r['deployedAt'],default=None)
+    if observed is None or observed['sha'] == sha or not observed['sha'].startswith(suffix):
+        return None
+    try:
+        for n in RELAY_CLOSURE:
+            if n not in files:
+                return None
+            private_file(old/n)
+            if (old/n).read_bytes() != files[n]:
+                return None
+    except OSError:
+        return None
+    return {'schemaVersion':'ops.deploy-target-equivalent.v1','target':'rs-mcp','sha':sha,
+            'observedSha':observed['sha'],'artifactSha256':ready['artifactSha256'],
+            'runnerSha256':ready['runnerSha256'],'selectorSha256':prior_digest,
+            'runtimeTreeSha256':digest(json_bytes({n:digest(files[n]) for n in RELAY_CLOSURE})),
+            'verifiedAt':ready['verifiedAt']}
+
+
+def _read_existing(path):
+    try:
+        private_file(path, 0o600)
+    except FileNotFoundError:
+        return None
+    need(0 < path.stat().st_size <= 4096, 'RS_RELAY_PREPARATION_CHANGED')
+    return json_load(path.read_bytes())
+
+
+def prepare_rs_relay(control, home, *, sha, expected_prior_sha256, expected_runner_sha256=None, recheck=None, manual_only=False, report_equivalence=False):
     need(matches(SHA, sha) and matches(DIGEST, expected_prior_sha256), 'RS_RELAY_INPUT_INVALID')
     package = control / 'mac-releases' / sha
     folder = control / 'targets' / 'rs-mcp'
@@ -54,21 +98,40 @@ def prepare_rs_relay(control, home, *, sha, expected_prior_sha256):
     need(digest(prior) == expected_prior_sha256, 'RS_RELAY_PRIOR_CHANGED')
     validate_and_rewrite(prior, release, target, home / 'Workspaces')
     runner_sha = digest(runner.read_bytes())
+    if expected_runner_sha256 is not None:
+        need(runner_sha == expected_runner_sha256, 'RS_RELAY_RUNNER_CHANGED')
+    freshness = recheck
     candidate = dict(schemaVersion='ops.mac-target-candidate.v1', target='rs-mcp', sha=sha,
                      archiveSha256=m['archiveSha256'], treeSha256=m['treeSha256'],
                      expectedPriorPlistSha256=expected_prior_sha256)
     ready = dict(schemaVersion='ops.deploy-target-ready.v1', target='rs-mcp', sha=sha,
                  verifiedAt=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                  artifactSha256=m['archiveSha256'], runnerSha256=runner_sha)
+    if manual_only is True:
+        ready['manualOnly'] = True
 
-    def recheck():
+    def verify_current():
+        if freshness is not None:
+            freshness()
         for path, mode in ((selector, None), (manifest, 0o600), (runner, None)):
             private_file(path, mode)
         need(selector.read_bytes() == prior and manifest.read_bytes() == manifest_bytes
              and digest(runner.read_bytes()) == runner_sha, 'RS_RELAY_PREPARATION_CHANGED')
 
-    recheck()
+    verify_current()
+    equivalent = _equivalent(files, prior, folder, sha, ready, expected_prior_sha256) if report_equivalence else None
+    if (old := _read_existing(folder / 'ready.json')) is not None and all(
+        old.get(k) == v for k, v in ready.items() if k != 'verifiedAt'
+    ):
+        need(_read_existing(folder / 'candidate.json') == candidate, 'RS_RELAY_PREPARATION_CHANGED')
+        if equivalent is not None:
+            old_eq = _read_existing(folder/'equivalent.json')
+            if not old_eq or any(old_eq.get(k) != v for k,v in equivalent.items() if k != 'verifiedAt'):
+                atomic_write(folder/'equivalent.json',json_bytes(equivalent))
+        return (old, equivalent is not None) if report_equivalence else old
     atomic_write(folder / 'candidate.json', json_bytes(candidate))
-    recheck()
+    verify_current()
+    if equivalent is not None:
+        atomic_write(folder/'equivalent.json',json_bytes(equivalent))
     atomic_write(folder / 'ready.json', json_bytes(ready))
-    return ready
+    return (ready, equivalent is not None) if report_equivalence else ready

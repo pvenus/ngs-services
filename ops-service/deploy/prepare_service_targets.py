@@ -131,9 +131,17 @@ def tracked_targets(verified, repo):
     return out
 
 
-def assemble_source(verified, repo, releases):
+def assemble_source(verified, repo, releases, *, public_source_parent=False):
     """Install code only, with all fixed scopes for this commit, before any ready state."""
-    private_directory(releases)
+    if public_source_parent:
+        # The existing Mac code/releases parent is owner-controlled 0755.
+        # Only canonical, public Git blobs are staged; the new child is 0700.
+        attrs = releases.lstat()
+        need(releases == releases.resolve() and stat.S_ISDIR(attrs.st_mode)
+             and attrs.st_uid == os.getuid() and stat.S_IMODE(attrs.st_mode) in (0o700, 0o755),
+             "TARGET_RELEASE_PARENT_UNTRUSTED")
+    else:
+        private_directory(releases)
     p = verified["proof"]
     family = p["repository"]
     head = p["headSha"]
