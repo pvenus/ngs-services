@@ -84,9 +84,10 @@ class OwnedNPCTransport(NPCTransport):
   path={'representative':'portrait-representative','idle':'portrait-idle-reference','direction':'portrait-direction'}[mode]
   return self.call('POST','/v1/workflow/'+path,{'binding':binding,'base64':base64_png})
  def workflow_media(self,kind,action,binding,artifact=None):
-  require(kind in ('animation','frames','portrait-pixel') and action in ('read','publish'),'WORKFLOW_MEDIA_RPC')
+  require((kind in ('animation','frames','portrait-pixel') and action in ('read','publish')) or
+          (kind=='frames' and action=='asset' and binding.get('regeneration') is True),'WORKFLOW_MEDIA_RPC')
   value={'binding':binding} if action=='read' else {'binding':binding,'artifact':artifact}
-  return self.call('POST','/v1/workflow/'+kind+('/read' if action=='read' else ''),value)
+  return self.call('POST','/v1/workflow/'+kind+('/'+action if action in ('read','asset') else ''),value)
  def workflow_preset(self,binding,files):
   return self.call('POST','/v1/workflow/preset',{'binding':binding,'files':files})
  def workflow_delete_character(self,binding,metadata,*,target=None):

@@ -6,6 +6,7 @@ import {npcPlanningUpdateType,npcPlanningUpdateSchema,npcPlanningRoles,npcPlanni
 import {npcPlanningAddType,npcPlanningAddSchema,npcPlanningAddIdPattern,npcPlanningAddCategoryIdPattern} from './npc-planning-add-envelope.mjs';
 import {audioRequestType,audioSchema,audioKind,audioTitleLimit,audioBriefLimit,audioVocalTextLimit,audioConceptTextLimit,audioLyricsRequestLimit,audioDirectConcept,audioConceptIdPattern,audioDuration} from './audio-generate-envelope.mjs';
 import {motion2DRequestType,motion2DSchema,motionPresetIdPattern,variantPresetIdPattern,motion2DLabelLimit} from './motion-preset-convert-2d-envelope.mjs';
+import {npcAnimationRegenerateType,npcAnimationRegenerateSchema,npcAnimationOwnerPattern} from './npc-animation-regenerate-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema,audioOfficialIdPattern} from './audio-delete-envelope.mjs';
 import {defaultLimit,listTool,maxCursor,maxLimit,statuses,workflowListTool} from './request-list.mjs';
 
@@ -18,7 +19,7 @@ const maxBody=96*1024;
 const known={
  REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
  NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID:400,NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID:400,NGS_AUDIO_GENERATE_PAYLOAD_INVALID:400,NGS_AUDIO_DELETE_PAYLOAD_INVALID:400,
- NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID:400,OFFICIAL_MOTION_2D_VARIANT_ALREADY_REGISTERED:409,
+ NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID:400,NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID:400,OFFICIAL_MOTION_2D_VARIANT_ALREADY_REGISTERED:409,
  OFFICIAL_AUDIO_DELETE_TARGET_NOT_COMPLETED:404,OFFICIAL_AUDIO_DELETE_ALREADY_REGISTERED:409,
  OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT:409,OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED:409,
  OFFICIAL_REQUEST_CONCEPT_CATEGORY_ALREADY_REGISTERED:409,
@@ -36,6 +37,9 @@ const npcSelectionPayload={type:'object',properties:{schemaVersion:{enum:selecti
   assetSetSha256:{type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64},
  },required:['presetId','posePreset','assetSetSha256'],additionalProperties:false}}},
  required:['schemaVersion','projectId','intent','character','sourceRefs','motionSelection'],additionalProperties:false};
+const npcAnimationRegeneratePayload={type:'object',properties:{schemaVersion:{const:npcAnimationRegenerateSchema},
+ projectId:{const:'binari'},npcId:{type:'string',pattern:npcAnimationOwnerPattern},motionSelection:npcSelectionPayload.properties.motionSelection},
+ required:['schemaVersion','projectId','npcId','motionSelection'],additionalProperties:false};
 const conceptId={type:'string',pattern:conceptCategoryIdPattern},groupId={type:'string',pattern:conceptCategoryGroupIdPattern};
 const conceptPayload={type:'object',properties:{schemaVersion:{const:conceptCategorySchema},projectId:{const:'binari'},
  operation:{enum:['add','update','migrate','remove']},categoryId:conceptId,
@@ -84,9 +88,9 @@ const motion2DPayload={type:'object',properties:{
  label:{type:'string',minLength:1,maxLength:motion2DLabelLimit},
  },required:['schemaVersion','projectId','sourcePresetId','variantPresetId','label'],additionalProperties:false};
 const tool={
- name:submitTool,description:'Register an exact typed NPC, NPC document add/update, concept category, BGM generation, BGM removal, or 2D motion-preset conversion workflow without executing it.',
+ name:submitTool,description:'Register an exact typed NPC, NPC document add/update, concept category, BGM generation, BGM removal, 2D motion-preset conversion, or selected NPC animation workflow without executing it.',
  inputSchema:{type:'object',properties:{
-  sourceId:{const:'local'},requestType:{enum:['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,motion2DRequestType]},
+  sourceId:{const:'local'},requestType:{enum:['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,motion2DRequestType,npcAnimationRegenerateType]},
   idempotencyKey:{type:'string',minLength:1,maxLength:200},payload:{type:'object'},
  },required:['sourceId','requestType','idempotencyKey','payload'],additionalProperties:false,
  oneOf:[{properties:{requestType:{const:'npc.workflow'},payload:{oneOf:[npcLegacyPayload,npcSelectionPayload]}}},
@@ -95,7 +99,8 @@ const tool={
   {properties:{requestType:{const:npcPlanningAddType},payload:npcPlanningAddPayload}},
   {properties:{requestType:{const:audioRequestType},payload:audioPayload}},
   {properties:{requestType:{const:audioDeleteType},payload:audioDeletePayload}},
-  {properties:{requestType:{const:motion2DRequestType},payload:motion2DPayload}}]},
+  {properties:{requestType:{const:motion2DRequestType},payload:motion2DPayload}},
+  {properties:{requestType:{const:npcAnimationRegenerateType},payload:npcAnimationRegeneratePayload}}]},
  outputSchema:{type:'object',properties:{officialRequestId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
   status:{const:'registered'}},required:['officialRequestId','status'],additionalProperties:false},
  annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},

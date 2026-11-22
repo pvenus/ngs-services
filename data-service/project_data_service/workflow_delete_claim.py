@@ -15,6 +15,8 @@ SCHEMA='ngs.npc-one-stop.replace.v1'
 NEW_SCHEMA='ngs.npc-one-stop.v1'
 SELECTION_NEW='ngs.npc-one-stop.selection.v1'
 SELECTION_REPLACE='ngs.npc-one-stop.selection.replace.v1'
+REGENERATE_TYPE='npc.animation.regenerate'
+REGENERATE_SCHEMA='ngs.npc-animation.regenerate.v1'
 SELECTION_SCHEMAS=(SELECTION_NEW,SELECTION_REPLACE)
 REPLACE_SCHEMAS=(SCHEMA,SELECTION_REPLACE)
 NPC_SCHEMAS=(SCHEMA,NEW_SCHEMA,*SELECTION_SCHEMAS)
@@ -209,38 +211,49 @@ class PrivatePlannerClaim:
                 AND t.task_type=? AND t.worker_type=? AND t.task_key=?
                 AND t.result_ref IS NULL AND (? OR t.depends_on_task_id IS NULL) AND r.state='planned'""",
                 (task,oid,task_type,worker,key,is_npc_task)).fetchone()
-            require(row is not None and row['project_id']=='binari' and row['request_type']=='npc.workflow'
-                    and row['schema_version'] in (NPC_SCHEMAS if is_npc_task else REPLACE_SCHEMAS) and row['task_stamp']==claim['claimStamp']
+            regeneration=(row is not None and selected_media and row['request_type']==REGENERATE_TYPE
+                          and row['schema_version']==REGENERATE_SCHEMA)
+            require(row is not None and row['project_id']=='binari'
+                    and (regeneration or row['request_type']=='npc.workflow'
+                         and row['schema_version'] in (NPC_SCHEMAS if is_npc_task else REPLACE_SCHEMAS))
+                    and row['task_stamp']==claim['claimStamp']
                     and type(row['registered_at']) is int and 0<=row['registered_at']<=SAFE_INT
                     and row['task_stamp']>=row['registered_at'] and row['reason'] is None
                     and row['payload_sha256']==claim['payloadSha256'])
             payload=json.loads(row['payload'])
-            selection=row['schema_version'] in SELECTION_SCHEMAS
+            selection=regeneration or row['schema_version'] in SELECTION_SCHEMAS
             replacement=row['schema_version'] in REPLACE_SCHEMAS
-            fields={'schemaVersion','projectId','intent','character','sourceRefs'}
-            require(type(payload) is dict
-                    and payload.get('schemaVersion')==row['schema_version'] and payload.get('projectId')=='binari'
-                    and type(payload.get('intent')) is str and 5<=len(payload['intent'])<=3500
-                    and bool(payload['intent'].strip()) and type(payload.get('sourceRefs')) is list
-                    and bool(payload['sourceRefs'])
-                    and all(type(x) is str and 1<=len(x)<=300 and bool(x.strip()) for x in payload['sourceRefs']))
-            if selection:
-                require(set(payload)==fields|{'motionSelection'})
+            if regeneration:
+                require(type(payload) is dict and set(payload)=={'schemaVersion','projectId','npcId','motionSelection'}
+                        and payload['schemaVersion']==REGENERATE_SCHEMA and payload['projectId']=='binari'
+                        and payload['npcId']==owner)
                 slots=selection_rows(payload)
+                c={'npcId':owner}
             else:
-                fields.add('includeCombat')
-                require(fields<=payload.keys()<=fields|{'motionPresets'} and payload['includeCombat'] is False
-                        and ('motionPresets' not in payload or payload['motionPresets']=={'walk':'walk','run':'run'}))
-                slots={}
+                fields={'schemaVersion','projectId','intent','character','sourceRefs'}
+                require(type(payload) is dict
+                        and payload.get('schemaVersion')==row['schema_version'] and payload.get('projectId')=='binari'
+                        and type(payload.get('intent')) is str and 5<=len(payload['intent'])<=3500
+                        and bool(payload['intent'].strip()) and type(payload.get('sourceRefs')) is list
+                        and bool(payload['sourceRefs'])
+                        and all(type(x) is str and 1<=len(x)<=300 and bool(x.strip()) for x in payload['sourceRefs']))
+                if selection:
+                    require(set(payload)==fields|{'motionSelection'})
+                    slots=selection_rows(payload)
+                else:
+                    fields.add('includeCombat')
+                    require(fields<=payload.keys()<=fields|{'motionPresets'} and payload['includeCombat'] is False
+                            and ('motionPresets' not in payload or payload['motionPresets']=={'walk':'walk','run':'run'}))
+                    slots={}
+                c=payload['character']
+                require(type(c) is dict and set(c)=={'npcId','name','slug','role','actId','chapterId'} and c['npcId']==owner
+                        and matches(c['slug'],r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}' if replacement
+                                    else r'[A-Za-z0-9._:-]{1,200}')
+                        and all(matches(c[k],r'[A-Za-z0-9._:-]{1,200}') for k in ('actId','chapterId'))
+                        and type(c['name']) is str and 1<=len(c['name'])<=60 and bool(c['name'].strip())
+                        and type(c['role']) is str and 1<=len(c['role'])<=300 and bool(c['role'].strip()))
             if media:
                 require(selection==selected_media and (not selection or slot in slots))
-            c=payload['character']
-            require(type(c) is dict and set(c)=={'npcId','name','slug','role','actId','chapterId'} and c['npcId']==owner
-                    and matches(c['slug'],r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}' if replacement
-                                else r'[A-Za-z0-9._:-]{1,200}')
-                    and all(matches(c[k],r'[A-Za-z0-9._:-]{1,200}') for k in ('actId','chapterId'))
-                    and type(c['name']) is str and 1<=len(c['name'])<=60 and bool(c['name'].strip())
-                    and type(c['role']) is str and 1<=len(c['role'])<=300 and bool(c['role'].strip()))
             expected={'npcId':owner}
             if direction is not None:expected['direction']=direction
             pixel_direction=(direction is not None and not media and
@@ -268,23 +281,30 @@ class PrivatePlannerClaim:
                 media_binding={**motion_fields,'direction':d}
                 expected.update(media_binding)
                 expected.update(output='native-png') if kind=='animation' else expected.update(input='native-png')
-                if kind=='animation':
-                    parent_key='portrait_'+d
-                    parent_type,parent_worker='npc.portrait-direction','image'
-                    parent_input={'npcId':owner,'direction':d}
+                if regeneration and kind=='animation':
+                    require(row['depends_on_task_id'] is None)
                 else:
-                    parent_key='animation_'+stem
-                    parent_type,parent_worker='npc.animation-native-png','animation'
-                    parent_input={'npcId':owner,**media_binding,'output':'native-png'}
-                parent='workflow.task.'+digest([oid,parent_key])
-                prior=db.execute("""SELECT task_input,depends_on_task_id FROM workflow_tasks
-                    WHERE task_id=? AND official_request_id=? AND task_key=? AND task_type=?
-                    AND worker_type=? AND status='completed'""",
-                    (parent,oid,parent_key,parent_type,parent_worker)).fetchone()
-                if prior and kind=='animation' and prior['depends_on_task_id']=='workflow.task.'+digest([oid,'portrait_pixel_idle_reference']):
-                    parent_input['imageStyle']='pixel-sprite.v1'
-                require(row['depends_on_task_id']==parent and prior is not None
-                        and prior['task_input']==canonical(parent_input).decode())
+                    if kind=='animation':
+                        parent_key='portrait_'+d
+                        parent_type,parent_worker='npc.portrait-direction','image'
+                        parent_input={'npcId':owner,'direction':d}
+                    else:
+                        parent_key='animation_'+stem
+                        parent_type,parent_worker='npc.animation-native-png','animation'
+                        parent_input={'npcId':owner,**media_binding,'output':'native-png'}
+                    parent='workflow.task.'+digest([oid,parent_key])
+                    prior=db.execute("""SELECT task_input,depends_on_task_id FROM workflow_tasks
+                        WHERE task_id=? AND official_request_id=? AND task_key=? AND task_type=?
+                        AND worker_type=? AND status='completed'""",
+                        (parent,oid,parent_key,parent_type,parent_worker)).fetchone()
+                    if prior and kind=='animation' and prior['depends_on_task_id']=='workflow.task.'+digest([oid,'portrait_pixel_idle_reference']):
+                        parent_input['imageStyle']='pixel-sprite.v1'
+                    require(row['depends_on_task_id']==parent and prior is not None
+                            and prior['task_input']==canonical(parent_input).decode())
+                    if regeneration:
+                        require(prior['depends_on_task_id'] is None)
+                if regeneration:
+                    media_binding['regeneration']=True
             if pixel is not None:
                 d,=pixel
                 expected.update(posePreset='idle',direction=d)

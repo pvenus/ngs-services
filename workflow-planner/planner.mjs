@@ -14,6 +14,8 @@ import {createWorkflowTasksSql,RETRY_COUNT_COLUMN,migrateWorkflowAudioTask} from
 import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit} from './motion-preset-convert-2d-plan.mjs';
 
+import {npcAnimationRegenerateType,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
+
 export const portraitPixelTaskType='npc.portrait-pixel';
 export const pixelImageStyle='pixel-sprite.v1';
 export const directions=Object.freeze(['n','ne','e','se','s','sw','w','nw']);
@@ -26,10 +28,11 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,motion2DRequestType].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,motion2DRequestType,npcAnimationRegenerateType].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
- const payload=(row.requestType===motion2DRequestType?validateMotion2D:
+ const payload=(row.requestType===npcAnimationRegenerateType?validateNpcAnimationRegenerate:
+  row.requestType===motion2DRequestType?validateMotion2D:
   row.requestType===audioDeleteType?validateAudioDelete:
   row.requestType===audioRequestType?validateAudioGenerate:
   row.requestType===npcPlanningAddType?validateNPCPlanningAdd:
@@ -44,6 +47,20 @@ export function buildPlan(row,{pixelPortraits=true}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true){
+ if(row.requestType===npcAnimationRegenerateType){
+  const {npcId,motionSelection}=row.payload,tasks=[];
+  const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
+  for(const {presetId,posePreset,assetSetSha256} of motionSelection)for(const direction of directions){
+   const suffix='motion_'+motionSelectionSlot(presetId)+'_'+direction;
+   const animation='animation_'+suffix,frames='frames_'+suffix;
+   const input={npcId,direction,motion:presetId,posePreset,assetSetSha256};
+   tasks.push({id:id(animation),key:animation,type:'npc.animation-native-png',workerType:'animation',dependsOn:null,
+    input:{...input,output:'native-png'}},
+    {id:id(frames),key:frames,type:'npc.frames-postprocess',workerType:'postprocess',dependsOn:id(animation),
+     input:{...input,input:'native-png'}});
+  }
+  return {payload,tasks};
+ }
  if(row.requestType===motion2DRequestType)return {payload,tasks:buildMotion2DTasks(row)};
  if(row.requestType===audioDeleteType){
   const {officialRequestId}=row.payload;

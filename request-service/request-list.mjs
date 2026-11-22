@@ -6,6 +6,7 @@ import {npcPlanningUpdateType} from './npc-planning-update-envelope.mjs';
 import {npcPlanningAddType} from './npc-planning-add-envelope.mjs';
 import {audioRequestType} from './audio-generate-envelope.mjs';
 import {motion2DRequestType} from './motion-preset-convert-2d-envelope.mjs';
+import {npcAnimationRegenerateType} from './npc-animation-regenerate-envelope.mjs';
 import {audioDeleteType} from './audio-delete-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
 import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
@@ -38,6 +39,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${audioRequestType}' THEN json_extract(payload_json,'$.conceptId')
    WHEN '${audioDeleteType}' THEN json_extract(payload_json,'$.officialRequestId')
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.variantPresetId')
+   WHEN '${npcAnimationRegenerateType}' THEN json_extract(payload_json,'$.npcId')
    ELSE json_extract(payload_json,'$.character.npcId') END END AS targetNpcId,
   CASE WHEN ${terminalReason}='${unsupportedReason}' THEN '지원 종료 요청'
   ELSE CASE request_type WHEN '${conceptCategoryRequestType}' THEN json_extract(payload_json,'$.title')
@@ -48,6 +50,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
       WHERE g.official_request_id=json_extract(official_requests.payload_json,'$.officialRequestId')
        AND g.request_type='${audioRequestType}' AND g.project_id=official_requests.project_id),'BGM 삭제')
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.label')
+   WHEN '${npcAnimationRegenerateType}' THEN '애니메이션 생성'
    ELSE json_extract(payload_json,'$.character.name') END END AS targetName`;
 const workflowFields=`${basic}, payload_json AS payloadJson, payload_sha256 AS payloadSha256, source_id AS sourceId, idempotency_key AS sourceKey`;
 const commonKeys=['officialRequestId','projectId','requestType','schemaVersion'];

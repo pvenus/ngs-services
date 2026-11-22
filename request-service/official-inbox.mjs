@@ -7,6 +7,7 @@ import {validateOfficialSubmit,workflowScopeSql} from './request-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema} from './concept-category-envelope.mjs';
 import {motion2DRequestType,motion2DSchema} from './motion-preset-convert-2d-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema} from './audio-delete-envelope.mjs';
+import {npcAnimationRegenerateType,npcAnimationRegenerateSchema} from './npc-animation-regenerate-envelope.mjs';
 import {audioRequestType,audioSchema} from './audio-generate-envelope.mjs';
 import {initializeOfficialSchema} from './official-inbox-schema.mjs';
 import {createRequestList,createWorkflowList,statuses} from './request-list.mjs';
@@ -41,6 +42,9 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
   WHERE project_id=? AND request_type='npc.workflow' AND schema_version IN (${oneStopSchemas.map(()=>'?').join(',')}) AND state IN ('registered','planned')
   AND (json_extract(payload_json,'$.character.npcId')=? COLLATE NOCASE
    OR json_extract(payload_json,'$.character.slug')=? COLLATE NOCASE) LIMIT 1`);
+ const regenerationTarget=db.prepare(`SELECT 1 FROM official_requests
+  WHERE project_id=? AND request_type=? AND schema_version=? AND state IN ('registered','planned')
+  AND json_extract(payload_json,'$.npcId')=? COLLATE NOCASE LIMIT 1`);
  const targetCategory=db.prepare(`SELECT official_request_id FROM official_requests
   WHERE project_id=? AND request_type=? AND schema_version=? AND state IN ('registered','planned')
   AND json_extract(payload_json,'$.categoryId')=? COLLATE NOCASE LIMIT 1`);
@@ -94,8 +98,11 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
      }
      if(kind===requestType&&unsupportedPlannerPolicy(kind,JSON.parse(payload)))
       throw Error('REQUEST_UNSUPPORTED_RECREATE');
-     if(kind===requestType){
-      if(target.get(projectId,...oneStopSchemas,npcId,npcSlug))throw Error('OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED');
+     if(kind===requestType||kind===npcAnimationRegenerateType){
+      const slug=npcSlug??npcId.replace(/^(?:npc|character)\./u,'');
+      if(target.get(projectId,...oneStopSchemas,npcId,slug)||
+         regenerationTarget.get(projectId,npcAnimationRegenerateType,npcAnimationRegenerateSchema,npcId))
+       throw Error('OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED');
      }else if(kind===conceptCategoryRequestType&&targetCategory.get(projectId,conceptCategoryRequestType,conceptCategorySchema,categoryId)){
       throw Error('OFFICIAL_REQUEST_CONCEPT_CATEGORY_ALREADY_REGISTERED');
      }

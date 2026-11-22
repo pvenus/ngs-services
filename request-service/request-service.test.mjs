@@ -455,7 +455,7 @@ const conceptExisting=(operation,categoryId='concept.test-fixture')=>({...legacy
 test('exact concept envelopes reject mismatched families, unsafe placement, legacy extras and malformed text',async t=>{
  const {directory,path}=folder(t),{submit,rpc}=await listener(t,directory);
  const schema=(await rpc('tools/list',{})).result.tools[0].inputSchema;
- assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','motion-preset.convert-2d']);
+ assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','motion-preset.convert-2d','npc.animation.regenerate']);
  assert.deepEqual(schema.oneOf[1].properties.payload.required,['schemaVersion','projectId','operation','categoryId','groupId','title','outline','requirements']);
  const expected={error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400};
  for(const bad of [
@@ -699,4 +699,38 @@ test('new exact selected-preset schemas register immutable payloads and share ol
  assert.deepEqual(await wire(input('selected-replacement',replace)),{error:'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED',status:409});
  await cancel({officialRequestId:legacy.officialRequestId});
  assert.equal((await wire(input('selected-replacement',replace))).status,'registered');
+});
+
+test('formal NPC animation regeneration is durable and excludes concurrent same-NPC whole requests',async t=>{
+ const {directory}=folder(t);
+ const api=await listener(t,directory);
+ const schemaVersion='ngs.npc-animation.regenerate.v1',requestType='npc.animation.regenerate';
+ const regen={schemaVersion,projectId:'binari',npcId:'npc.fixture',motionSelection:[
+  {presetId:'run-2d',posePreset:'idle',assetSetSha256:'a'.repeat(64)},
+  {presetId:'sword-attack-flat',posePreset:'combat',assetSetSha256:'b'.repeat(64)},
+ ]};
+ const submit=(idempotencyKey,value)=>api.submit({sourceId:'local',requestType,idempotencyKey,payload:value});
+ for(const malformed of [
+  {...regen,npcId:'../npc.fixture'},{...regen,includeCombat:true},{...regen,motionSelection:[]},
+  {...regen,motionSelection:[regen.motionSelection[0],{...regen.motionSelection[0],presetId:'RUN-2D'}]},
+ ]){
+  const bad=await submit('bad',malformed);
+  assert.equal(bad.result.structuredContent.error,'NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID');
+ }
+ const accepted=(await submit('regen',regen)).result.structuredContent;
+ assert.match(accepted.officialRequestId,/^request\.official\.[a-f0-9]{64}$/u);
+ assert.deepEqual((await submit('regen',regen)).result.structuredContent,accepted);
+ assert.equal((await submit('another',regen)).result.structuredContent.error,'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED');
+ assert.equal((await api.submit(input('whole'))).result.structuredContent.error,'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED');
+ const target=(await api.list({})).result.structuredContent.requests[0];
+ assert.equal(target.targetNpcId,'npc.fixture');assert.equal(target.targetName,'애니메이션 생성');
+ const projected=(await api.workflow({})).result.structuredContent.requests[0];
+ assert.equal(projected.requestType,requestType);assert.deepEqual(projected.payload,regen);
+ assert.equal((await api.update({officialRequestId:accepted.officialRequestId,status:'planned'})).result.structuredContent.status,'planned');
+ assert.equal((await api.update({officialRequestId:accepted.officialRequestId,status:'completed'})).result.structuredContent.status,'completed');
+ const whole=(await api.submit(input('whole'))).result.structuredContent;
+ assert.match(whole.officialRequestId,/^request\.official\./u);
+ assert.equal((await submit('blocked-by-whole',regen)).result.structuredContent.error,'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED');
+ const legacy=(await submit('existing-import',{...regen,npcId:'character.yeonwoo'})).result.structuredContent;
+ assert.match(legacy.officialRequestId,/^request\.official\./u);
 });
