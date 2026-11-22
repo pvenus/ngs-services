@@ -7,6 +7,7 @@ PREFIX='canonical-files/binari/motion-presets/'
 CONFIG=Path.home()/'Library/Application Support/NPCGen/pds-filex-motion-presets-cas.json'
 ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
 DIRECTIONS={'n','ne','e','se','s','sw','w','nw'}
+WORKFLOW_CAS_TIMEOUT=1.5
 def factory():
  try:c=json.loads(private_read(CONFIG))
  except FileNotFoundError:raise ValueError('MOTION_PRESETS_FILEX_NOT_CONFIGURED')from None
@@ -48,7 +49,7 @@ class MotionPresets:
   with self.factory()as t:a=t.call('GET','/v1/asset?'+urllib.parse.urlencode({'id':row['assetId']}))
   raw=base64.b64decode(a['base64'],validate=True);require(len(raw)==row['bytes']and hashlib.sha256(raw).hexdigest()==row['sha256']and raw[4:8]==b'ftyp','MOTION_PRESET_ASSET_MISMATCH')
   return {**{k:v for k,v in p.items()if k!='directions'},**row,'sourceVersion':s['sourceVersion'],'presetHash':digest(p),'base64':a['base64']}
- def publish_2d(self,request_id,source,variant,asset_read):
+ def publish_2d(self,request_id,source,variant,asset_read,guarded_commit):
   # Scoped workflow entry, not exposed through the general registration API.
   # The catalog becomes visible only in Filex's locked batch; assets use
   # immutable hash names and are uploaded/read-verified individually.
@@ -87,7 +88,11 @@ class MotionPresets:
     require(sealed['assetId']==aid and sealed['sha256']==row['sha256']and sealed['bytes']==row['bytes']
      and base64.b64decode(sealed['base64'],validate=True)==raw,'MOTION_PRESET_ASSET_READBACK')
    if old is None:
-    t.call('POST','/v1/batch',{'requestId':request_id,'inputHash':ih,'files':files,'readSet':basis})
+    # Keep the fresh authorization fence only across this small catalog CAS;
+    # asset bytes/upload/readback never hold the Planner reader transaction.
+    with guarded_commit():
+     t.call('POST','/v1/batch',{'requestId':request_id,'inputHash':ih,'files':files,'readSet':basis},
+            timeout=WORKFLOW_CAS_TIMEOUT)
    require(receipt(t)is not None,'MOTION_PRESET_VARIANT_RECEIPT')
   check=self.snapshot()
   require(check['documents'].get(key)==p,'MOTION_PRESET_READBACK')

@@ -35,8 +35,9 @@ SAFE_INT = 2**53-1
 FFPROBE = Path('/opt/homebrew/bin/ffprobe')
 JS_TRIM = '\t\n\r\v\f \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
 MAX_IMAGE = 8*1024*1024
-MAX_CLIP = 64*1024*1024
-MAX_BODY = ((MAX_CLIP+2)//3)*4+8192
+MAX_REFERENCE = 64*1024*1024
+MAX_OUTPUT = 8*1024*1024
+MAX_BODY = ((max(MAX_IMAGE,MAX_OUTPUT)+2)//3)*4+8192
 PNG = b'\x89PNG\r\n\x1a\n'
 
 
@@ -110,7 +111,7 @@ def valid_input(row,value,oid,key):
 def predecessor(db,oid,p,key):
     row=get_row(db,oid,key)
     require(valid_input(row,p,oid,key) and row['status']=='completed' and type(row['result_ref']) is str)
-    return row['result_ref']
+    return row['result_ref'],row['updated_at']
 
 
 def run_info(db,claim):
@@ -171,15 +172,18 @@ def sync(path):
     finally:os.close(fd)
 
 
-def save(path,data,limit):
+def save(path,data,limit,guard):
     if os.path.lexists(path):
         require(private_file(path,limit)==data)
+        with guard():
+            pass
         return
     fd,tmp=tempfile.mkstemp(dir=path.parent,prefix='.new-')
     try:
         with os.fdopen(fd,'wb') as stream:
             stream.write(data);stream.flush();os.fsync(stream.fileno())
-        os.replace(tmp,path)
+        with guard():
+            os.replace(tmp,path)
         sync(path.parent)
     finally:
         if os.path.lexists(tmp):os.unlink(tmp)
@@ -285,7 +289,7 @@ class WorkflowMotion2D:
         with self.verifier.snapshot():self.motion.snapshot()
         return {'enabled':True,'schemaVersion':CAPABILITY}
 
-    def basis(self,folder,p,*,create):
+    def basis(self,folder,p,*,create,guard):
         snapshot=self.motion.snapshot()
         source=snapshot['documents'].get('presets/'+p['sourcePresetId']+'.json')
         require(source is not None and 'variant' not in source)
@@ -293,7 +297,7 @@ class WorkflowMotion2D:
         pin=folder/'basis.json'
         if create and not os.path.lexists(pin):
             require('presets/'+p['variantPresetId']+'.json' not in snapshot['documents'])
-            save(pin,canonical({'sourcePresetHash':source_hash,'payloadSha256':digest(p)}),4096)
+            save(pin,canonical({'sourcePresetHash':source_hash,'payloadSha256':digest(p)}),4096,guard)
         require(json.loads(private_file(pin,4096))=={'sourcePresetHash':source_hash,'payloadSha256':digest(p)})
         return source_hash,source
 
@@ -309,47 +313,61 @@ class WorkflowMotion2D:
 
     def run(self,body,*,read,started):
         require(type(body) is dict and set(body)==({'claim'} if read else {'claim','artifact'}))
-        with claimed(self.verifier,body['claim']) as (oid,key,p,refs):
-            with staging(self.root,oid,create=key==IMAGE and read) as folder:
-                source_hash,source=self.basis(folder,p,create=key==IMAGE and read)
-                proof={'sourcePresetHash':source_hash}
-                if key==IMAGE:
-                    if read:return proof
-                    raw=artifact_bytes(body['artifact'],MAX_IMAGE)
-                    validate_png(raw)
-                    save(folder/'image.png',raw,MAX_IMAGE)
-                    return {'ok':True,'resultRef':asset_ref(key,raw)}
-                image=private_file(folder/'image.png',MAX_IMAGE)
-                require(refs[IMAGE]==asset_ref(IMAGE,image))
-                if key!=FINAL:
-                    direction=key.removeprefix('motion_2d_')
-                    if read:
-                        ref=self.motion.get(p['sourcePresetId'],direction,
-                                            expected_preset_hash=source_hash,max_asset_bytes=MAX_CLIP)
-                        require(ref['presetHash']==source_hash)
-                        return {'direction':direction,**proof,'reference':ref,
-                                'image':{'sha256':sha(image),'bytes':len(image),'base64':base64.b64encode(image).decode()}}
-                    raw=artifact_bytes(body['artifact'],MAX_CLIP)
-                    self.check_clip(folder,key,raw,source)
-                    save(folder/(direction+'.mp4'),raw,MAX_CLIP)
-                    return {'ok':True,'resultRef':asset_ref(key,raw)}
-                if read:return proof
-                require(type(body['artifact']) is dict and not body['artifact'])
-                rows=[]
-                for row in source['directions']:
-                    direction=row['direction']; key=task_key(direction)
-                    raw=private_file(folder/(direction+'.mp4'),MAX_CLIP)
-                    require(refs[key]==asset_ref(key,raw))
-                    dimensions=self.check_clip(folder,key,raw,source)
-                    rows.append({**row,**dimensions,'assetId':sha(raw)+'.mp4','sha256':sha(raw),'bytes':len(raw)})
-                variant={**source,'presetId':p['variantPresetId'],'label':p['label'],
-                         'variant':{'kind':'2d','sourcePresetId':p['sourcePresetId'],'sourcePresetHash':source_hash},
-                         'directions':rows}
-                started.append(True)
-                result=self.motion.publish_2d(oid,source,variant,lambda d:private_file(folder/(d+'.mp4'),MAX_CLIP))
-                require(result.endswith('/presets/'+p['variantPresetId']+'.json'))
-                return {'ok':True,'resultRef':'motion.2d.published.'+digest(variant)}
+        claim=body['claim']
+        with claimed(self.verifier,claim) as validated:
+            expected=validated
+        oid,key,p,refs=expected
 
+        @contextmanager
+        def guard():
+            with claimed(self.verifier,claim) as fresh:
+                require(fresh==expected)
+                yield
+
+        # The staging lock may wait and the media/storage calls may be slow.
+        # An unrelated Planner writer must be free to commit throughout.
+        with staging(self.root,oid,create=key==IMAGE and read) as folder:
+            source_hash,source=self.basis(folder,p,create=key==IMAGE and read,guard=guard)
+            proof={'sourcePresetHash':source_hash}
+            if key==IMAGE:
+                if read:
+                    with guard():return proof
+                raw=artifact_bytes(body['artifact'],MAX_IMAGE)
+                validate_png(raw)
+                save(folder/'image.png',raw,MAX_IMAGE,guard)
+                return {'ok':True,'resultRef':asset_ref(key,raw)}
+            image=private_file(folder/'image.png',MAX_IMAGE)
+            require(refs[IMAGE][0]==asset_ref(IMAGE,image))
+            if key!=FINAL:
+                direction=key.removeprefix('motion_2d_')
+                if read:
+                    ref=self.motion.get(p['sourcePresetId'],direction,
+                                        expected_preset_hash=source_hash,max_asset_bytes=MAX_REFERENCE)
+                    require(ref['presetHash']==source_hash)
+                    answer={'direction':direction,**proof,'reference':ref,
+                            'image':{'sha256':sha(image),'bytes':len(image),'base64':base64.b64encode(image).decode()}}
+                    with guard():return answer
+                raw=artifact_bytes(body['artifact'],MAX_OUTPUT)
+                self.check_clip(folder,key,raw,source)
+                save(folder/(direction+'.mp4'),raw,MAX_OUTPUT,guard)
+                return {'ok':True,'resultRef':asset_ref(key,raw)}
+            if read:
+                with guard():return proof
+            require(type(body['artifact']) is dict and not body['artifact'])
+            rows=[]
+            for row in source['directions']:
+                direction=row['direction'];clip_key=task_key(direction)
+                raw=private_file(folder/(direction+'.mp4'),MAX_OUTPUT)
+                require(refs[clip_key][0]==asset_ref(clip_key,raw))
+                dimensions=self.check_clip(folder,clip_key,raw,source)
+                rows.append({**row,**dimensions,'assetId':sha(raw)+'.mp4','sha256':sha(raw),'bytes':len(raw)})
+            variant={**source,'presetId':p['variantPresetId'],'label':p['label'],
+                     'variant':{'kind':'2d','sourcePresetId':p['sourcePresetId'],'sourcePresetHash':source_hash},
+                     'directions':rows}
+            started.append(True)
+            result=self.motion.publish_2d(oid,source,variant,lambda d:private_file(folder/(d+'.mp4'),MAX_OUTPUT),guard)
+            require(result.endswith('/presets/'+p['variantPresetId']+'.json'))
+            with guard():return {'ok':True,'resultRef':'motion.2d.published.'+digest(variant)}
 
 
 def configured(verifier,storage_root,host,mode,*,config_path=None,executable=None):

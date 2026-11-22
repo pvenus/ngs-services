@@ -19,10 +19,10 @@ class FilexCASTransport:
   self.op=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
  def __enter__(self):return self
  def __exit__(self,*args):self.token=None
- def call(self,method,path,body=None,missing=False):
+ def call(self,method,path,body=None,missing=False,*,timeout=60):
   headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}
   try:
-   with self.op.open(urllib.request.Request(self.endpoint+path,data=canonical(body)if body is not None else None,method=method,headers=headers),timeout=60)as r:
+   with self.op.open(urllib.request.Request(self.endpoint+path,data=canonical(body)if body is not None else None,method=method,headers=headers),timeout=timeout)as r:
     require(r.status==200,'FILEX_CAS_HTTP_ERROR');asset_read=method=='GET'and path.startswith('/v1/asset?');raw=r.read()if asset_read else r.read(16*1024*1024+1)
   except urllib.error.HTTPError as e:
    if missing and e.code==404:return None

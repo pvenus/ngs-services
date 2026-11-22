@@ -1,5 +1,6 @@
 """Exercise the actual PDS claim route and live-role Filex HTTP batch."""
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 import json
@@ -220,7 +221,7 @@ s.serve_forever()
                 return outer.writer.__exit__(*args)
             def __getattr__(outer,name):
                 return getattr(outer.writer,name)
-            def call(outer,method,path,body=None):
+            def call(outer,method,path,body=None,**kwargs):
                 nonlocal moved
                 if method=='POST' and path=='/v1/batch' and body['requestId']==OID and not moved:
                     moved=True
@@ -228,12 +229,92 @@ s.serve_forever()
                     competing.register({'requestId':'competing-1','expectedHash':digest(self.source),
                        'preset':{**self.source,'label':'changed during CAS'},'assets':
                        {m.sha(v)+'.mp4':base64.b64encode(v).decode() for v in self.original.values()}})
-                return outer.writer.call(method,path,body)
+                return outer.writer.call(method,path,body,**kwargs)
         self.motion.factory=Interleaved
         self.request(body,status=409)
         self.assertTrue(moved)
         self.assertEqual([x['presetId'] for x in self.motion.list()['presets']],[SOURCE])
         with original_factory() as t:self.assertIsNone(t.receipt(OID))
+
+    def final_upload_interleaving(self,mutate,expected_status):
+        self.clips()
+        self.state(m.FINAL,'running')
+        original_factory=self.motion.factory
+        blocked=threading.Event()
+        resume=threading.Event()
+        self.addCleanup(resume.set)
+        cas_timeouts=[]
+        class SlowTransfer:
+            def __enter__(outer):
+                outer.writer=original_factory().__enter__()
+                return outer
+            def __exit__(outer,*args):
+                return outer.writer.__exit__(*args)
+            def __getattr__(outer,name):
+                return getattr(outer.writer,name)
+            def call(outer,method,path,body=None,**kwargs):
+                if method=='POST' and path=='/v1/asset' and not blocked.is_set():
+                    blocked.set()
+                    if not resume.wait(3):
+                        raise RuntimeError('fixture transfer was not resumed')
+                if method=='POST' and path=='/v1/batch':
+                    cas_timeouts.append(kwargs.get('timeout'))
+                return outer.writer.call(method,path,body,**kwargs)
+        self.motion.factory=SlowTransfer
+        body={'claim':self.claim(m.FINAL),'artifact':{}}
+        with ThreadPoolExecutor(max_workers=1) as child:
+            pending=child.submit(self.request,body,status=expected_status)
+            try:
+                self.assertTrue(blocked.wait(2))
+                # The transfer cannot continue until AFTER an independent
+                # rollback-journal writer has completed a real commit.
+                with sqlite3.connect(self.db,timeout=.2) as other:
+                    other.execute('BEGIN IMMEDIATE')
+                    mutate(other)
+                self.assertFalse(pending.done())
+            finally:
+                resume.set()
+            return pending.result(timeout=5),cas_timeouts
+
+    def test_slow_filex_upload_does_not_hold_planner_reader(self):
+        unrelated='request.official.'+'b'*64
+        self.record('INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,?,?)',
+          (unrelated,'binari','unrelated','example.v1','{}','1'*64,'planned',None,1000))
+        result,timeouts=self.final_upload_interleaving(lambda db:db.execute(
+          "UPDATE workflow_runs SET state='completed' WHERE official_request_id=?",(unrelated,)),200)
+        self.assertTrue(result['ok'])
+        self.assertEqual(timeouts,[1.5])
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute('SELECT state FROM workflow_runs WHERE official_request_id=?',
+                                         (unrelated,)).fetchone(),('completed',))
+
+    def test_finalizer_claim_lost_during_upload_never_reaches_filex_cas(self):
+        result,timeouts=self.final_upload_interleaving(lambda db:db.execute(
+          "UPDATE workflow_tasks SET updated_at=updated_at+1 WHERE task_key=?",(m.FINAL,)),409)
+        self.assertEqual(result,{'error':'MOTION_2D_OUTCOME_UNCONFIRMED'})
+        self.assertEqual(timeouts,[])
+        self.assertEqual([p['presetId'] for p in self.motion.list()['presets']],[SOURCE])
+        with self.motion.factory() as t:
+            self.assertIsNone(t.receipt(OID))
+
+    def test_stale_clip_during_slow_probe_never_commits_local_intermediate(self):
+        self.initialize()
+        k=m.task_key('ne');self.state(k,'running')
+        def lost_during_decoding(_):
+            with sqlite3.connect(self.db,timeout=.2) as other:
+                other.execute('UPDATE workflow_tasks SET updated_at=updated_at+1 WHERE task_key=?',(k,))
+            return self.media
+        self.service.probe=lost_during_decoding
+        self.request({'claim':self.claim(k),'artifact':asset(self.clip['ne'])},status=422)
+        self.assertFalse((self.root/'temp-stage'/OID/'ne.mp4').exists())
+        self.assertEqual([p['presetId'] for p in self.motion.list()['presets']],[SOURCE])
+
+    def test_only_output_is_bounded_to_eight_mib(self):
+        data=b'x'*(8*1024*1024)
+        self.assertEqual(m.artifact_bytes(asset(data),m.MAX_OUTPUT),data)
+        with self.assertRaisesRegex(ValueError,'MOTION_2D_REJECTED'):
+            m.artifact_bytes(asset(data+b'x'),m.MAX_OUTPUT)
+        self.assertEqual(m.MAX_REFERENCE,64*1024*1024)
 
     def test_reject_stale_claim_foreign_origin_bad_png_and_conflicting_result(self):
         self.state(m.IMAGE,'running')

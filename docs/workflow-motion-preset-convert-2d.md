@@ -24,7 +24,11 @@ workers get no stage paths. Each write verifies the exact running Planner
 claim, source pin and upstream task/result references. A clip additionally
 requires its own original hashed MP4 and the one shared image. Clip timing
 (frame count, fps, duration) is probed against the source and any actual
-output dimensions are recorded. Replay with differing bytes is rejected.
+output dimensions are recorded. Output MP4 is bounded to 8 MiB; the original
+reference read retains its separate 64 MiB bound. Replay with differing bytes
+is rejected. Planner reads are detached before media probes, request-lock
+waits, and upload/readback. A fresh claim and predecessor check fences the
+atomic local rename or the short Filex catalog CAS only.
 
 Finalization rechecks all eight exact completed direction receipts against
 their bytes and publishes one separate document through the existing
