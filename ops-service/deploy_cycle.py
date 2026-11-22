@@ -10,6 +10,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+import uuid
 
 from deploy_control import KEY, bounded_private, is_sha, reject, secure_directory, stamp
 from release_equivalence import equivalent_release
@@ -62,6 +63,12 @@ NGS_LOCAL_ERRORS = frozenset((
     'MAC_DEPLOY_LOCK_BUSY',
     'MAC_PORT_CHECK_FAILED',
     'MAC_RESULT_WRITE_FAILED',
+    'MAC_RETRY_ID_INVALID',
+    'MAC_RETRY_HISTORY_INVALID',
+    'MAC_RETRY_ATTEMPT_EXISTS',
+    'MAC_RETRY_PARENT_DRIFT',
+    'MAC_RETRY_ROLLBACK_REQUIRED',
+    'MAC_RETRY_PRIOR_DRIFT',
     'MAC_ROLLBACK_CHECK_FAILED',
     'MAC_ROLLBACK_RESTORE_FAILED',
     'MAC_SELECTOR_SWITCH_FAILED',
@@ -110,6 +117,43 @@ SPACE_PUBLICATION_SCHEMA='ops.ngs-space-publication.v1'
 SPACE_SITE='appgprj_6abcee8b33688191bed4fec75f26b91f'
 SPACE_HOST='vinus-npcgen.park-venus0518.chatgpt.site'
 ACTIVE='ops.deploy-cycle-active.v1'
+RETRY_RUNNER='ops.ngs-local-retry-runner.v1'
+RETRY_ARCHIVE='ops.ngs-local-retry-admission.v1'
+
+
+def retry_id(value, *, previous=False):
+    return type(value) is str and ((previous and value == 'initial') or
+           (re.fullmatch(r'[0-9a-f]{32}', value) is not None and value != '0'*32))
+
+
+def unique_pairs(pairs):
+    value=dict(pairs)
+    check(len(value)==len(pairs),'OPS_NGS_RETRY_PROOF_INVALID')
+    return value
+
+
+def retry_read(path, limit=4096):
+    return json.loads(bounded_private(path,limit),object_pairs_hook=unique_pairs)
+
+
+def latest_local_attempt(folder):
+    directory=folder/'attempts'
+    if not os.path.lexists(directory):
+        return 'initial',folder
+    secure_directory(directory)
+    index=retry_read(directory/'current.json',32768)
+    check(exact(index,'attemptIds') and type(index['attemptIds']) is list,'OPS_NGS_RETRY_PROOF_INVALID')
+    ids=index['attemptIds']
+    check(0<len(ids)<=512 and all(retry_id(i) for i in ids) and len(set(ids))==len(ids),
+          'OPS_NGS_RETRY_PROOF_INVALID')
+    with os.scandir(directory) as entries:
+        names=set()
+        for entry in entries:
+            check(len(names)<=len(ids),'OPS_NGS_RETRY_PROOF_INVALID')
+            names.add(entry.name)
+    check(names=={'current.json',*ids},'OPS_NGS_RETRY_PROOF_INVALID')
+    for item in ids:secure_directory(directory/item)
+    return ids[-1],directory/ids[-1]
 
 
 def now():
@@ -160,6 +204,12 @@ def persist(path,value):
         os.replace(tmp,path)
     finally:
         if os.path.exists(tmp):os.unlink(tmp)
+
+
+def sync_dir(path):
+    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:os.fsync(fd)
+    finally:os.close(fd)
 
 
 def observed(value,target):
@@ -225,12 +275,17 @@ def local_legacy_failure(control, attempted_sha):
     return None
 
 
-def fixed_runner(directory,record):
+def fixed_runner(directory,record,*,retry=None):
     immutable=record['runnerSha256']
     path=directory/'run-once'
     check(verified_runner(path)==immutable,'OPS_TARGET_EXECUTABLE_CHANGED')
     env={'HOME':str(Path.home()),'PATH':'/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
          'OPS_DEPLOY_CANDIDATE_SHA':record['sha'],'OPS_DEPLOY_ARTIFACT_SHA256':record['artifactSha256']}
+    if retry is not None:
+        check(directory.name=='ngs-local','OPS_NGS_RETRY_PROOF_INVALID')
+        env.update(OPS_DEPLOY_RETRY_ATTEMPT_ID=retry['attemptId'],
+                   OPS_DEPLOY_RETRY_PREVIOUS_ATTEMPT_ID=retry['previousAttemptId'],
+                   OPS_DEPLOY_RETRY_NATIVE_SHA256=retry['nativeSha256'])
     with tempfile.TemporaryFile(dir=directory) as out:
         p=subprocess.run([str(path)],cwd=directory,env=env,stdin=subprocess.DEVNULL,stdout=out,
                          stderr=subprocess.DEVNULL,check=False)
@@ -241,12 +296,17 @@ def fixed_runner(directory,record):
     if p.returncode:
         fields=('schemaVersion','target','sha','phase','code','rollback')
         diagnostics=('phase','code','rollback')
+        if retry is not None:fields+=('attemptId',)
         if directory.name=='ngs-local' and type(value) is dict and 'rollbackFailure' in value:
             fields+=('rollbackFailure',)
             diagnostics+=('rollbackFailure',)
         check(exact(value,*fields) and value['schemaVersion']==ERROR and value['target']==directory.name and
-              value['sha']==record['sha'],'OPS_TARGET_RUNNER_FAILED')
+              value['sha']==record['sha'] and (retry is None or value['attemptId']==retry['attemptId']),
+              'OPS_TARGET_RUNNER_FAILED')
         raise TargetFailure(safe_failure({k:value[k] for k in diagnostics},directory.name))
+    if retry is not None:
+        check(type(value) is dict and value.get('attemptId')==retry['attemptId'],'OPS_TARGET_RECEIPT_INVALID')
+        value={k:v for k,v in value.items() if k!='attemptId'}
     return value
 
 
@@ -286,12 +346,19 @@ class DeploymentCycle:
     def _journal(self):
         value=optional(self.root/'active.json')
         if value is not None:
-            check(exact(value,'schemaVersion','selection','targets','startedAt') and value['schemaVersion']==ACTIVE and
+            retry='retry' in value if type(value) is dict else False
+            check(exact(value,'schemaVersion','selection','targets','startedAt',*(['retry'] if retry else [])) and value['schemaVersion']==ACTIVE and
                   type(value['selection']) is str and value['selection'] in IDS|{k for k,_ in GROUPS}|{'all'} and
                   type(value['targets']) is list and value['targets'] and
                   len(value['targets'])==len(set(value['targets'])) and set(value['targets']) <= set(self._selection(value['selection'])),
                   'OPS_DEPLOY_JOURNAL_INVALID')
             stamp(value['startedAt'])
+            if retry:
+                item=value['retry']
+                check(value['selection']=='ngs-local' and value['targets']==['ngs-local'] and
+                      exact(item,'sha','attemptId','previousAttemptId') and is_sha(item['sha']) and
+                      retry_id(item['attemptId']) and retry_id(item['previousAttemptId'],previous=True) and
+                      item['attemptId']!=item['previousAttemptId'],'OPS_DEPLOY_JOURNAL_INVALID')
         return value
 
     def _target(self,target):
@@ -300,8 +367,11 @@ class DeploymentCycle:
         initial=observed(optional(path/'observed.json'),target)
         state=optional(path/'last-result.json')
         if state is not None:
-            check((exact(state,'schemaVersion','target','attemptedSha','state','finishedAt','observed') or
-                   exact(state,'schemaVersion','target','attemptedSha','state','finishedAt','observed','failure')) and
+            fields=('schemaVersion','target','attemptedSha','state','finishedAt','observed')
+            if type(state) is dict and 'attemptId' in state:
+                check(target=='ngs-local' and retry_id(state['attemptId']),'OPS_TARGET_RESULT_INVALID')
+                fields+=('attemptId',)
+            check((exact(state,*fields) or exact(state,*fields,'failure')) and
                   state['schemaVersion']==TERMINAL and state['target']==target and is_sha(state['attemptedSha']) and
                   state['state'] in ('deployed','failed'),'OPS_TARGET_RESULT_INVALID')
             if 'failure' in state:
@@ -324,6 +394,12 @@ class DeploymentCycle:
             if target=='ngs-local' and state and state['attemptedSha']==record['sha'] and state['state']=='failed':
                 # Historical failed candidates stay failed (not actionable) even after adapter repinning.
                 return (record,initial,'failed')
+            if (target=='ngs-local' and state and 'attemptId' in state and state['state']=='deployed' and
+                    state['attemptedSha']==record['sha'] and initial and initial['sha']==record['sha']):
+                # The immutable historical ready may still contain the earlier
+                # ordinary adapter pin. The retry's separately verified result
+                # can be displayed as current, but never as an executable plan.
+                return (record,initial,'current')
             try: executable=verified_runner(path/'run-once')
             except (OSError,ValueError):executable=None
             if executable!=record['runnerSha256']:
@@ -338,6 +414,51 @@ class DeploymentCycle:
         if initial and (initial['sha']==record['sha'] or equivalent_release(path,target,record,initial)):
             return (record,initial,'current')
         return (record,initial,'ready')
+
+    def _retry_plan(self,record,initial):
+        # Results/pins are just eligibility evidence. The native runner repeats
+        # the selector, health, prepared archive and parent checks under its lock.
+        try:
+            check(record is not None and initial is not None and initial['sha']!=record['sha'],
+                  'OPS_NGS_RETRY_PROOF_INVALID')
+            target=self.root/'targets/ngs-local'
+            prior=retry_read(target/'last-result.json')
+            check(prior['attemptedSha']==record['sha'] and prior['state']=='failed','OPS_NGS_RETRY_PROOF_INVALID')
+            config=retry_read(target/'retry-runner.json')
+            check(exact(config,'schemaVersion','adapterSha256','nativeSha256') and config['schemaVersion']==RETRY_RUNNER
+                  and sha256(config['adapterSha256']) and sha256(config['nativeSha256']),
+                  'OPS_NGS_RETRY_PROOF_INVALID')
+            secure_directory(self.root/'bin')
+            check(verified_runner(target/'run-once')==config['adapterSha256'] and
+                  verified_runner(self.root/'bin/ngs-mac-apply')==config['nativeSha256'],'OPS_NGS_RETRY_PROOF_INVALID')
+            prepared=retry_read(self.root/'prepared.json')
+            sha=record['sha']
+            check(prepared['schemaVersion']=='ops.ngs-prepared-deploy.v1' and prepared['sha']==sha and
+                  prepared['mac']=={'ready':True} and
+                  prepared['provenance']['archiveSha256']==record['artifactSha256'],'OPS_NGS_RETRY_PROOF_INVALID')
+            releases=self.root/'mac-releases'
+            secure_directory(releases)
+            folder=releases/sha
+            secure_directory(folder)
+            latest,attempt=latest_local_attempt(folder)
+            check(prior.get('attemptId','initial')==latest,'OPS_NGS_RETRY_PROOF_INVALID')
+            result=retry_read(attempt/'result.json')
+            check(exact(result,'state') or exact(result,'state','failure'),'OPS_NGS_RETRY_PROOF_INVALID')
+            if 'failure' in result:
+                item=result['failure']
+                check(exact(item,'stage','code') and type(item['stage']) is str and type(item['code']) is str and
+                      item['stage'] in NGS_LOCAL_PHASES-{'unknown'} and item['code'] in NGS_LOCAL_ERRORS,
+                      'OPS_NGS_RETRY_PROOF_INVALID')
+            check(result['state']=='rolled-back' and (latest=='initial' or 'failure' in result),'OPS_NGS_RETRY_PROOF_INVALID')
+            manifest=retry_read(folder/'manifest.json')
+            prior_sha=hashlib.sha256(bounded_private(attempt/'prior.plist',65536)).hexdigest()
+            check(manifest['schemaVersion']=='ops.ngs-mac-release.v1' and manifest['sha']==sha and
+                  manifest['archiveSha256']==record['artifactSha256'] and
+                  manifest['expectedPriorPlistSha256']==prior_sha,'OPS_NGS_RETRY_PROOF_INVALID')
+            return ({**record,'runnerSha256':config['adapterSha256']},initial,
+                    {'previousAttemptId':latest,'nativeSha256':config['nativeSha256']},prior)
+        except (OSError,ValueError,KeyError,AttributeError,TypeError,OverflowError,RecursionError):
+            return None
 
     def _snapshot(self):
         configured=self._configured()
@@ -370,9 +491,13 @@ class DeploymentCycle:
                 last=optional(self.root/'targets'/target/'last-result.json')
                 if last and last.get('attemptedSha')==record['sha'] and 'failure' in last:
                     row['failure']=safe_failure(last['failure'],target)
-                elif target=='ngs-local' and last and last.get('attemptedSha')==record['sha']:
+                elif target=='ngs-local' and last and last.get('attemptedSha')==record['sha'] and 'attemptId' not in last:
                     legacy=local_legacy_failure(self.root,record['sha'])
                     if legacy is not None:row['failure']=legacy
+            if target=='ngs-local' and phase=='failed' and not (locked or journal):
+                retry=self._retry_plan(record,initial)
+                if retry:
+                    row['retry']={'sha':record['sha'],'previousAttemptId':retry[2]['previousAttemptId']}
             if row['ready']:plans[target]=(record,initial,phase)
             rows.append(row)
         ready={row['id']:row['ready'] for row in rows}
@@ -405,11 +530,12 @@ class DeploymentCycle:
         except BaseException:
             os.close(fd);raise
 
-    def _terminal(self,target,record,status,prior,diagnostic=None):
+    def _terminal(self,target,record,status,prior,diagnostic=None,*,attempt_id=None):
         persist(self.root/'targets'/target/'last-result.json',
                 {'schemaVersion':TERMINAL,'target':target,'attemptedSha':record['sha'],
                  'state':status,'finishedAt':now(),'observed':prior,
-                 **({'failure':diagnostic} if diagnostic else {})})
+                 **({'failure':diagnostic} if diagnostic else {}),
+                 **({'attemptId':attempt_id} if attempt_id else {})})
 
     def _plan_still_exact(self,target,record):
         current,_,phase=self._target(target)
@@ -479,6 +605,86 @@ class DeploymentCycle:
             except BlockingIOError:
                 reject(409,'OPS_DEPLOY_CYCLE_BUSY_OR_UNVERIFIED')
             except (OSError,ValueError):
+                reject(503,'OPS_DEPLOY_CYCLE_UNAVAILABLE')
+            finally:
+                if fd is not None:os.close(fd)
+
+    def _manual_plan(self,sha,previous):
+        record,initial,phase=self._target('ngs-local')
+        if phase!='failed' or record['sha']!=sha:return None
+        plan=self._retry_plan(record,initial)
+        return plan if plan and plan[2]['previousAttemptId']==previous else None
+
+    def _run_retry(self,fd,job,plan):
+        retry=job['retry']
+        attempt=retry['attemptId']
+        safely_done=False
+        try:
+            if self._manual_plan(retry['sha'],retry['previousAttemptId'])!=plan:
+                # Leave the admitted request visible for explicit reconciliation.
+                return
+            record,prior,options,_=plan
+            try:
+                after=proof(self.runner(self.root/'targets/ngs-local',record,
+                                        retry={**options,'attemptId':attempt}),'ngs-local',record['sha'])
+            except TargetFailure as error:
+                self._terminal('ngs-local',record,'failed',prior,error.diagnostic,attempt_id=attempt)
+            except Exception:
+                self._terminal('ngs-local',record,'failed',prior,attempt_id=attempt)
+            else:
+                self._terminal('ngs-local',record,'deployed',after,attempt_id=attempt)
+            sync_dir(self.root/'targets/ngs-local')
+            safely_done=True
+        except (OSError,ValueError,TypeError,OverflowError):
+            pass
+        finally:
+            with self.guard:
+                try:
+                    if safely_done and self._journal()==job:(self.root/'active.json').unlink()
+                finally:
+                    self.active=None
+                    os.close(fd)
+
+    def retry_local(self,sha,previous):
+        if not is_sha(sha) or not retry_id(previous,previous=True):
+            reject(400,'OPS_NGS_RETRY_SELECTION_INVALID')
+        with self.guard:
+            _,_,blocked=self._snapshot()
+            if blocked:reject(409,'OPS_DEPLOY_CYCLE_BUSY_OR_UNVERIFIED')
+            if not self._configured():reject(503,'OPS_DEPLOY_CYCLE_UNAVAILABLE')
+            fd=None
+            try:
+                fd=self._executor_lock()
+                if self._journal() is not None:reject(409,'OPS_DEPLOY_CYCLE_BUSY_OR_UNVERIFIED')
+                plan=self._manual_plan(sha,previous)
+                if not plan:reject(409,'OPS_NGS_RETRY_STALE_OR_UNVERIFIED')
+                attempt=uuid.uuid4().hex
+                retry={'sha':sha,'attemptId':attempt,'previousAttemptId':previous}
+                job={'schemaVersion':ACTIVE,'selection':'ngs-local','targets':['ngs-local'],'startedAt':now(),'retry':retry}
+                archive=self.root/'targets/ngs-local/manual-retries'
+                archive.mkdir(mode=0o700,exist_ok=True)
+                secure_directory(archive)
+                destination=archive/(attempt+'.json')
+                check(not os.path.lexists(destination),'OPS_NGS_RETRY_PROOF_INVALID')
+                # Before handing off execution, pin the previous OPS failure.
+                # Native first and per-attempt receipts also remain unchanged.
+                persist(destination,{'schemaVersion':RETRY_ARCHIVE,**retry,'acceptedAt':job['startedAt'],
+                                     'previousResult':plan[3]})
+                sync_dir(archive)
+                sync_dir(archive.parent)
+                persist(self.root/'active.json',job)
+                sync_dir(self.root)
+                self.active=job
+                worker=threading.Thread(target=self._run_retry,args=(fd,job,plan),daemon=True)
+                try:worker.start()
+                except RuntimeError:
+                    self.active=None
+                    reject(503,'OPS_DEPLOY_CYCLE_UNAVAILABLE')
+                fd=None
+                return {**self._snapshot()[0],'retry':retry}
+            except BlockingIOError:
+                reject(409,'OPS_DEPLOY_CYCLE_BUSY_OR_UNVERIFIED')
+            except (OSError,ValueError,TypeError,OverflowError):
                 reject(503,'OPS_DEPLOY_CYCLE_UNAVAILABLE')
             finally:
                 if fd is not None:os.close(fd)

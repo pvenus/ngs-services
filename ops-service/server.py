@@ -296,6 +296,12 @@ class Handler(BaseHTTPRequestHandler):
                 if len(token)!=1 or not KEY.fullmatch(token[0]):
                     return self.send(403,{'error':'OPS_DEPLOY_CSRF_DENIED'})
                 return self.send(202,{'request':self.space_publisher(control).submit(sid,token[0],value['sha'])})
+            if (action=='wake' and set(value)=={'action','target','sha','expectedPreviousAttemptId'} and
+                    value['action']=='retry-local' and value['target']=='ngs-local'):
+                token=self.headers.get_all('X-OPS-Deploy-CSRF',[])
+                if len(token)!=1 or not KEY.fullmatch(token[0]):
+                    return self.send(403,{'error':'OPS_DEPLOY_CSRF_DENIED'})
+                return self.send(202,control.retry_local(sid,token[0],value['sha'],value['expectedPreviousAttemptId']))
             if (action=='wake' and set(value)=={'action','target'} and value['action']=='wake' and
                     type(value['target']) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,40}',value['target'])):
                 token=self.headers.get_all('X-OPS-Deploy-CSRF',[])

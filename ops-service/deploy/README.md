@@ -172,8 +172,33 @@ and separately recorded recovery status; it does not expose or retain raw
 stderr, service output, absolute paths or user data. OPS shows exact prior
 legacy recovery separately as `원인 미기록` when a durable old `rolled-back`
 record had no diagnostic. A missing or unconfirmed recovery is not shown as
-verified. The updater and target still refuse replay of a failed SHA.
+verified. Automatic and ordinary deployment paths still refuse replay of a failed SHA.
 
 The diagnostic source change alone installs nothing. A native runner update
 and fixed adapter update require the reviewed package and existing runtime
-provisioning. Do not repin or manipulate an old failed candidate to retry it.
+provisioning. Do not edit or remove an old failed result to retry it.
+
+## Explicit Local NGS same-candidate retry
+
+Only the owner-authenticated Local row can submit a retry after a durable,
+verified rollback. Its command pins the current registered SHA and the latest
+failed native attempt (`initial` for the old first attempt). The OPS cycle
+creates a new unique attempt ID and keeps a private copy of the preceding OPS
+result before launching. The native runner re-verifies the unchanged prepared
+release, previous attempt, archived selector, and live health under its
+deployment lock. Results stay under their own native attempt directories.
+Ordinary deploy, Deploy All, and scheduled preparation cannot retry. An
+unconfirmed result, failed rollback, stale click, or newer candidate does not
+authorize another launch. Do not remove or rename any attempt files.
+
+For a reviewed rollout, install the retry-aware fixed Local `run-once`
+adapter and `bin/ngs-mac-apply` (from the paired native runner change), then
+publish the owner-private (0600) `targets/ngs-local/retry-runner.json`
+with exactly `schemaVersion: "ops.ngs-local-retry-runner.v1"`,
+`adapterSha256`, and `nativeSha256` (the reviewed executable SHA-256s).
+Both executable pins must match at admission; the adapter also rechecks the
+native pin at launch. Absent/incorrect marker means the retry button is
+disabled. This marker does not alter `ready.json`, the failed result,
+NGS selectors, or other targets. Normal preparation later publishes the
+ordinary adapter pin for a different candidate as usual. Installation does
+not attempt a retry.

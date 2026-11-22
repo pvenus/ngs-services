@@ -231,3 +231,29 @@ test('Local NGS row distinguishes failure stage, recovery and old unrecorded cau
   assert.doesNotMatch(JSON.stringify(view),/private\/path|private\/auth/);
  }
 });
+
+test('only the exact failed Local candidate offers a distinct retry action and double click sends once',async()=>{
+ const model=data({all:false}),local=model.cycle.targets.find(r=>r.id==='ngs-local');
+ const space=model.cycle.targets.find(r=>r.id==='ngs-space');
+ Object.assign(local,{state:'failed',canDeploy:false,retry:{sha:a,previousAttemptId:'initial'}});
+ Object.assign(space,{state:'failed',canDeploy:false,retry:{sha:a,previousAttemptId:'initial'}});
+ let finish;
+ const app=fixtures(async(_url,opts)=>opts.method==='POST'?
+  new Promise(resolve=>{finish=()=>resolve(Response.json({error:'OPS_NGS_RETRY_STALE_OR_UNVERIFIED'},{status:409}));}):
+  Response.json(model));
+ await flush();
+ const button=app.find(app.row('ngs-local'),n=>n.tag==='button');
+ assert.equal(button.textContent,'같은 버전 다시 배포');
+ assert.equal(button.disabled,false);
+ assert.equal(app.find(app.row('ngs-space'),n=>n.tag==='button').disabled,true);
+ button.fire('click');button.fire('click');app.of('deploy-all').fire('click');
+ const issued=app.hits.filter(([,opts])=>opts.method==='POST');
+ assert.equal(issued.length,1);
+ assert.deepEqual(JSON.parse(issued[0][1].body),{action:'retry-local',target:'ngs-local',sha:a,expectedPreviousAttemptId:'initial'});
+ assert.equal(issued[0][1].headers['X-OPS-Deploy-CSRF'],csrf);
+ finish();await flush();
+ assert.match(app.of('deploy-status').textContent,/접수하지 못했습니다/);
+ local.retry={sha:b,previousAttemptId:'initial'};
+ app.of('deploy-refresh').fire('click');await flush();
+ assert.equal(app.find(app.row('ngs-local'),n=>n.tag==='button').disabled,true);
+});

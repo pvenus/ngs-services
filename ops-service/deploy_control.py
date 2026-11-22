@@ -138,6 +138,14 @@ class DeployControl:
             except (OSError,ValueError):
                 reject(503,'OPS_DEPLOY_NOT_CONFIGURED')
 
+    def retry_local(self, sid, csrf, sha, previous):
+        with self.lock:
+            try:
+                self._session(sid,csrf)
+                return self.cycle.retry_local(sha,previous)
+            except (OSError,ValueError):
+                reject(503,'OPS_DEPLOY_NOT_CONFIGURED')
+
 
 def from_environment(env=os.environ, *, root=None):
     root = Path(root) if root is not None else Path.home()/'Workspaces/OPS/runtime/deploy-control'

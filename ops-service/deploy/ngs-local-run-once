@@ -1,5 +1,6 @@
 #!/opt/homebrew/bin/python3.12
 """Fixed NGS Local adapter for the OPS cycle. No CLI options or provider selection."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import tempfile
 CONTROL = Path.home() / 'Workspaces/OPS/runtime/deploy-control'
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
+ATTEMPT = re.compile(r"(?!0{32})[0-9a-f]{32}")
 
 NGS_LOCAL_PHASES = frozenset((
     "validate_candidate", "check_current", "stop_current", "wait_ports", "switch_selector",
@@ -34,6 +36,12 @@ NGS_LOCAL_ERRORS = frozenset((
     'MAC_DEPLOY_LOCK_BUSY',
     'MAC_PORT_CHECK_FAILED',
     'MAC_RESULT_WRITE_FAILED',
+    'MAC_RETRY_ID_INVALID',
+    'MAC_RETRY_HISTORY_INVALID',
+    'MAC_RETRY_ATTEMPT_EXISTS',
+    'MAC_RETRY_PARENT_DRIFT',
+    'MAC_RETRY_ROLLBACK_REQUIRED',
+    'MAC_RETRY_PRIOR_DRIFT',
     'MAC_ROLLBACK_CHECK_FAILED',
     'MAC_ROLLBACK_RESTORE_FAILED',
     'MAC_SELECTOR_SWITCH_FAILED',
@@ -152,7 +160,28 @@ def optional_result(receipt):
         return False
 
 
-def run(control, sha, archive):
+def private_directory(path):
+    attrs=path.lstat()
+    if (path.resolve()!=path or attrs.st_uid!=os.getuid() or not stat.S_ISDIR(attrs.st_mode)
+            or stat.S_IMODE(attrs.st_mode)!=0o700):
+        raise ValueError('INVALID_LOCAL_DEPLOY_FILE')
+
+
+def executable_digest(path):
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW),'rb') as f:
+        before=os.fstat(f.fileno())
+        raw=f.read(1048577)
+        after=os.fstat(f.fileno())
+        now=path.lstat()
+        if (before.st_uid!=os.getuid() or before.st_nlink!=1 or not stat.S_ISREG(before.st_mode)
+                or stat.S_IMODE(before.st_mode) not in {0o500,0o700} or len(raw)!=before.st_size
+                or not 0<len(raw)<=1048576 or before.st_mtime_ns!=after.st_mtime_ns
+                or after.st_ino!=now.st_ino or after.st_dev!=now.st_dev):
+            raise ValueError('INVALID_LOCAL_DEPLOY_FILE')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def run(control, sha, archive, *, retry=None):
     if not SHA.fullmatch(sha or '') or not DIGEST.fullmatch(archive or ''):
         raise ValueError('INVALID_LOCAL_DEPLOY_PROOF')
     try:
@@ -163,25 +192,54 @@ def run(control, sha, archive):
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
         raise Failure('validate_candidate','LOCAL_DEPLOY_PLAN_DRIFT','not_attempted') from None
     folder = control / 'mac-releases' / sha
+    native_args=[sha]
+    if retry is not None:
+        attempt,previous,runner_sha=retry
+        if (not ATTEMPT.fullmatch(attempt or '') or
+                (previous!='initial' and not ATTEMPT.fullmatch(previous or '')) or
+                previous==attempt or not DIGEST.fullmatch(runner_sha or '')):
+            raise Failure('validate_candidate','MAC_RETRY_ID_INVALID','not_attempted')
+        attempts=folder/'attempts'
+        try:
+            for p in (control,folder.parent,folder):
+                private_directory(p)
+            if os.path.lexists(attempts):
+                private_directory(attempts)
+        except (OSError,ValueError):
+            raise Failure('validate_candidate','MAC_RETRY_HISTORY_INVALID','not_attempted') from None
+        folder=attempts/attempt
+        if os.path.lexists(folder):
+            raise Failure('validate_candidate','MAC_RETRY_ATTEMPT_EXISTS','not_attempted')
+        native_args.extend((attempt,previous))
     receipt = folder / 'result.json'
     armed = folder / 'prior.plist'
-    if os.path.lexists(receipt):
+    if retry is None and os.path.lexists(receipt):
         raise failure_result(optional_result(receipt), armed=os.path.lexists(armed))
-    if os.path.lexists(armed):
+    if retry is None and os.path.lexists(armed):
         raise Failure('validate_candidate','RELEASE_ALREADY_ATTEMPTED_RECONCILE')
     try:
         executable = private_file(control / 'bin/ngs-mac-apply', {0o500, 0o700})
+        if retry is not None:
+            private_directory(executable.parent)
+            if executable_digest(executable)!=runner_sha:
+                raise ValueError('INVALID_LOCAL_DEPLOY_FILE')
     except (OSError, ValueError):
         raise Failure('validate_candidate','LOCAL_DEPLOY_RUNNER_UNAVAILABLE','not_attempted') from None
     try:
         with tempfile.TemporaryFile(dir=control) as error:
-            completed = subprocess.run([str(executable), sha], cwd=control, env={
+            completed = subprocess.run([str(executable), *native_args], cwd=control, env={
                 'HOME': str(Path.home()), 'PATH': '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
             }, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=error, check=False)
             error.seek(0)
             stderr = error.read(4097)
     except (OSError, ValueError, subprocess.SubprocessError):
         raise failure_result(optional_result(receipt), armed=os.path.lexists(armed)) from None
+    if retry is not None and os.path.lexists(folder):
+        try:
+            private_directory(folder.parent)
+            private_directory(folder)
+        except (OSError,ValueError):
+            raise Failure('record_result','INVALID_LOCAL_DEPLOY_RECEIPT') from None
     result = optional_result(receipt)
     if completed.returncode:
         raise failure_result(result, stderr, armed=os.path.lexists(armed))
@@ -192,19 +250,24 @@ def run(control, sha, archive):
         if type(result) is dict and result.get("state") in ("rolled-back", "rollback-failed"):
             raise failure_result(result, stderr, armed=os.path.lexists(armed))
         raise Failure('record_result','INVALID_LOCAL_DEPLOY_RECEIPT')
-    return {**expected, 'target': 'ngs-local', 'schemaVersion': 'ops.deploy-target-receipt.v1', 'deployedAt': when}
+    return {**expected, 'target': 'ngs-local', 'schemaVersion': 'ops.deploy-target-receipt.v1', 'deployedAt': when,
+            **({'attemptId':attempt} if retry is not None else {})}
 
 
 if __name__ == '__main__':
     sha, archive = os.environ.get('OPS_DEPLOY_CANDIDATE_SHA'), os.environ.get('OPS_DEPLOY_ARTIFACT_SHA256')
+    inputs=tuple(os.environ.get(name) for name in (
+        'OPS_DEPLOY_RETRY_ATTEMPT_ID','OPS_DEPLOY_RETRY_PREVIOUS_ATTEMPT_ID','OPS_DEPLOY_RETRY_NATIVE_SHA256'))
+    retry=None if all(v is None for v in inputs) else inputs
+    attempt=inputs[0] if ATTEMPT.fullmatch(inputs[0] or '') else None
     try:
         if len(sys.argv) != 1:
             raise ValueError('NO_LOCAL_DEPLOY_ARGS')
-        print(json.dumps(run(CONTROL, sha, archive), separators=(',', ':')), flush=True)
+        print(json.dumps(run(CONTROL, sha, archive, retry=retry), separators=(',', ':')), flush=True)
     except Failure as failure:
         if SHA.fullmatch(sha or ''):
             print(json.dumps({'schemaVersion': 'ops.deploy-target-error.v1', 'target': 'ngs-local', 'sha': sha,
-                              **failure.value}, separators=(',', ':')), flush=True)
+                              **failure.value, **({'attemptId':attempt} if attempt else {})}, separators=(',', ':')), flush=True)
         sys.exit(1)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
         print('LOCAL_DEPLOY_UNVERIFIED', file=sys.stderr)

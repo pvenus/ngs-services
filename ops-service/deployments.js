@@ -129,6 +129,13 @@ function localFailureStatus(cell,failure){
  }else if(failure.rollback==='not_attempted')cell.append(node('small','복구 실행 안 함'));
  else cell.append(node('small','복구 결과 미기록'));
 }
+function localRetry(item){
+ const result=item?.retry;
+ if(item?.state!=='failed'||!isSha(result?.sha)||result.sha!==item.candidateSha)return null;
+ const previous=result.previousAttemptId;
+ if(previous!=='initial'&&!(typeof previous==='string'&&/^(?!0{32}$)[a-f0-9]{32}$/u.test(previous)&&previous.length===32))return null;
+ return result;
+}
 function groupSection(id,layout,value,targets){
  const section=node('section',undefined,'deploy-group');
  section.dataset.group=id;section.setAttribute('aria-labelledby','deploy-heading-'+id);
@@ -171,11 +178,13 @@ function groupSection(id,layout,value,targets){
   publicationStatus(stateCell,publication);
   const queue=spaceUnlinked&&Boolean(publication?.configured||publication?.latest);
   const handoff=spaceUnlinked&&!queue?spaceHandoff(item):null;
-  const action=node('td'),button=node('button',queue?'스페이스 게시 요청':handoff?(handoff.url?'배포 스레드에 전달':'배포 요청 복사'):'배포','deploy-row-action');button.type='button';
-  button.setAttribute('aria-label',queue?'스페이스 게시 요청':handoff?'배포 스레드에 전달 (직접 전송)':label+' 배포');
-  button.disabled=active||(queue?(!publication.canRequest||!publication.candidate||publication.busy||publication.blocked):(!handoff&&(item?.canDeploy!==true||state==='running'||spaceUnlinked)));
+  const retry=target==='ngs-local'?localRetry(item):null;
+  const action=node('td'),button=node('button',retry?'같은 버전 다시 배포':queue?'스페이스 게시 요청':handoff?(handoff.url?'배포 스레드에 전달':'배포 요청 복사'):'배포','deploy-row-action');button.type='button';
+  button.setAttribute('aria-label',retry?'로컬 같은 버전 다시 배포':queue?'스페이스 게시 요청':handoff?'배포 스레드에 전달 (직접 전송)':label+' 배포');
+  button.disabled=active||(!retry&&(queue?(!publication.canRequest||!publication.candidate||publication.busy||publication.blocked):(!handoff&&(item?.canDeploy!==true||state==='running'||spaceUnlinked))));
   rowButtons.set(target,button);action.append(button);
-  if(queue)button.addEventListener('click',()=>void queueSpace(button));
+  if(retry)button.addEventListener('click',()=>void retryLocal(button,retry));
+  else if(queue)button.addEventListener('click',()=>void queueSpace(button));
   else if(handoff){
    if(!handoff.url)action.append(node('small','전송 대상: '+handoff.title));
    const fallback=node('textarea');fallback.readOnly=true;fallback.hidden=true;
@@ -240,6 +249,13 @@ async function queueSpace(button){
  if(!spacePublicationUnlinked(item)||!publication?.canRequest||!publication.candidate||publication.busy||publication.blocked)return;
  await submitDeployment({action:'queue-space',target:'ngs-space',sha:publication.candidate},
   '스페이스 게시 요청을 접수하는 중입니다.');
+}
+async function retryLocal(button,shown){
+ if(active||!current||button.disabled)return;
+ const retry=localRetry(current.targets.get('ngs-local'));
+ if(!retry||retry.sha!==shown.sha||retry.previousAttemptId!==shown.previousAttemptId)return;
+ await submitDeployment({action:'retry-local',target:'ngs-local',sha:retry.sha,expectedPreviousAttemptId:retry.previousAttemptId},
+  '확인된 같은 로컬 버전의 재배포를 요청하는 중입니다.');
 }
 async function deploy(target,button){
  if(active||!current||button.disabled)return;
