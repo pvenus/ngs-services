@@ -49,3 +49,42 @@ No motion or media writer update is needed; their stored 3D/2D sources
 remain read-only to this workflow. The deployed NPC-only image must include
 the new `filex-live-roles/npc-owned` source; updating the Backend Stack or
 the OPS concept-writer image alone does not install it.
+
+## Generate or regenerate only selected NPC animations
+
+The NPC Animation tab uses the separate request type
+`npc.animation.regenerate` and schema `ngs.npc-animation.regenerate.v1`.
+Exact fields are `{schemaVersion,projectId,npcId,motionSelection}`; the
+same preset fingerprint contract applies. The request can target an
+existing active owned `npc.*` or `character.*` generation. Request Service
+serializes animation regeneration and whole-NPC generation or replacement
+for the same NPC while the request is active. Different NPCs do not block
+one another.
+
+The Planner creates only eight direction animation tasks and their exact
+postprocess tasks per selected preset; it does not delete the NPC, rewrite
+planning, or request new portraits. The animation roots have no same-run
+portrait task: PDS/Filex verify the existing published `idle/portrait`
+direction for both idle and combat motion slots. Missing or changed source
+refs reject the affected lane before generation or publication, with no
+default or replacement image. Postprocess still requires the matching
+completed animation task.
+
+The animation read additionally pins the active generation, exact portrait
+asset, and prior raw/alpha/pixel result basis. The worker returns those
+original values with the generated PNGs. The NPC-owned Filex writer
+(`workflowRegenerateMotionV1`) stages the raw frames privately per exact
+request/preset/direction; its first acknowledgment is not canonical
+publication. PDS authorizes the matching postprocess to read just those
+staged PNGs. After validation, Filex atomically commits the new raw,
+alpha and pixel records and files for that one direction, removes any
+obsolete frames from that slot, and cleans the committed staging files.
+Existing results stay visible until their new direction is ready; an
+entire request is not an all-directions transaction. Other NPCs, poses,
+presets and source assets remain untouched. A newly selected empty native
+slot is also eligible.
+
+Deploy Request Service, Planner, PDS, the **NPC-owned** Filex writer,
+Animation/Postprocess workers and Local/Space clients for this request
+family together. Keep ordinary selected creation/replacement, older
+static walk/run plans, and 2D motion-preset conversion unchanged.

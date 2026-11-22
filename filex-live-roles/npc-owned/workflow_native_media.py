@@ -269,13 +269,15 @@ class WorkflowNativeMedia:
     def _regen_lineage(b):
         return {k:v for k,v in b.items() if k!='taskId'}
 
-    def _regen_stage_path(self,oid):
-        return '.workflow-motion-regeneration/'+hashlib.sha256(oid.encode('utf-8')).hexdigest()+'/'
+    def _regen_stage_path(self,oid,stem):
+        # Animation and postprocess are independent residents. Several
+        # directions/presets of the same parent can be staged simultaneously.
+        return '.workflow-motion-regeneration/'+digest([oid,stem])+'/'
 
     def _regen_read_stage(self,b,parsed,target):
         oid,owner,motion,direction,pose,assets,stem=parsed
         _,_,_,_,basis,_=target
-        folder=self._regen_stage_path(oid)
+        folder=self._regen_stage_path(oid,stem)
         state=self.safe(folder+'raw.json')
         require(state.is_file() and 0<state.stat().st_size<=1024*1024,'regeneration staged manifest')
         staged=json.loads(state.read_bytes())
@@ -331,11 +333,11 @@ class WorkflowNativeMedia:
         with self.lock():
             target=self._regen_target(parsed)
             docs,state,suffix,paths,basis,previous=target
-            oid,owner,*_=parsed
+            oid,owner,_,_,_,_,stem=parsed
             if kind=='animation':
                 source=artifact['source']
                 require(type(source) is dict and set(source)==REGEN_SOURCE and source==basis,'regeneration source changed')
-                folder=self._regen_stage_path(oid)
+                folder=self._regen_stage_path(oid,stem)
                 raw,by_id=self._workflow_raw(b,state,artifact,suffix)
                 sequence=raw[paths[0]]
                 staged={'scope':self._regen_lineage(b),'basis':basis,'sequence':sequence}

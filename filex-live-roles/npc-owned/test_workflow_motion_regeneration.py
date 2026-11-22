@@ -23,8 +23,9 @@ class RegenerationTests(legacy.SelectedTests):
 
     def bind(self,kind,salt='1',**overrides):
         oid='request.official.'+salt*64
-        motion=self.pick['presetId']
-        stem='motion_'+legacy.sha(motion.encode())[:16]+'_e'
+        motion=overrides.get('motion',self.pick['presetId'])
+        direction=overrides.get('direction','e')
+        stem='motion_'+legacy.sha(motion.encode())[:16]+'_'+direction
         return {'officialRequestId':oid,'taskId':'workflow.task.'+legacy.digest([oid,kind+'_'+stem]),
                 'npcId':self.owner,'projectId':'binari','payloadSha256':'f'*64,
                 'motion':motion,'posePreset':'combat','direction':'e',
@@ -169,3 +170,85 @@ class RegenerationTests(legacy.SelectedTests):
             self.assertEqual(before[0]['documents'][name]['frameCount'],3)
         self.assertEqual(self.writer_call(FRAMES,f,post),{'ok':True})
         self.assertFalse((self.root/'.owned-tx.json').exists())
+
+    def test_formal_PDS_claims_route_staged_asset_then_publish_same_slot(self):
+        import sqlite3
+        old=self.seed_original()
+        a,f=self.bind('animation','8'),self.bind('frames','8')
+        oid=a['officialRequestId']
+        payload={'schemaVersion':'ngs.npc-animation.regenerate.v1','projectId':'binari',
+                 'npcId':self.owner,'motionSelection':[self.pick]}
+        ph=legacy.digest(payload)
+        claim=lambda b:{**{k:b[k] for k in ('officialRequestId','taskId','projectId','npcId')},
+                        'payloadSha256':ph,'claimStamp':31}
+        with sqlite3.connect(self.db) as db:
+            db.execute("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,1,'planned',31,NULL)",
+                       (oid,'binari','npc.animation.regenerate',payload['schemaVersion'],legacy.encoded(payload).decode(),ph))
+            for b,kind,parent in ((a,'animation',None),(f,'frames',a['taskId'])):
+                motion=self.pick['presetId'];stem=f"motion_{legacy.sha(motion.encode())[:16]}_e"
+                worker,typ,io=('animation','npc.animation-native-png','output') if kind=='animation' else (
+                    'postprocess','npc.frames-postprocess','input')
+                frame_input={k:b[k] for k in ('npcId','direction','motion','posePreset','assetSetSha256')}
+                frame_input[io]='native-png'
+                db.execute("INSERT INTO workflow_tasks VALUES(?,?,?,?,?,?,NULL,31,?,'running')",
+                           (b['taskId'],oid,kind+'_'+stem,typ,worker,legacy.encoded(frame_input).decode(),parent))
+        ac,fc=claim(a),claim(f)
+        status,read=self.post({'claim':ac},path=legacy.ANIM+'/read')
+        self.assertEqual(status,200,read)
+        self.assertEqual(read['portraitAssetId'],legacy.sha(self.portrait_bytes)+'.png')
+        self.assertEqual(read['referenceSha256'],legacy.sha(self.references[self.pick['presetId']][1]['e']))
+        self.assertEqual(len(read['generationId']),48)
+        self.assertEqual(len(read['resultBasisSha256']),64)
+        packet,original=self.raw(ac,count=2,width=64,height=40)
+        packet['artifact']['source']={k:read[k] for k in ('generationId','portraitAssetId','resultBasisSha256')}
+        self.assertEqual(self.post(packet,path=legacy.ANIM),(200,{'ok':True}))
+        self.assertEqual(self.canonical(),old)
+        self.assertEqual(self.post({'claim':fc},path=legacy.FRAMES+'/read')[0],403)
+        self.complete(ac)
+        status,read=self.post({'claim':fc},path=legacy.FRAMES+'/read')
+        self.assertEqual(status,200,read)
+        sequence=read['sequence'];asset=sequence['frames'][0]['assetId']
+        with self.fetch(legacy.FRAMES+'/asset',{'claim':fc,'assetId':asset}) as response:
+            self.assertEqual(response.headers['content-type'],'image/png')
+            self.assertEqual(response.read(),original[0])
+        with self.assertRaises(HTTPError) as http:
+            self.fetch(legacy.FRAMES+'/asset',{'claim':fc,'assetId':'7'*64+'.png'})
+        self.assertEqual(http.exception.code,409)
+        http.exception.close()
+        self.assertEqual(self.canonical(),old)
+        processed=self.corrected(fc,sequence)
+        self.assertEqual(self.post(processed,path=legacy.FRAMES),(200,{'ok':True}))
+        after=self.canonical()
+        self.assertEqual(after[2],old[2])
+        self.assertEqual(after[1][f'{self.owner}/assets/animation-sequences/{self.suffix}/raw-0.png'],original[0])
+        for mode in REGEN_MODES:
+            self.assertEqual(after[0]['documents'][f'{self.owner}/{mode}/{self.suffix}.json']['frameCount'],2)
+
+    def test_shared_parent_can_stage_multiple_presets_and_directions_before_postprocessing(self):
+        second=self.claim_portrait('portrait_w','npc.portrait-direction',self.idle['taskId'],19,'w')
+        status,view=self.post({'claim':second},path=legacy.portrait.DIRECTION_PATH+'/read')
+        self.assertEqual(status,200,view)
+        self.assertEqual(self.upload('direction',second,view,legacy.png(109)),(200,{'ok':True}))
+        self.complete(second)
+        before=self.canonical()
+        staged=[]
+        for direction,pick,w in (('e',self.pick,48),('w',self.pick,56),('e',self.picks[1],64)):
+            self.assertEqual(pick['posePreset'],'combat')
+            a,f=(self.bind(kind,'9',direction=direction,motion=pick['presetId'],assetSetSha256=pick['assetSetSha256'])
+                 for kind in ('animation','frames'))
+            view=self.writer_call(ANIMATION+'/read',a)
+            packet,data=self.raw(a,count=2,width=w,height=32)
+            source={k:view[k] for k in ('generationId','portraitAssetId','resultBasisSha256')}
+            self.assertEqual(self.writer_call(ANIMATION,a,{**packet['artifact'],'source':source}),{'ok':True})
+            staged.append((f,data))
+        self.assertEqual(self.canonical(),before)
+        for f,data in staged:
+            sequence=self.writer_call(FRAMES+'/read',f)['sequence']
+            self.assertEqual((sequence['direction'],sequence['presetId']),(f['direction'],f['motion']))
+            raw=self.writer_call(FRAMES+'/asset',f,{'assetId':sequence['frames'][0]['assetId']})
+            self.assertEqual(raw['base64'],legacy.b64(data[0]))
+            self.assertEqual(self.writer_call(FRAMES,f,self.corrected(f,sequence)['artifact']),{'ok':True})
+        after=self.canonical()
+        self.assertEqual(after[2],before[2])
+        for f,data in staged:
+            self.assertEqual(after[1][f"{self.owner}/assets/animation-sequences/combat/{f['motion']}/{f['direction']}/raw-0.png"],data[0])
