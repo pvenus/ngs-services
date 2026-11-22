@@ -88,3 +88,14 @@ Deploy Request Service, Planner, PDS, the **NPC-owned** Filex writer,
 Animation/Postprocess workers and Local/Space clients for this request
 family together. Keep ordinary selected creation/replacement, older
 static walk/run plans, and 2D motion-preset conversion unchanged.
+
+The Planner settles only this regeneration family as failed if the exact
+persisted graph contains a definitive failed task with all three retries
+exhausted, and every other task is completed, likewise exhausted, or
+pending behind an exhausted animation predecessor. A retry cooldown,
+runnable lane, or running claim (including an unknown publication outcome)
+prevents this transition. The Planner uses the existing Request Service
+status API, then records the acknowledged failure locally; original task
+history is retained. A new explicit request for this NPC can be submitted
+after the official failure. Already committed directions are not rolled back,
+and no automatic new request is created.

@@ -34,7 +34,7 @@ const stopHeartbeat=args.length===2?startPlannerHeartbeat({revision:process.env.
 try{
  do{
   const result=await pollOnce(store,rs);
-  if(args.length===3||result.staged||result.invalid||result.unsupported||result.acknowledged||result.completed||result.conflicts||result.pollError)
+  if(args.length===3||result.staged||result.invalid||result.unsupported||result.acknowledged||result.completed||result.failed||result.conflicts||result.pollError)
    console.log(JSON.stringify({service:'workflow-planner',...result}));
   if(args.length===3){if(result.pollError||result.pending)process.exitCode=1;break;}
   waiting=new AbortController();

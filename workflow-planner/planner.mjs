@@ -9,7 +9,7 @@ import {npcPlanningAddType,npcPlanningAddTaskKey,validateNPCPlanningAdd} from '.
 
 import {audioRequestType,audioTaskKey,validateAudioGenerate} from './audio-generate-envelope.mjs';
 import {audioDeleteType,audioDeleteTaskKey,validateAudioDelete} from './audio-delete-envelope.mjs';
-import {createWorkflowTasksSql,RETRY_COUNT_COLUMN,migrateWorkflowAudioTask} from './audio-task-schema.mjs';
+import {createWorkflowTasksSql,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,migrateWorkflowAudioTask} from './audio-task-schema.mjs';
 
 import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit} from './motion-preset-convert-2d-plan.mjs';
@@ -143,6 +143,32 @@ export function migrateWorkflowRetryCount(db){
  }catch(e){db.exec('ROLLBACK');throw e;}
 }
 
+// A legal worker transition cannot make this exact graph runnable again. In
+// particular, a running claim is never inferred to have failed, and a failed
+// task below the cap is still live even while its retry cooldown is in effect.
+function hasExhaustedRegenerationGraph(run,readTasks){
+ let plan;
+ try{
+  plan=buildPlan({officialRequestId:run.official_request_id,projectId:run.project_id,
+   requestType:run.request_type,schemaVersion:run.schema_version,payload:JSON.parse(run.payload),
+   payloadSha256:run.payload_sha256,status:'registered',registeredAt:run.registered_at});
+  if(plan.payload!==run.payload)return false;
+ }catch{return false;}
+ const rows=readTasks.all(run.official_request_id,plan.tasks.length+1);
+ if(rows.length!==plan.tasks.length)return false;
+ const byId=new Map(rows.map(row=>[row.task_id,row]));
+ const exhausted=row=>row?.status==='failed'&&row.retry_count===WORKFLOW_TASK_MAX_RETRIES;
+ if(!rows.some(exhausted))return false;
+ return plan.tasks.every(task=>{
+  const row=byId.get(task.id);
+  if(!row||row.task_key!==task.key||row.task_type!==task.type||
+     row.worker_type!==task.workerType||row.task_input!==canonical(task.input)||
+     row.depends_on_task_id!==task.dependsOn)return false;
+  return row.status==='completed'||exhausted(row)||
+   (row.status==='pending'&&task.dependsOn!==null&&exhausted(byId.get(task.dependsOn)));
+ });
+}
+
 export class PlannerStore{
  constructor(path){
   this.db=new DatabaseSync(path);
@@ -213,11 +239,30 @@ export class PlannerStore{
   return this.db.prepare("UPDATE workflow_runs SET reason='RS_COMPLETED',updated_at=? WHERE official_request_id=? AND state='planned' AND reason IS NULL")
    .run(Date.now(),id).changes;
  }
+ terminalRegenerationFailures(){
+  this.db.exec('BEGIN');
+  try{
+   const candidates=this.db.prepare(`SELECT r.* FROM workflow_runs r
+    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type=?
+      AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id
+        AND t.status='failed' AND t.retry_count=?)
+    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,WORKFLOW_TASK_MAX_RETRIES);
+   const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
+   const ready=candidates.filter(run=>hasExhaustedRegenerationGraph(run,evidence))
+    .map(({official_request_id})=>({official_request_id}));
+   this.db.exec('COMMIT');return ready;
+  }catch(e){this.db.exec('ROLLBACK');throw e;}
+ }
+ terminalRegenerationFailureAcknowledged(id){
+  return this.db.prepare(`UPDATE workflow_runs SET state='failed',reason='WORKFLOW_TASK_RETRIES_EXHAUSTED',updated_at=?
+    WHERE official_request_id=? AND request_type=? AND state='planned' AND reason IS NULL`)
+   .run(Date.now(),id,npcAnimationRegenerateType).changes;
+ }
  close(){this.db.close();}
 }
 
 export async function pollOnce(store,rs){
- let cursor=null;const seen=new Set();let staged=0,invalid=0,unsupported=0,acknowledged=0,conflicts=0,completed=0,pollError=false;
+ let cursor=null;const seen=new Set();let staged=0,invalid=0,unsupported=0,acknowledged=0,conflicts=0,completed=0,failed=0,pollError=false;
  try{
   do{
    const args=cursor===null?{limit:8}:{limit:8,cursor};
@@ -228,7 +273,7 @@ export async function pollOnce(store,rs){
     try{staged+=Number(store.stage(row));}
     catch(e){
      if(e.message==='WORKFLOW_COMBAT_NOT_SUPPORTED'){unsupported++;continue;}
-     if(!['WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID'].includes(e.message))throw e;
+     if(!['WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
      invalid++;
     }
    }
@@ -255,5 +300,12 @@ export async function pollOnce(store,rs){
    completed+=store.terminalAcknowledged(id);
   }catch{pollError=true;}
  }
- return {staged,invalid,unsupported,acknowledged,conflicts,completed,pending:store.pending().length,pollError};
+ for(const {official_request_id:id} of store.terminalRegenerationFailures()){
+  try{
+   const status='failed',ack=await rs.call('request_update_status',{officialRequestId:id,status});
+   ensure(exact(ack,['officialRequestId','status'])&&ack.officialRequestId===id&&ack.status===status,'WORKFLOW_RS_ACK_INVALID');
+   failed+=store.terminalRegenerationFailureAcknowledged(id);
+  }catch{pollError=true;}
+ }
+ return {staged,invalid,unsupported,acknowledged,conflicts,completed,failed,pending:store.pending().length,pollError};
 }
