@@ -10,6 +10,73 @@ import sys
 import tempfile
 
 CONTROL = Path.home() / 'Workspaces/OPS/runtime/deploy-control'
+SHA = re.compile(r"[0-9a-f]{40}")
+DIGEST = re.compile(r"[0-9a-f]{64}")
+
+NGS_LOCAL_PHASES = frozenset((
+    "validate_candidate", "check_current", "stop_current", "wait_ports", "switch_selector",
+    "start_candidate", "check_candidate", "check_storage", "record_result", "unknown",
+))
+NGS_LOCAL_ROLLBACK_PHASES = frozenset(("rollback_stop", "rollback_restore", "rollback_start", "rollback_check"))
+NGS_LOCAL_ERRORS = frozenset((
+    'ARCHIVE_BLOB_DRIFT',
+    'ARCHIVE_PATH_INVALID',
+    'ARCHIVE_TREE_DRIFT',
+    'GITHUB_WORKFLOW_NOT_VERIFIED',
+    'INVALID_LOCAL_DEPLOY_RECEIPT',
+    'INVALID_RELEASE_SHA',
+    'LOCAL_DEPLOY_PLAN_DRIFT',
+    'LOCAL_DEPLOY_RUNNER_UNAVAILABLE',
+    'MAC_BOOTOUT_FAILED',
+    'MAC_BOOTSTRAP_FAILED',
+    'MAC_CANDIDATE_VALIDATION_FAILED',
+    'MAC_CURRENT_CHECK_FAILED',
+    'MAC_DEPLOY_LOCK_BUSY',
+    'MAC_PORT_CHECK_FAILED',
+    'MAC_RESULT_WRITE_FAILED',
+    'MAC_ROLLBACK_CHECK_FAILED',
+    'MAC_ROLLBACK_RESTORE_FAILED',
+    'MAC_SELECTOR_SWITCH_FAILED',
+    'MAC_STORAGE_CHECK_FAILED',
+    'MAC_RELEASE_INTERRUPTED',
+    'MAC_RELEASE_REFUSED',
+    'MINIFLARE_DEPENDENCIES_NOT_LOCKED',
+    'MINIFLARE_DEPENDENCIES_NOT_READY',
+    'MINIFLARE_LOCK_INVALID',
+    'NATIVE_AUTH_SCOPE_DRIFT',
+    'NATIVE_AUTH_UNAVAILABLE',
+    'NATIVE_HEALTH_UNVERIFIED',
+    'NATIVE_MCP_UNAVAILABLE',
+    'NATIVE_PLIST_DRIFT',
+    'NATIVE_PORT_OWNER_DRIFT',
+    'NATIVE_PROCESS_PIN_DRIFT',
+    'NATIVE_QUEUE_UNAVAILABLE',
+    'NATIVE_RAW_ROUTE_UNAVAILABLE',
+    'NATIVE_RELEASE_SHA_DRIFT',
+    'NATIVE_ROLE_DRIFT',
+    'NATIVE_SSD_DRIFT',
+    'NATIVE_SSD_UNAVAILABLE',
+    'NATIVE_STATE_DRIFT',
+    'NATIVE_STORAGE_IDENTITY_DRIFT',
+    'NGS_LOCAL_CAUSE_NOT_RECORDED',
+    'OLD_NATIVE_PORTS_BUSY',
+    'OPS_PROVENANCE_INVALID',
+    'OPS_RELEASE_NOT_PREPARED',
+    'PRIOR_RELEASE_DRIFT',
+    'PRIVATE_RELEASE_REQUIRED',
+    'RELEASE_ALREADY_ATTEMPTED_RECONCILE',
+    'RELEASE_ARCHIVE_DRIFT',
+    'RELEASE_DIGEST_INVALID',
+    'RELEASE_LINK_DRIFT',
+    'RELEASE_PROVENANCE_INVALID',
+    'RELEASE_TREE_DRIFT',
+    'RELEASE_TREE_MODE_DRIFT',
+    'RELEASE_TREE_OWNER_DRIFT',
+    'ROLLBACK_SELECTOR_DRIFT',
+    'ROLLBACK_STORAGE_IDENTITY_DRIFT',
+    'STORAGE_STARTUP_INPUTS_CHANGED',
+))
+NGS_LOCAL_UNRECORDED = "NGS_LOCAL_CAUSE_NOT_RECORDED"
 
 
 def private_file(path, modes):
@@ -20,41 +87,125 @@ def private_file(path, modes):
     return path
 
 
+def unique(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("INVALID_LOCAL_DEPLOY_FILE")
+        value[key] = item
+    return value
+
+
 def read_json(path):
     path = private_file(path, {0o600})
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), 'rb') as src:
         raw = src.read(4097)
     if len(raw) > 4096:
         raise ValueError('INVALID_LOCAL_DEPLOY_FILE')
-    return json.loads(raw)
+    return json.loads(raw, object_pairs_hook=unique)
+
+
+class Failure(ValueError):
+    def __init__(self, phase="unknown", code=NGS_LOCAL_UNRECORDED, rollback="unknown", rollback_failure=None):
+        super().__init__(code)
+        self.value = {"phase": phase, "code": code, "rollback": rollback}
+        if rollback_failure is not None:
+            self.value["rollbackFailure"] = rollback_failure
+
+
+def native_diagnostic(value, *, rollback=False):
+    phases = NGS_LOCAL_ROLLBACK_PHASES if rollback else NGS_LOCAL_PHASES - {"unknown"}
+    if (type(value) is dict and set(value) == {"stage", "code"} and type(value["stage"]) is str
+            and type(value["code"]) is str and value["stage"] in phases and value["code"] in NGS_LOCAL_ERRORS):
+        return value
+    return None
+
+
+def failure_result(result, stderr=b"", *, armed=False):
+    if type(result) is dict and set(result) in ({"state"}, {"state", "failure"}, {"state", "failure", "rollbackFailure"}):
+        state = result["state"]
+        if state in ("rolled-back", "rollback-failed") and not ("rollbackFailure" in result and state != "rollback-failed"):
+            detail = native_diagnostic(result.get("failure"))
+            rollback_detail = native_diagnostic(result.get("rollbackFailure"), rollback=True)
+            return Failure(detail["stage"] if detail else "unknown", detail["code"] if detail else NGS_LOCAL_UNRECORDED,
+                           "restored" if state == "rolled-back" else "failed", rollback_detail)
+    detail = None
+    if len(stderr) <= 4096:
+        try:
+            value = json.loads(stderr, object_pairs_hook=unique)
+            if type(value) is dict and set(value) == {"schemaVersion", "failure"} and value["schemaVersion"] == "ops.ngs-mac-apply-error.v1":
+                detail = native_diagnostic(value["failure"])
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            pass
+    if detail:
+        rollback = "not_attempted" if result is None and not armed and detail["stage"] in ("validate_candidate", "check_current") else "unknown"
+        return Failure(detail["stage"], detail["code"], rollback)
+    return Failure()
+
+
+def optional_result(receipt):
+    try:
+        return read_json(receipt)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError, RecursionError):
+        return False
 
 
 def run(control, sha, archive):
-    if not re.fullmatch(r'[0-9a-f]{40}', sha or '') or not re.fullmatch(r'[0-9a-f]{64}', archive or ''):
+    if not SHA.fullmatch(sha or '') or not DIGEST.fullmatch(archive or ''):
         raise ValueError('INVALID_LOCAL_DEPLOY_PROOF')
-    plan = read_json(control / 'prepared.json')
-    if (plan.get('schemaVersion') != 'ops.ngs-prepared-deploy.v1' or plan.get('sha') != sha
-            or plan.get('provenance', {}).get('archiveSha256') != archive or plan.get('mac') != {'ready': True}):
-        raise ValueError('LOCAL_DEPLOY_PLAN_DRIFT')
-    receipt = control / 'mac-releases' / sha / 'result.json'
-    executable = private_file(control / 'bin/ngs-mac-apply', {0o500, 0o700})
-    with tempfile.TemporaryFile(dir=control) as output:
-        subprocess.run([str(executable), sha], cwd=control, env={
-            'HOME': str(Path.home()), 'PATH': '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
-        }, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL, check=True)
-    result = read_json(receipt)
-    when = result.pop('deployedAt', None)
-    if result != {'sha': sha, 'target': 'mac', 'state': 'deployed', 'health': 'verified'} or not when:
-        raise ValueError('INVALID_LOCAL_DEPLOY_RECEIPT')
-    return {**result, 'target': 'ngs-local', 'schemaVersion': 'ops.deploy-target-receipt.v1', 'deployedAt': when}
+    try:
+        plan = read_json(control / 'prepared.json')
+        if (plan.get('schemaVersion') != 'ops.ngs-prepared-deploy.v1' or plan.get('sha') != sha
+                or plan.get('provenance', {}).get('archiveSha256') != archive or plan.get('mac') != {'ready': True}):
+            raise ValueError('LOCAL_DEPLOY_PLAN_DRIFT')
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        raise Failure('validate_candidate','LOCAL_DEPLOY_PLAN_DRIFT','not_attempted') from None
+    folder = control / 'mac-releases' / sha
+    receipt = folder / 'result.json'
+    armed = folder / 'prior.plist'
+    if os.path.lexists(receipt):
+        raise failure_result(optional_result(receipt), armed=os.path.lexists(armed))
+    if os.path.lexists(armed):
+        raise Failure('validate_candidate','RELEASE_ALREADY_ATTEMPTED_RECONCILE')
+    try:
+        executable = private_file(control / 'bin/ngs-mac-apply', {0o500, 0o700})
+    except (OSError, ValueError):
+        raise Failure('validate_candidate','LOCAL_DEPLOY_RUNNER_UNAVAILABLE','not_attempted') from None
+    try:
+        with tempfile.TemporaryFile(dir=control) as error:
+            completed = subprocess.run([str(executable), sha], cwd=control, env={
+                'HOME': str(Path.home()), 'PATH': '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+            }, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=error, check=False)
+            error.seek(0)
+            stderr = error.read(4097)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise failure_result(optional_result(receipt), armed=os.path.lexists(armed)) from None
+    result = optional_result(receipt)
+    if completed.returncode:
+        raise failure_result(result, stderr, armed=os.path.lexists(armed))
+    expected = {'sha': sha, 'target': 'mac', 'state': 'deployed', 'health': 'verified'}
+    when = result.get('deployedAt') if type(result) is dict else None
+    if (not when or set(result) != set(expected) | {'deployedAt'}
+            or any(result.get(key) != value for key, value in expected.items())):
+        if type(result) is dict and result.get("state") in ("rolled-back", "rollback-failed"):
+            raise failure_result(result, stderr, armed=os.path.lexists(armed))
+        raise Failure('record_result','INVALID_LOCAL_DEPLOY_RECEIPT')
+    return {**expected, 'target': 'ngs-local', 'schemaVersion': 'ops.deploy-target-receipt.v1', 'deployedAt': when}
 
 
 if __name__ == '__main__':
+    sha, archive = os.environ.get('OPS_DEPLOY_CANDIDATE_SHA'), os.environ.get('OPS_DEPLOY_ARTIFACT_SHA256')
     try:
         if len(sys.argv) != 1:
             raise ValueError('NO_LOCAL_DEPLOY_ARGS')
-        print(json.dumps(run(CONTROL, os.environ.get('OPS_DEPLOY_CANDIDATE_SHA'),
-                            os.environ.get('OPS_DEPLOY_ARTIFACT_SHA256')), separators=(',', ':')), flush=True)
+        print(json.dumps(run(CONTROL, sha, archive), separators=(',', ':')), flush=True)
+    except Failure as failure:
+        if SHA.fullmatch(sha or ''):
+            print(json.dumps({'schemaVersion': 'ops.deploy-target-error.v1', 'target': 'ngs-local', 'sha': sha,
+                              **failure.value}, separators=(',', ':')), flush=True)
+        sys.exit(1)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
         print('LOCAL_DEPLOY_UNVERIFIED', file=sys.stderr)
         sys.exit(1)

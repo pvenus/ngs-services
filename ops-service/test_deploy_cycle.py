@@ -164,3 +164,44 @@ class Cycle(unittest.TestCase):
         C.persist(config,{'provider':'chatgpt-sites','projectId':'another','hostname':C.SPACE_HOST})
         self.assertFalse(self.target(c,'ngs-space')['canDeploy'])
         self.assertEqual(self.hits,[])
+
+    def test_local_natively_failed_receipt_reaches_api_result_and_remains_blocked(self):
+        failure={'phase':'check_candidate','code':'NATIVE_RELEASE_SHA_DRIFT','rollback':'failed',
+                 'rollbackFailure':{'stage':'rollback_check','code':'ROLLBACK_STORAGE_IDENTITY_DRIFT'}}
+        raw={'schemaVersion':C.ERROR,'target':'ngs-local','sha':A,**failure}
+        source=("#!/bin/sh\nprintf '%s\\n' '"+json.dumps(raw)+"'\nexit 1\n").encode()
+        path=self.stage('ngs-local',source=source)
+        C.persist(path/'observed.json',{'sha':B,'deployedAt':STAMP})
+        cycle=C.DeploymentCycle(self.root)
+        cycle.trigger('ngs-local');self.drain(cycle)
+        result=self.target(cycle,'ngs-local')
+        self.assertEqual(result['failure'],failure)
+        self.assertEqual(result['observed'],{'sha':B,'deployedAt':STAMP})
+        self.assertEqual(json.loads((path/'last-result.json').read_bytes())['failure'],failure)
+        self.assertFalse(result['canDeploy'])
+        with self.assertRaises(Rejected):cycle.trigger('ngs-local')
+        with self.assertRaises(ValueError):C.safe_failure(failure,'rs-mcp')
+        for bad in ({**failure,'code':'NATIVE_TOKEN_SECRET'}, {**failure,'phase':'/owner/home'},
+                    {**failure,'rollback':'restored'},
+                    {**failure,'rollbackFailure':{'stage':'rollback_check','code':'/private/secret'}}):
+            with self.assertRaises(ValueError):C.safe_failure(bad,'ngs-local')
+        (path/'run-once').write_bytes(b'new adapter staged, still failed')
+        self.assertEqual(self.target(cycle,'ngs-local')['state'],'failed')
+        self.assertFalse(self.target(cycle,'ngs-local')['canDeploy'])
+
+    def test_read_only_old_exact_rollback_history_without_inventing_cause(self):
+        path=self.stage('ngs-local')
+        C.persist(path/'last-result.json',{'schemaVersion':C.TERMINAL,'target':'ngs-local',
+         'attemptedSha':A,'state':'failed','finishedAt':STAMP,'observed':{'sha':B,'deployedAt':STAMP}})
+        (self.root/'mac-releases'/A).mkdir(mode=0o700,parents=True)
+        (self.root/'mac-releases').chmod(0o700)
+        result_file=self.root/'mac-releases'/A/'result.json'
+        C.persist(result_file,{'state':'rolled-back'})
+        saved=(path/'last-result.json').read_bytes(),result_file.read_bytes()
+        cycle=C.DeploymentCycle(self.root,runner=self.receipt)
+        row=self.target(cycle,'ngs-local')
+        self.assertEqual(row['failure'],{'phase':'unknown','code':'NGS_LOCAL_CAUSE_NOT_RECORDED','rollback':'restored'})
+        self.assertFalse(row['canDeploy'])
+        self.assertEqual(((path/'last-result.json').read_bytes(),result_file.read_bytes()),saved)
+        C.persist(result_file,{'state':'rolled-back','raw':'not trusted'})
+        self.assertNotIn('failure',self.target(cycle,'ngs-local'))

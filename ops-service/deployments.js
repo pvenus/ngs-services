@@ -107,6 +107,28 @@ function publicationStatus(cell,publication){
  const requested=node('time',stampFormat.format(Date.parse(request.requestedAt)));requested.dateTime=request.requestedAt;
  cell.append(state,node('small','요청 ID: '+request.requestId),sha,requested);
 }
+const ngsFailurePhases=Object.freeze({
+ validate_candidate:'배포 후보 확인',check_current:'기존 버전 상태 확인',stop_current:'기존 실행 종료',
+ wait_ports:'기존 포트 해제 확인',switch_selector:'코드 교체',start_candidate:'새 버전 시작',
+ check_candidate:'새 버전 상태 확인',check_storage:'저장소 확인',record_result:'결과 기록',
+});
+const ngsRollbackPhases=Object.freeze({
+ rollback_stop:'새 버전 종료',rollback_restore:'이전 코드 복원',rollback_start:'이전 버전 시작',rollback_check:'복구 상태 확인',
+});
+const ngsSafeCode=code=>typeof code==='string'&&/^[A-Z][A-Z0-9_]{3,59}$/u.test(code);
+function localFailureStatus(cell,failure){
+ if(!failure||!['not_attempted','restored','failed','unknown'].includes(failure.rollback))return;
+ const stage=Object.hasOwn(ngsFailurePhases,failure.phase)?ngsFailurePhases[failure.phase]:null;
+ const code=ngsSafeCode(failure.code)&&failure.code!=='NGS_LOCAL_CAUSE_NOT_RECORDED'?failure.code:null;
+ cell.append(node('small',[stage,code??'원인 미기록'].filter(Boolean).join(' · ')));
+ if(failure.rollback==='restored')cell.append(node('small','이전 버전 복구 확인'));
+ else if(failure.rollback==='failed'){
+  const detail=failure.rollbackFailure;
+  const where=Object.hasOwn(ngsRollbackPhases,detail?.stage)?ngsRollbackPhases[detail.stage]:null;
+  cell.append(node('small',['이전 버전 복구 미확인',where,where&&ngsSafeCode(detail?.code)?detail.code:null].filter(Boolean).join(' · ')));
+ }else if(failure.rollback==='not_attempted')cell.append(node('small','복구 실행 안 함'));
+ else cell.append(node('small','복구 결과 미기록'));
+}
 function groupSection(id,layout,value,targets){
  const section=node('section',undefined,'deploy-group');
  section.dataset.group=id;section.setAttribute('aria-labelledby','deploy-heading-'+id);
@@ -138,7 +160,8 @@ function groupSection(id,layout,value,targets){
   }
   const stateCell=node('td'),badge=node('span',spaceUnlinked?'자동 게시 미연결':stateLabels[state],'deploy-state');stateCell.append(badge);
   const failure=item?.failure;
-  if(state==='failed'&&typeof failure?.code==='string'&&/^TARGET_[A-Z_]+$/u.test(failure.code)&&failure.code.length<60){
+  if(state==='failed'&&target==='ngs-local')localFailureStatus(stateCell,failure);
+  else if(state==='failed'&&typeof failure?.code==='string'&&/^TARGET_[A-Z_]+$/u.test(failure.code)&&failure.code.length<60){
    const phases={preflight:'준비 확인',unload:'기존 실행 종료',selector:'코드 교체',start:'시작',health:'상태 확인'};
    const phase=Object.hasOwn(phases,failure.phase)?phases[failure.phase]:'배포';
    const recovery=failure.rollback==='restored'?' · 이전 버전 복구됨':failure.rollback==='failed'?' · 복구 확인 필요':'';

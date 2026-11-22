@@ -212,3 +212,22 @@ test('Space-only differences in GitHub commit do not color an equal Local source
  assert.match(note.textContent,/로컬 코드 일치/);
  assert.doesNotMatch(note.className,/deploy-mismatch/);
 });
+
+test('Local NGS row distinguishes failure stage, recovery and old unrecorded cause without enabling replay',async()=>{
+ const cases=[
+  [{phase:'check_candidate',code:'NATIVE_RELEASE_SHA_DRIFT',rollback:'failed',
+    rollbackFailure:{stage:'rollback_check',code:'ROLLBACK_STORAGE_IDENTITY_DRIFT'}},
+   ['새 버전 상태 확인 · NATIVE_RELEASE_SHA_DRIFT','이전 버전 복구 미확인 · 복구 상태 확인 · ROLLBACK_STORAGE_IDENTITY_DRIFT']],
+  [{phase:'unknown',code:'NGS_LOCAL_CAUSE_NOT_RECORDED',rollback:'restored'},['원인 미기록','이전 버전 복구 확인']],
+  [{phase:'/private/path',code:'private/auth token',rollback:'unknown'},['원인 미기록','복구 결과 미기록']],
+ ];
+ for(const [failure,expected] of cases){
+  const model=data(),row=model.cycle.targets.find(x=>x.id==='ngs-local');
+  Object.assign(row,{state:'failed',canDeploy:false,failure});
+  const app=fixtures(async()=>Response.json(model));await flush();
+  const view=app.row('ngs-local');
+  for(const text of expected)assert.ok(app.find(view,n=>n.textContent===text),text);
+  assert.equal(app.find(view,n=>n.tag==='button').disabled,true);
+  assert.doesNotMatch(JSON.stringify(view),/private\/path|private\/auth/);
+ }
+});

@@ -149,3 +149,16 @@ attempt marker or overwrite a staged tree. Existing verified readiness and
 prior deployed observations are not cleared by polling.
 
 Tests: `python3 -B -m unittest discover -s ops-service/deploy -p 'test_prepare_ngs_local_once.py'`.
+
+## Local NGS deployment failure diagnostics
+
+The fixed Local target adapter sends only whitelisted native stage/reason codes
+and separately recorded recovery status; it does not expose or retain raw
+stderr, service output, absolute paths or user data. OPS shows exact prior
+legacy recovery separately as `원인 미기록` when a durable old `rolled-back`
+record had no diagnostic. A missing or unconfirmed recovery is not shown as
+verified. The updater and target still refuse replay of a failed SHA.
+
+The diagnostic source change alone installs nothing. A native runner update
+and fixed adapter update require the reviewed package and existing runtime
+provisioning. Do not repin or manipulate an old failed candidate to retry it.

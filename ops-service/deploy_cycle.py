@@ -40,6 +40,71 @@ ERROR_CODES=frozenset((
   'TARGET_START_FAILED TARGET_HEALTH_TIMEOUT TARGET_HEALTH_HTTP TARGET_OPERATION_TIMEOUT '
   'TARGET_PRIVATE_INPUT_INVALID TARGET_APPLY_REFUSED'
 ).split())
+# The fixed Local adapter is standalone and carries the same finite protocol.
+NGS_LOCAL_PHASES = frozenset((
+    "validate_candidate", "check_current", "stop_current", "wait_ports", "switch_selector",
+    "start_candidate", "check_candidate", "check_storage", "record_result", "unknown",
+))
+NGS_LOCAL_ROLLBACK_PHASES = frozenset(("rollback_stop", "rollback_restore", "rollback_start", "rollback_check"))
+NGS_LOCAL_ERRORS = frozenset((
+    'ARCHIVE_BLOB_DRIFT',
+    'ARCHIVE_PATH_INVALID',
+    'ARCHIVE_TREE_DRIFT',
+    'GITHUB_WORKFLOW_NOT_VERIFIED',
+    'INVALID_LOCAL_DEPLOY_RECEIPT',
+    'INVALID_RELEASE_SHA',
+    'LOCAL_DEPLOY_PLAN_DRIFT',
+    'LOCAL_DEPLOY_RUNNER_UNAVAILABLE',
+    'MAC_BOOTOUT_FAILED',
+    'MAC_BOOTSTRAP_FAILED',
+    'MAC_CANDIDATE_VALIDATION_FAILED',
+    'MAC_CURRENT_CHECK_FAILED',
+    'MAC_DEPLOY_LOCK_BUSY',
+    'MAC_PORT_CHECK_FAILED',
+    'MAC_RESULT_WRITE_FAILED',
+    'MAC_ROLLBACK_CHECK_FAILED',
+    'MAC_ROLLBACK_RESTORE_FAILED',
+    'MAC_SELECTOR_SWITCH_FAILED',
+    'MAC_STORAGE_CHECK_FAILED',
+    'MAC_RELEASE_INTERRUPTED',
+    'MAC_RELEASE_REFUSED',
+    'MINIFLARE_DEPENDENCIES_NOT_LOCKED',
+    'MINIFLARE_DEPENDENCIES_NOT_READY',
+    'MINIFLARE_LOCK_INVALID',
+    'NATIVE_AUTH_SCOPE_DRIFT',
+    'NATIVE_AUTH_UNAVAILABLE',
+    'NATIVE_HEALTH_UNVERIFIED',
+    'NATIVE_MCP_UNAVAILABLE',
+    'NATIVE_PLIST_DRIFT',
+    'NATIVE_PORT_OWNER_DRIFT',
+    'NATIVE_PROCESS_PIN_DRIFT',
+    'NATIVE_QUEUE_UNAVAILABLE',
+    'NATIVE_RAW_ROUTE_UNAVAILABLE',
+    'NATIVE_RELEASE_SHA_DRIFT',
+    'NATIVE_ROLE_DRIFT',
+    'NATIVE_SSD_DRIFT',
+    'NATIVE_SSD_UNAVAILABLE',
+    'NATIVE_STATE_DRIFT',
+    'NATIVE_STORAGE_IDENTITY_DRIFT',
+    'NGS_LOCAL_CAUSE_NOT_RECORDED',
+    'OLD_NATIVE_PORTS_BUSY',
+    'OPS_PROVENANCE_INVALID',
+    'OPS_RELEASE_NOT_PREPARED',
+    'PRIOR_RELEASE_DRIFT',
+    'PRIVATE_RELEASE_REQUIRED',
+    'RELEASE_ALREADY_ATTEMPTED_RECONCILE',
+    'RELEASE_ARCHIVE_DRIFT',
+    'RELEASE_DIGEST_INVALID',
+    'RELEASE_LINK_DRIFT',
+    'RELEASE_PROVENANCE_INVALID',
+    'RELEASE_TREE_DRIFT',
+    'RELEASE_TREE_MODE_DRIFT',
+    'RELEASE_TREE_OWNER_DRIFT',
+    'ROLLBACK_SELECTOR_DRIFT',
+    'ROLLBACK_STORAGE_IDENTITY_DRIFT',
+    'STORAGE_STARTUP_INPUTS_CHANGED',
+))
+NGS_LOCAL_UNRECORDED = "NGS_LOCAL_CAUSE_NOT_RECORDED"
 TERMINAL='ops.deploy-target-result.v1'
 SPACE_PUBLICATION_SCHEMA='ops.ngs-space-publication.v1'
 SPACE_SITE='appgprj_6abcee8b33688191bed4fec75f26b91f'
@@ -125,11 +190,39 @@ class TargetFailure(Exception):
         self.diagnostic=diagnostic
 
 
-def safe_failure(value):
+def safe_failure(value, target=None):
+    if target == 'ngs-local':
+        check((exact(value,'phase','code','rollback') or exact(value,'phase','code','rollback','rollbackFailure'))
+              and all(type(value[k]) is str for k in ('phase','code','rollback'))
+              and value['phase'] in NGS_LOCAL_PHASES and value['code'] in NGS_LOCAL_ERRORS
+              and value['rollback'] in ROLLBACK | {'unknown'}, 'OPS_TARGET_ERROR_INVALID')
+        if 'rollbackFailure' in value:
+            detail=value['rollbackFailure']
+            check(value['rollback']=='failed' and exact(detail,'stage','code') and
+                  type(detail['stage']) is str and type(detail['code']) is str and
+                  detail['stage'] in NGS_LOCAL_ROLLBACK_PHASES and detail['code'] in NGS_LOCAL_ERRORS,
+                  'OPS_TARGET_ERROR_INVALID')
+        return value
     check(exact(value,'phase','code','rollback') and
           all(type(value[k]) is str for k in value) and value['phase'] in PHASES and
           value['code'] in ERROR_CODES and value['rollback'] in ROLLBACK,'OPS_TARGET_ERROR_INVALID')
     return value
+
+
+def local_legacy_failure(control, attempted_sha):
+    """Read the old phase-less, exact-SHA durable result; never repair/retry."""
+    try:
+        releases=control/'mac-releases'
+        secure_directory(releases)
+        folder=releases/attempted_sha
+        secure_directory(folder)
+        result=optional(folder/'result.json')
+    except (OSError,ValueError,TypeError,OverflowError,RecursionError):
+        return None
+    if result in ({'state':'rolled-back'},{'state':'rollback-failed'}):
+        return {'phase':'unknown','code':NGS_LOCAL_UNRECORDED,
+                'rollback':'restored' if result['state']=='rolled-back' else 'failed'}
+    return None
 
 
 def fixed_runner(directory,record):
@@ -146,10 +239,14 @@ def fixed_runner(directory,record):
     check(len(payload)<=8192,'OPS_TARGET_RUNNER_FAILED')
     value=json.loads(payload)
     if p.returncode:
-        check(exact(value,'schemaVersion','target','sha','phase','code','rollback') and
-              value['schemaVersion']==ERROR and value['target']==directory.name and
+        fields=('schemaVersion','target','sha','phase','code','rollback')
+        diagnostics=('phase','code','rollback')
+        if directory.name=='ngs-local' and type(value) is dict and 'rollbackFailure' in value:
+            fields+=('rollbackFailure',)
+            diagnostics+=('rollbackFailure',)
+        check(exact(value,*fields) and value['schemaVersion']==ERROR and value['target']==directory.name and
               value['sha']==record['sha'],'OPS_TARGET_RUNNER_FAILED')
-        raise TargetFailure(safe_failure({k:value[k] for k in ('phase','code','rollback')}))
+        raise TargetFailure(safe_failure({k:value[k] for k in diagnostics},directory.name))
     return value
 
 
@@ -209,7 +306,7 @@ class DeploymentCycle:
                   state['state'] in ('deployed','failed'),'OPS_TARGET_RESULT_INVALID')
             if 'failure' in state:
                 check(state['state']=='failed','OPS_TARGET_RESULT_INVALID')
-                safe_failure(state['failure'])
+                safe_failure(state['failure'],target)
             stamp(state['finishedAt'])
             result=observed(state['observed'],target)
             if state['state']=='deployed':
@@ -224,6 +321,9 @@ class DeploymentCycle:
                   record['schemaVersion']==READY and record['target']==target and is_sha(record['sha']) and
                   sha256(record['artifactSha256']) and sha256(record['runnerSha256']),'OPS_TARGET_READINESS_INVALID')
             stamp(record['verifiedAt'])
+            if target=='ngs-local' and state and state['attemptedSha']==record['sha'] and state['state']=='failed':
+                # Historical failed candidates stay failed (not actionable) even after adapter repinning.
+                return (record,initial,'failed')
             try: executable=verified_runner(path/'run-once')
             except (OSError,ValueError):executable=None
             if executable!=record['runnerSha256']:
@@ -269,7 +369,10 @@ class DeploymentCycle:
             if phase=='failed' and record is not None:
                 last=optional(self.root/'targets'/target/'last-result.json')
                 if last and last.get('attemptedSha')==record['sha'] and 'failure' in last:
-                    row['failure']=safe_failure(last['failure'])
+                    row['failure']=safe_failure(last['failure'],target)
+                elif target=='ngs-local' and last and last.get('attemptedSha')==record['sha']:
+                    legacy=local_legacy_failure(self.root,record['sha'])
+                    if legacy is not None:row['failure']=legacy
             if row['ready']:plans[target]=(record,initial,phase)
             rows.append(row)
         ready={row['id']:row['ready'] for row in rows}
