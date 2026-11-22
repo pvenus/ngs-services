@@ -156,7 +156,9 @@ def assemble_source(verified, repo, releases):
                 data = git(repo, "cat-file", "blob", oid)
                 need(len(data) <= 8 * 1024 * 1024, "TARGET_BLOB_TOO_LARGE")
                 q = tree / relative
-                q.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                for parent in reversed([n for n in q.parents if n != tree and n.is_relative_to(tree)]):
+                    parent.mkdir(mode=0o700, exist_ok=True)
+                    private_directory(parent)
                 with q.open("xb") as writer:
                     writer.write(data)
                 q.chmod(0o700 if mode & 0o100 else 0o600)
