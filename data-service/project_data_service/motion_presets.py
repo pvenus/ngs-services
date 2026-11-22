@@ -12,7 +12,11 @@ def factory():
  except FileNotFoundError:raise ValueError('MOTION_PRESETS_FILEX_NOT_CONFIGURED')from None
  return FilexCASTransport(c)
 def validate(p):
- require(isinstance(p,dict)and set(p)=={'schemaVersion','presetId','posePreset','label','policy','directions'},'MOTION_PRESET_SCHEMA')
+ require(isinstance(p,dict)and set(p)-{'variant'}=={'schemaVersion','presetId','posePreset','label','policy','directions'},'MOTION_PRESET_SCHEMA')
+ if 'variant'in p:
+  v=p['variant'];require(type(v)is dict and set(v)=={'kind','sourcePresetId','sourcePresetHash'}and v['kind']=='2d'
+   and type(v['sourcePresetId'])is str and ID.fullmatch(v['sourcePresetId'])and v['sourcePresetId']!=p['presetId']
+   and type(v['sourcePresetHash'])is str and re.fullmatch('[a-f0-9]{64}',v['sourcePresetHash']),'MOTION_PRESET_VARIANT')
  require(p['schemaVersion']=='ngs.motion-preset.v1'and ID.fullmatch(str(p['presetId']))and ID.fullmatch(str(p['posePreset']))and isinstance(p['label'],str)and bool(p['label']),'MOTION_PRESET_ID')
  policy=p['policy'];require(isinstance(policy,dict)and set(policy)=={'framingPolicy','equipmentPolicy','motionInstruction'},'MOTION_PRESET_POLICY')
  require(isinstance(policy['framingPolicy'],dict)and isinstance(policy['equipmentPolicy'],dict)and isinstance(policy['motionInstruction'],str)and 0<len(policy['motionInstruction'])<=4000,'MOTION_PRESET_POLICY')
@@ -36,21 +40,68 @@ class MotionPresets:
   return s
  def list(self):
   s=self.snapshot();return {'schemaVersion':'ngs.motion-presets.v2','sourceVersion':s['sourceVersion'],'presets':[{**p,'presetHash':digest(p)}for p in s['documents'].values()]}
- def get(self,preset_id,direction):
+ def get(self,preset_id,direction,*,expected_preset_hash=None,max_asset_bytes=None):
   require(ID.fullmatch(preset_id)and direction in DIRECTIONS,'MOTION_PRESET_SELECTOR')
   s=self.snapshot();p=s['documents'].get('presets/'+preset_id+'.json');require(p is not None,'MOTION_PRESET_NOT_FOUND');row=next(x for x in p['directions']if x['direction']==direction)
+  require((expected_preset_hash is None or digest(p)==expected_preset_hash)
+   and(max_asset_bytes is None or row['bytes']<=max_asset_bytes),'MOTION_PRESET_ASSET_BASIS')
   with self.factory()as t:a=t.call('GET','/v1/asset?'+urllib.parse.urlencode({'id':row['assetId']}))
   raw=base64.b64decode(a['base64'],validate=True);require(len(raw)==row['bytes']and hashlib.sha256(raw).hexdigest()==row['sha256']and raw[4:8]==b'ftyp','MOTION_PRESET_ASSET_MISMATCH')
   return {**{k:v for k,v in p.items()if k!='directions'},**row,'sourceVersion':s['sourceVersion'],'presetHash':digest(p),'base64':a['base64']}
+ def publish_2d(self,request_id,source,variant,asset_read):
+  # Scoped workflow entry, not exposed through the general registration API.
+  # The catalog becomes visible only in Filex's locked batch; assets use
+  # immutable hash names and are uploaded/read-verified individually.
+  p=validate(copy.deepcopy(variant)); source=validate(source); source_hash=digest(source)
+  require('variant'not in source and p.get('variant')=={'kind':'2d','sourcePresetId':source['presetId'],
+   'sourcePresetHash':source_hash}and p['posePreset']==source['posePreset']and p['policy']==source['policy'],
+   'MOTION_PRESET_VARIANT_BINDING')
+  require(type(request_id)is str and re.fullmatch(r'request\.official\.[a-f0-9]{64}',request_id),
+   'MOTION_PRESET_VARIANT_REQUEST')
+  original={v['direction']:v for v in source['directions']}
+  timing={'frameCount','fps','cycleCount','durationSeconds'}
+  require(all(v['sha256']!=original[v['direction']]['sha256'] and
+   {k:v[k]for k in timing&v.keys()}=={k:original[v['direction']][k]for k in timing&original[v['direction']].keys()}
+   for v in p['directions']),'MOTION_PRESET_VARIANT_TIMING')
+  key='presets/'+p['presetId']+'.json';sk='presets/'+source['presetId']+'.json';ih=digest([source_hash,p])
+  basis={PREFIX+sk:source_hash,PREFIX+key:None}
+  files=[{'path':PREFIX+key,'body':p,'expectedHash':None}]
+  s=self.snapshot()
+  present=s['documents'].get(key)
+  require(s['documents'].get(sk)==source,'MOTION_PRESET_SOURCE_CHANGED')
+  def receipt(t):
+   old=t.receipt(request_id)
+   if old is not None:
+    require(old.get('requestId')==request_id and old.get('status')=='committed' and old.get('inputHash')==ih
+     and old.get('payloadHash')==digest({'files':files,'readSet':basis})
+     and old.get('hashes')=={PREFIX+key:digest(p)},'MOTION_PRESET_VARIANT_RECEIPT')
+   return old
+  with self.factory()as t:
+   old=receipt(t)
+   require((old is not None and present==p)or(old is None and present is None),'MOTION_PRESET_VARIANT_EXISTS')
+   for row in p['directions']:
+    aid=row['assetId'];raw=asset_read(row['direction'])
+    require(len(raw)==row['bytes']and hashlib.sha256(raw).hexdigest()==row['sha256']and raw[4:8]==b'ftyp','MOTION_PRESET_ASSET_MISMATCH')
+    if old is None:t.call('POST','/v1/asset',{'assetId':aid,'base64':base64.b64encode(raw).decode()})
+    sealed=t.call('GET','/v1/asset?'+urllib.parse.urlencode({'id':aid}))
+    require(sealed['assetId']==aid and sealed['sha256']==row['sha256']and sealed['bytes']==row['bytes']
+     and base64.b64decode(sealed['base64'],validate=True)==raw,'MOTION_PRESET_ASSET_READBACK')
+   if old is None:
+    t.call('POST','/v1/batch',{'requestId':request_id,'inputHash':ih,'files':files,'readSet':basis})
+   require(receipt(t)is not None,'MOTION_PRESET_VARIANT_RECEIPT')
+  check=self.snapshot()
+  require(check['documents'].get(key)==p,'MOTION_PRESET_READBACK')
+  return PREFIX+key
  def register(self,request):
   require(isinstance(request,dict)and set(request)=={'requestId','expectedHash','preset','assets'},'MOTION_PRESET_REGISTER_SCHEMA')
-  p=validate(copy.deepcopy(request['preset']));key='presets/'+p['presetId']+'.json';ih=digest(request)
+  p=validate(copy.deepcopy(request['preset']));require('variant'not in p,'MOTION_PRESET_VARIANT_WORKFLOW_REQUIRED');key='presets/'+p['presetId']+'.json';ih=digest(request)
   require(isinstance(request['requestId'],str)and re.fullmatch(r'[A-Za-z0-9._:-]{8,180}',request['requestId']),'MOTION_PRESET_REQUEST_ID')
   assets=request['assets'];require(isinstance(assets,dict)and set(assets)=={v['assetId']for v in p['directions']},'MOTION_PRESET_REGISTER_ASSETS')
   decoded={}
   for row in p['directions']:
    raw=base64.b64decode(assets[row['assetId']],validate=True);require(len(raw)==row['bytes']and hashlib.sha256(raw).hexdigest()==row['sha256']and raw[4:8]==b'ftyp','MOTION_PRESET_ASSET_MISMATCH');decoded[row['assetId']]=raw
   s=self.snapshot();actual=s['hashes'].get(key)
+  require('variant'not in s['documents'].get(key,{}),'MOTION_PRESET_VARIANT_WORKFLOW_REQUIRED')
   with self.factory()as t:
    old=t.receipt(request['requestId'])
    if old:

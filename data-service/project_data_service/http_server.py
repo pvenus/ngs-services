@@ -64,6 +64,9 @@ class Handler(DomainHandler):
         from .single_target_delete import PATH as single_delete_path,serve as single_delete
         if media_path==single_delete_path:return single_delete(self)
 
+        from .workflow_motion_2d import PATH as motion_2d_path,serve as motion_2d
+        if media_path in (motion_2d_path,motion_2d_path+'/read'):return motion_2d(self)
+
         from .workflow_audio import PATH as audio_workflow_path,serve as audio_workflow
         if media_path in (audio_workflow_path,audio_workflow_path+'/read'):return audio_workflow(self)
 
@@ -611,6 +614,10 @@ def serve(storage_root: Path, host: str, port: int):
         from .workflow_concept_category import CategoryWorkflow
         if not hasattr(server,'workflow_delete'):raise ValueError('CONCEPT_WORKFLOW_PLANNER_PIN_REQUIRED')
         server.workflow_concept_category=CategoryWorkflow(app.concept,planner)
+    from .workflow_motion_2d import configured as configure_motion_2d
+    server.workflow_motion_2d=configure_motion_2d(
+        planner if hasattr(server,'workflow_delete') else None,storage_root,host,
+        os.environ.get('PDS_WORKFLOW_MOTION_2D','auto'))
     planning_update=os.environ.get('PDS_WORKFLOW_NPC_PLANNING_UPDATE','0')
     if planning_update not in ('0','1'):raise ValueError('NPC_PLANNING_UPDATE_OPT_IN')
     if planning_update=='1':
