@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import pwd
 import re
 import sqlite3
 import stat
@@ -28,7 +29,12 @@ HELPERS = (
     'planner_cutover', 'audio_cutover', 'mac_target_apply', 'prepare_rs_relay',
     'prepare_service_targets', 'github_target_candidate_evidence',
     'prepare_worker_candidates', 'prepare_service_candidates',
+    'prepare_filex_writer', 'prepare_filex_supervised',
 )
+# Only the private checksum manifest can admit these two mutually dependent
+# helpers; never fall through to names on a Python installation search path.
+FILEX_HELPERS = ('filex_writer_apply','filex_writer_active')
+
 SERVICES = 'pvenus/ngs-services'
 WORKERS = 'pvenus/ngs-workers'
 SERVICE_TARGETS = ('request-service', 'workflow-planner', 'backend-stack')
@@ -43,7 +49,8 @@ AUTH = frozenset(('GITHUB_KEYCHAIN_UNAVAILABLE GITHUB_KEYCHAIN_ITEM_MISSING GITH
 PENDING = frozenset(('GITHUB_TARGET_RUN_NOT_READY GITHUB_TARGET_RUN_MOVED GITHUB_TARGET_MAIN_MOVED '
                      'GITHUB_ARTIFACT_EXPIRED GITHUB_TARGET_ARTIFACT_AMBIGUOUS MAIN_ADVANCED '
                      'WORKER_MAIN_ADVANCED PREP_LOCK_BUSY PREP_ACTIVE_DEPLOYMENT WORKER_DEPLOY_ACTIVE_OR_UNVERIFIED '
-                     'SERVICE_LOCAL_ARTIFACT_UNAVAILABLE').split())
+                     'SERVICE_LOCAL_ARTIFACT_UNAVAILABLE FILEX_WORKFLOW_NOT_READY FILEX_MAIN_ADVANCED '
+                     'FILEX_PREPARATION_LOCK_BUSY').split())
 BLOCKED = frozenset(('WORKER_RUNNER_UNVERIFIED WORKER_RUNNER_DEPENDENCY_UNVERIFIED WORKER_SELECTOR_INVALID '
                      'WORKER_RUNTIME_PATH_INVALID WORKER_RUNTIME_DEPENDENCY_UNVERIFIED WORKER_DATABASE_UNVERIFIED '
                      'WORKER_IMAGE_CONFIG_UNVERIFIED WORKER_OUTCOME_UNVERIFIED WORKER_ATTEMPT_FAILED '
@@ -54,7 +61,13 @@ BLOCKED = frozenset(('WORKER_RUNNER_UNVERIFIED WORKER_RUNNER_DEPENDENCY_UNVERIFI
                      'PLANNER_STARTUP_OR_STORAGE_ABI_CHANGED BACKEND_STARTUP_OR_STORAGE_ABI_CHANGED '
                      'BACKEND_STORAGE_UNVERIFIED FILEX_COMPANION_NOT_ACTIVE GITHUB_TARGET_EVIDENCE_INVALID '
                      'GITHUB_TARGET_RUN_SOURCE_DENIED GITHUB_TARGET_ARTIFACT_UNVERIFIED GIT_OBJECTS_UNVERIFIED '
-                     'HELPER_BUNDLE_UNVERIFIED FILEX_PREPARER_NOT_PROVISIONED PREP_FAILED').split())
+                     'HELPER_BUNDLE_UNVERIFIED FILEX_PREPARER_NOT_PROVISIONED FILEX_PREP_CONFIG_INVALID '
+                     'FILEX_PRIOR_RUNTIME_UNVERIFIED FILEX_BUILD_PROOF_INVALID FILEX_PREPARATION_CHANGED '
+                     'FILEX_RUNNER_PIN_MISMATCH FILEX_RECONCILE_REQUIRED FILEX_ARTIFACT_DIGEST_MISMATCH '
+                     'FILEX_ARTIFACT_SCOPE_INVALID FILEX_GIT_PROOF_MISMATCH FILEX_BASE_NOT_PINNED '
+                     'FILEX_EXISTING_CANDIDATE_MISMATCH FILEX_OFFLINE_BASE_UNAVAILABLE '
+                     'FILEX_ISOLATED_DOCKER_UNAVAILABLE FILEX_ISOLATED_DOCKER_FAILED FILEX_IMAGE_ID_INVALID '
+                     'FILEX_RUNTIME_HELPERS_UNPROVISIONED FILEX_PREPARATION_UNAVAILABLE PREP_FAILED').split())
 STATES = frozenset(('ready current blocked pending auth_required failed in_progress equivalent not_configured').split())
 GIT_CONFIG = {
     'core.hooksPath':'/dev/null', 'protocol.allow':'never', 'protocol.https.allow':'always',
@@ -122,10 +135,13 @@ class PinnedHelpers(importlib.abc.MetaPathFinder, importlib.abc.Loader):
         private_dir(parent)
         manifest = json.loads(read_private(parent/PIN_NAME, 8192), object_pairs_hook=unique)
         require(type(manifest) is dict and set(manifest)=={'schemaVersion','files'} and
-                manifest['schemaVersion']==PIN_SCHEMA and type(manifest['files']) is dict and
-                set(manifest['files'])=={name+'.py' for name in HELPERS}, 'HELPER_BUNDLE_UNVERIFIED')
+                manifest['schemaVersion']==PIN_SCHEMA and type(manifest['files']) is dict,
+                'HELPER_BUNDLE_UNVERIFIED')
+        fixed = {name+'.py' for name in HELPERS}
+        extras = {name+'.py' for name in FILEX_HELPERS}
+        require(set(manifest['files']) in (fixed,fixed|extras), 'HELPER_BUNDLE_UNVERIFIED')
         self.by_name = {}
-        for name in HELPERS:
+        for name in (*HELPERS,*(FILEX_HELPERS if extras <= manifest['files'].keys() else ())):
             path = parent/(name+'.py')
             expected = manifest['files'][path.name]
             raw = read_private(path)
@@ -334,6 +350,7 @@ def run_once(deps, home, control, *, fetch=fetch_git, host=None):
     # Candidate source helpers independently recheck canonical main under their
     # own existing readiness/CAS locks. A newer head must never be registered.
     with tempfile.TemporaryDirectory(prefix='.candidate-objects-',dir=control) as root, fixed_git_settings():
+        filex_git = None
         for repo, catalog in ((SERVICES,SERVICE_TARGETS),(WORKERS,WORKER_TARGETS)):
             head = None
             try:
@@ -349,8 +366,12 @@ def run_once(deps, home, control, *, fetch=fetch_git, host=None):
                     require(expected==head and main()==head,'MAIN_ADVANCED')
                 assert_current(head)
                 if repo==SERVICES:
+                    filex_git = (head,git)
+                    def filex_ready(expected):
+                        active = getattr(deps,'filex_active',None)
+                        return bool(expected==head and active and active(home,control,git,head) is True)
                     result = deps.prepare_services(ev['verified'],git,home,control,assert_current=assert_current,
-                                                   filex_ready=lambda _head: False,host=host)
+                                                   filex_ready=filex_ready,host=host)
                 else:
                     package = deps.prepare_workers({k:v for k,v in ev.items() if k!='verified'},repo=git,
                         home=home,control=control,read_main=main,
@@ -369,6 +390,23 @@ def run_once(deps, home, control, *, fetch=fetch_git, host=None):
             except Exception as exc:
                 for name in catalog:
                     states[name] = error_row(exc,head)
+        filex_head = None
+        try:
+            config = getattr(deps,'filex_config',None)
+            if config and config(control) is not None:
+                filex_head = deps.canonical(SERVICES)
+                require(valid(SHA,filex_head), 'GITHUB_TARGET_EVIDENCE_INVALID')
+                require(callable(deps.prepare_filex), 'FILEX_RUNTIME_HELPERS_UNPROVISIONED')
+                repo = filex_git[1] if filex_git and filex_git[0]==filex_head else fetch(
+                    SERVICES,Path(root)/'filex-ngs-services',filex_head)
+                def assert_filex_current(expected):
+                    require(expected==filex_head and deps.canonical(SERVICES)==filex_head,'MAIN_ADVANCED')
+                receipt = deps.prepare_filex(repo,home,control,filex_head,assert_current=assert_filex_current)
+                require(type(receipt) is dict and receipt.get('target')==FILEX and receipt.get('sha')==filex_head,
+                        'GITHUB_TARGET_EVIDENCE_INVALID')
+                states[FILEX] = convert(receipt,filex_head)
+        except Exception as exc:
+            states[FILEX] = error_row(exc,filex_head)
         head = None
         try:
             head = deps.local_main()
@@ -385,26 +423,42 @@ def run_once(deps, home, control, *, fetch=fetch_git, host=None):
 
 
 def load_deps(parent):
-    require(all(name not in sys.modules for name in HELPERS), 'HELPER_BUNDLE_UNVERIFIED')
+    require(all(name not in sys.modules for name in (*HELPERS,*FILEX_HELPERS)), 'HELPER_BUNDLE_UNVERIFIED')
     # Keep the finder active throughout this single invocation for lazy support
     # imports. Do not put the private helper or candidate directories in sys.path.
     finder = PinnedHelpers(parent)
     sys.meta_path.insert(0,finder)
     from github_actions_keychain import KeychainGitHubEvidence
-    from github_target_candidate_evidence import canonical_target_main, acquire_target_candidate
+    from github_target_candidate_evidence import FilexGitHubEvidence, canonical_target_main, acquire_target_candidate
     from mac_target_apply import TARGETS as target_specs
     from planner_cutover import loaded_selector
     from prepare_ngs_local_once import main_head
     from prepare_service_candidates import prepare_service_candidates, prepare_rs_mcp_candidate
     from prepare_worker_candidates import prepare_worker_candidates
+    from prepare_filex_supervised import config as filex_config, prepare_filex_candidate
+    from prepare_filex_writer import IsolatedDocker
+
+    filex_prep = filex_live = None
+    if all(name in finder.by_name for name in FILEX_HELPERS):
+        def filex_prep(repo,home,control,head,*,assert_current):
+            from filex_writer_apply import filex_prior
+            return prepare_filex_candidate(FilexGitHubEvidence(),repo,home,control,head,
+                assert_current=assert_current,read_prior=filex_prior,docker=IsolatedDocker(home))
+
+        def filex_live(home,control,repo,head):
+            from filex_writer_active import filex_active
+            return filex_active(home,control,repo,head)
+
     return SimpleNamespace(canonical=canonical_target_main,acquire=acquire_target_candidate,
         local_main=lambda:main_head(KeychainGitHubEvidence()),prepare_services=prepare_service_candidates,
         prepare_workers=prepare_worker_candidates,prepare_relay=prepare_rs_mcp_candidate,
-        target_specs=target_specs,loaded_selector=loaded_selector)
+        target_specs=target_specs,loaded_selector=loaded_selector,
+        filex_config=filex_config,prepare_filex=filex_prep,filex_active=filex_live)
 
 
 def main():
-    home = Path.home()
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    os.environ['HOME'] = str(home)
     control = home/'Workspaces/OPS/runtime/deploy-control'
     require(len(sys.argv)==1 and sys.flags.isolated and sys.dont_write_bytecode and
             Path(__file__)==control/'bin/prepare_ops_candidates_once.py',

@@ -114,6 +114,40 @@ class CoordinatorTest(unittest.TestCase):
         self.assertEqual(states['request-service'],{'sha':A,'state':'pending','code':'MAIN_ADVANCED'})
         self.assertEqual(states['worker-file']['state'],'ready')
 
+    def test_filex_evidence_is_independent_and_never_substitutes_for_active_writer(self):
+        deps=self.deps()
+        ordinary=deps.acquire
+        def unavailable(repo):
+            if repo==p.SERVICES:
+                raise ValueError('GITHUB_TARGET_RUN_NOT_READY')
+            return ordinary(repo)
+        deps.acquire=unavailable
+        deps.filex_config=lambda *_: ({},b'private')
+        def prepare(repo,home,control,head,*,assert_current):
+            self.assertEqual(repo.name,'filex-ngs-services')
+            self.assertEqual(head,A)
+            self.assertIsNone(assert_current(head))
+            self.calls.append(('filex',head))
+            return {'target':p.FILEX,'sha':head,'state':'registered'}
+        deps.prepare_filex=prepare
+        out=p.run_once(deps,self.home,self.control,fetch=self.fetch)
+        self.assertEqual(out['backend-stack']['state'],'pending')
+        self.assertEqual(out[p.FILEX],{'state':'ready','sha':A})
+        self.assertIn(('filex',A),self.calls)
+        deps.acquire=ordinary
+        def can_prepare(verified, repo, home, control, *, assert_current, filex_ready, host):
+            self.assertFalse(filex_ready(A))
+            self.assertFalse(filex_ready(B))
+            out={key:{'state':'ready'} for key in p.SERVICE_TARGETS}
+            out['backend-stack']={'state':'pending','code':'FILEX_COMPANION_NOT_ACTIVE'}
+            return out
+        deps.prepare_services=can_prepare
+        deps.filex_active=lambda *args: False
+        deps.prepare_filex=lambda *args,**kw:{'target':p.FILEX,'sha':A,'state':'registered'}
+        out=p.run_once(deps,self.home,self.control,fetch=self.fetch)
+        self.assertEqual(out['backend-stack'],{'sha':A,'state':'pending','code':'FILEX_COMPANION_NOT_ACTIVE'})
+        self.assertEqual(out[p.FILEX],{'sha':A,'state':'ready'})
+
     def test_same_owner_job_lock_prevents_overlapping_work(self):
         with p.private_job_lock(self.control) as first:
             self.assertTrue(first)

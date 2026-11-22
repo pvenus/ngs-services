@@ -112,11 +112,14 @@ def acquire(github, repo):
     workflow = github.metadata(prefix + "actions/workflows/" + WORKFLOW.rsplit("/", 1)[-1])
     wid = number(workflow.get("id"))
     need(workflow.get("path") == WORKFLOW, "FILEX_WORKFLOW_MISMATCH")
-    runs = github.metadata(prefix + f"actions/workflows/{wid}/runs?" + urlencode(
-        {"branch": "main", "event": "push", "head_sha": head, "per_page": 1})).get("workflow_runs")
+    runs_route = prefix + f"actions/workflows/{wid}/runs?" + urlencode(
+        {"branch": "main", "event": "push", "head_sha": head, "per_page": 1})
+    runs = github.metadata(runs_route).get("workflow_runs")
     need(type(runs) is list and len(runs) == 1, "FILEX_WORKFLOW_NOT_READY")
-    run = runs[0]
-    rid, attempt = number(run.get("id")), number(run.get("run_attempt"))
+    rid, attempt = number(runs[0].get("id")), number(runs[0].get("run_attempt"))
+    run = github.metadata(prefix + f"actions/runs/{rid}")
+    need(number(run.get("id")) == rid and number(run.get("run_attempt")) == attempt,
+         "FILEX_WORKFLOW_NOT_READY")
     repo_id = int(number(run["repository"]["id"]))
     need(run.get("workflow_id") == int(wid) and run.get("path") == WORKFLOW
          and run.get("head_sha") == head and run.get("head_branch") == "main"
@@ -149,6 +152,10 @@ def acquire(github, repo):
              and not members[0].flag_bits & 1, "FILEX_ARTIFACT_SCOPE_INVALID")
         proof = json_load(archive.read(members[0]))
     need(proof == source_proof(repo, head, rid, attempt), "FILEX_GIT_PROOF_MISMATCH")
+    latest = github.metadata(runs_route).get("workflow_runs")
+    need(type(latest) is list and len(latest) == 1 and number(latest[0].get("id")) == rid
+         and number(latest[0].get("run_attempt")) == attempt and latest[0].get("status") == "completed"
+         and latest[0].get("conclusion") == "success", "FILEX_WORKFLOW_NOT_READY")
     need(current_main(github) == head, "FILEX_MAIN_ADVANCED")
     return proof, {"artifactId": aid, "artifactSha256": digest(raw)}
 
@@ -203,17 +210,34 @@ finally:
 class IsolatedDocker:
     """Fixed Mac backend. Never references a Compose project, tag, or host mount."""
     executable = "/opt/homebrew/bin/docker"
-    context = "colima-ngs-s3"
     platform = "linux/arm64"
     architecture = "arm64"
 
+    def __init__(self, home=None):
+        self.home = Path.home() if home is None else Path(home)
+        self.socket = self.home / "Workspaces/Filex/runtime/colima/filex/docker.sock"
+
     def call(self, *args, data=None, timeout=120):
-        env = {"HOME": str(Path.home()), "PATH": "/opt/homebrew/bin:/usr/bin:/bin"}
-        result = subprocess.run([self.executable, "--context", self.context, *args],
-                                input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                env=env, timeout=timeout, check=False)
+        selected = self.socket.lstat()
+        need(self.socket.resolve(strict=True) == self.socket and stat.S_ISSOCK(selected.st_mode)
+             and selected.st_uid == os.getuid(), "FILEX_ISOLATED_DOCKER_UNAVAILABLE")
+        # No user-selected context/daemon, registry credentials, or host mounts.
+        with tempfile.TemporaryDirectory(prefix=".filex-docker-client-") as settings:
+            env = {"HOME": str(self.home), "PATH": "/opt/homebrew/bin:/usr/bin:/bin",
+                   "DOCKER_CONFIG": settings}
+            result = subprocess.run([self.executable, "--host", "unix://" + str(self.socket), *args],
+                                    input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    env=env, timeout=timeout, check=False)
         need(result.returncode == 0 and len(result.stdout) <= LIMIT, "FILEX_ISOLATED_DOCKER_FAILED")
         return result.stdout
+
+    def verify_image(self, image):
+        need(matches(IMAGE_ID,image), "FILEX_IMAGE_ID_INVALID")
+        built = json_load(self.call("image", "inspect", image, timeout=5))
+        need(type(built) is list and len(built) == 1 and built[0].get("Id") == image
+             and built[0].get("Architecture") == self.architecture and built[0].get("Os") == "linux",
+             "FILEX_IMAGE_ID_INVALID")
+        return True
 
     def build_and_smoke(self, context, base):
         need(matches(BASE, base), "FILEX_BASE_NOT_PINNED")
@@ -228,11 +252,7 @@ class IsolatedDocker:
         self.call("build", "--network=none", "--pull=false", "--platform", self.platform,
                   "--iidfile", str(iid), str(context), timeout=240)
         image = iid.read_text().strip()
-        need(matches(IMAGE_ID, image), "FILEX_IMAGE_ID_INVALID")
-        built = json_load(self.call("image", "inspect", image))
-        need(type(built) is list and len(built) == 1 and built[0].get("Id") == image
-             and built[0].get("Architecture") == self.architecture and built[0].get("Os") == "linux",
-             "FILEX_IMAGE_ID_INVALID")
+        self.verify_image(image)
         try:
             self.call("run", "--rm", "--pull=never", "--cidfile", str(cid), "--network=none",
                       "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",

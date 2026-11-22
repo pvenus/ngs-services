@@ -129,6 +129,34 @@ class EvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(Refused,error):
                 candidate.acquire_target_candidate(fx.repo,transport=fx)
 
+    def test_filex_transport_only_uses_own_routes_and_keeps_bearer_off_redirect(self):
+        prefix='repos/pvenus/ngs-services/'
+        url='https://productionresultssa12.blob.core.windows.net/pkg?sig=fixture'
+        wire=Wire(Response(raw=b'{}'),Response(raw=b'{}'),Response(status=302,location=url),Response(raw=b'abc'))
+        reads=[]
+        def keychain():
+            reads.append(1)
+            return 'github_pat_'+'f'*40
+        gh=candidate.FilexGitHubEvidence(token=keychain,opener=wire)
+        self.assertEqual(gh.metadata(prefix+candidate.MAIN),{})
+        self.assertEqual(reads,[])
+        self.assertEqual(gh.metadata(prefix+'actions/workflows/prepare-filex-writer.yml'),{})
+        self.assertEqual(gh.read(prefix+'actions/artifacts/7/zip',limit=3),b'abc')
+        self.assertEqual(reads,[1])
+        self.assertNotIn('Authorization',wire.calls[0][1])
+        self.assertIn('Authorization',wire.calls[1][1])
+        self.assertIn('Authorization',wire.calls[2][1])
+        self.assertNotIn('Authorization',wire.calls[3][1])
+        for denied in (
+            prefix+'actions/workflows/prepare-service-targets.yml',
+            prefix+'actions/runs/3/artifacts?name=service-targets-'+'a'*40+'-1&per_page=2',
+            'repos/pvenus/ngs-workers/actions/artifacts/7/zip',
+            prefix+'actions/artifacts/7/zip?unexpected=1',
+        ):
+            with self.assertRaisesRegex(Refused,'ROUTE_DENIED'):
+                gh.route_kind(denied)
+        self.assertEqual(len(wire.calls),4)
+
     def test_fixed_transport_keeps_token_off_public_read_and_asset_redirect(self):
         fx=EvidenceFixture()
         url='https://productionresultssa12.blob.core.windows.net/pkg?sig=fixture'

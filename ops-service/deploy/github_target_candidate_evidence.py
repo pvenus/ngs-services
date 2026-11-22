@@ -59,8 +59,12 @@ class TargetGitHubEvidence(KeychainGitHubEvidence):
             headers['Authorization'] = 'Bearer ' + self._pat
         return headers
 
+    @staticmethod
+    def route_kind(route):
+        return _route(route)
+
     def metadata(self, route, *, authorized=None):
-        kind = _route(route)
+        kind = self.route_kind(route)
         need(kind != 'archive' and (authorized is None or authorized is (kind=='actions')),
              'GITHUB_TARGET_ROUTE_DENIED')
         raw = self._request('https://'+API+'/'+route,headers=self._headers(kind),
@@ -73,7 +77,7 @@ class TargetGitHubEvidence(KeychainGitHubEvidence):
         return value
 
     def archive(self, route, expected_bytes):
-        need(_route(route) == 'archive' and type(expected_bytes) is int and 0<expected_bytes<=LIMIT,
+        need(self.route_kind(route) == 'archive' and type(expected_bytes) is int and 0<expected_bytes<=LIMIT,
              'GITHUB_TARGET_ROUTE_DENIED')
         location = self._request('https://'+API+'/'+route,headers=self._headers('archive'),
                                  status=302,limit=expected_bytes,timeout=12)
@@ -85,6 +89,27 @@ class TargetGitHubEvidence(KeychainGitHubEvidence):
 
     def read(self, *_args, **_kwargs):
         raise Refused('GITHUB_TARGET_ROUTE_DENIED')
+
+
+class FilexGitHubEvidence(TargetGitHubEvidence):
+    """Strict single-family Filex Actions transport backed by the same read-only PAT."""
+    @staticmethod
+    def route_kind(route):
+        prefix = 'repos/pvenus/ngs-services/'
+        need(type(route) is str and route.startswith(prefix),'GITHUB_TARGET_ROUTE_DENIED')
+        path = route[len(prefix):]
+        if path == MAIN:
+            return 'main'
+        if ARTIFACT_DOWNLOAD.fullmatch(path):
+            return 'archive'
+        allowed = re.fullmatch(
+            rf'actions/(?:workflows/(?:prepare-filex-writer\.yml|{ID}/runs\?branch=main&event=push&head_sha={SHA_TEXT}&per_page=1)'
+            rf'|runs/{ID}(?:/artifacts\?name=filex-concept-writer-{SHA_TEXT}-{ID}&per_page=2)?|artifacts/{ID})',path)
+        need(allowed,'GITHUB_TARGET_ROUTE_DENIED')
+        return 'actions'
+
+    def read(self, route, *, limit):
+        return self.archive(route, limit)
 
 
 def canonical_target_main(repo_name, *, transport=None):

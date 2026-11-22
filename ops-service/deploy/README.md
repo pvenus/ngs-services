@@ -293,7 +293,7 @@ The supervisor owns a separate non-blocking owner-only flock for its whole run.
 It writes private, atomic `deploy-control/ops-candidate-preparation-status.json`
 (`ops.candidate-preparation-status.v1`), with a UTC `checkedAt` and exact fixed
 `targets` rows `{state, sha?, code?}`. No paths, raw output, auth headers or
-secrets are emitted. The Filex writer source-preparation helper is separate;
-the supervisor does not provision or run it, registers no Filex apply target,
-and returns `filex-writer: not_configured`. A staged Filex receipt must never
-be interpreted as active compatibility for a Backend Stack candidate.
+secrets are emitted. Filex Writer preparation is off by default; see
+[the separately pinned, manual-only Filex candidate path](FILEX-PREPARATION.md).
+A staged Filex receipt must never be interpreted as active compatibility for
+a Backend Stack candidate.

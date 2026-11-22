@@ -46,6 +46,8 @@ class GitHub:
             return {"id": 1, "path": m.WORKFLOW}
         if "/runs?" in route:
             return {"workflow_runs": [self.run]}
+        if route.endswith("/actions/runs/2"):
+            return self.run
         if "/artifacts?" in route:
             return {"total_count": 1, "artifacts": [{"id": 4}]}
         assert route.endswith("/artifacts/4")
