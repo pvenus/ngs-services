@@ -14,7 +14,9 @@ class FilexPrerequisite(unittest.TestCase):
     def setUpClass(cls):
         cls.repo = Path(__file__).resolve().parents[2]
         cls.head = git(cls.repo,'rev-parse','HEAD').decode().strip()
-        cls.previous = git(cls.repo,'rev-parse','HEAD^').decode().strip()
+        # The prior observed deployment SHA is a fixture receipt identity.
+        # Only the exact current Git closure must exist in a shallow checkout.
+        cls.previous = '1'*40 if cls.head != '1'*40 else '2'*40
         cls.root, cls.files = closure(cls.repo,cls.head)
         cls.prepared_at = '2026-11-22T15:00:00Z'
         cls.deployed_at = '2026-11-22T16:00:00Z'
