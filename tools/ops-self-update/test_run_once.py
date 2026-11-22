@@ -1,4 +1,5 @@
 import io
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -6,6 +7,8 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import urllib.error
+from email.message import Message
 from unittest.mock import patch
 
 import run_once as R
@@ -57,6 +60,72 @@ class Evidence(unittest.TestCase):
         for value in variants:
             self.assertIsNone(R.verify_workflow({'workflow_runs':[result(**value)]},N),value)
         self.assertIsNone(R.verify_workflow({'workflow_runs':[result(),result(run_attempt=2,conclusion=None,status='queued')]},N))
+    def test_only_fixed_authenticated_actions_get_and_no_redirect_handler(self):
+        dummy='github_pat_'+'Z'*60
+        seen=[]
+        class Response(io.BytesIO):
+            status=200
+            def geturl(self):
+                return seen[0].full_url
+        class Opener:
+            def open(self,request,timeout):
+                seen.append(request)
+                return Response(json.dumps({'workflow_runs':[result()]}).encode())
+        with patch.object(R,'keychain_actions_token',return_value=dummy), \
+             patch.object(R.urllib.request,'build_opener',return_value=Opener()) as opener:
+            self.assertEqual(R.github_receipt(N),{'runId':'12','runAttempt':'1'})
+        req=seen[0]
+        self.assertEqual(req.full_url,'https://api.github.com/repos/pvenus/ngs-services/actions/workflows/'
+                         'prepare-ops-release.yml/runs?event=push&branch=main&head_sha='+N+'&per_page=20')
+        self.assertEqual(req.get_method(),'GET')
+        self.assertNotIn('Authorization',req.headers)
+        self.assertEqual(req.unredirected_hdrs['Authorization'],'Bearer '+dummy)
+        proxy,redirect,tls=opener.call_args.args
+        self.assertEqual(proxy.proxies,{})
+        self.assertIsNone(redirect.redirect_request(req,None,302,None,None,'https://elsewhere.example/'))
+        self.assertIsNone(tls._context.keylog_filename)
+        with patch.object(R,'keychain_actions_token') as token:
+            with self.assertRaisesRegex(RuntimeError,'CANONICAL_HEAD_INVALID'):R.github_receipt('not-a-sha')
+            token.assert_not_called()
+
+    def test_safe_http_failure_single_request_no_anonymous_fallback(self):
+        dummy='github_pat_'+'Z'*60
+        cases=[(401,{},'READ_DENIED'),(403,{'X-RateLimit-Remaining':'0'},'RATE_LIMITED'),
+               (403,{'Retry-After':'60'},'RATE_LIMITED'),(403,{},'READ_DENIED'),
+               (429,{},'RATE_LIMITED'),(302,{'Location':'https://elsewhere.example/'},'RESPONSE_INVALID')]
+        for status,fields,code in cases:
+            headers=Message()
+            for k,v in fields.items():headers[k]=v
+            bad=urllib.error.HTTPError('https://api.github.com/',status,'unsafe message',headers,io.BytesIO(b'raw body'))
+            class Opener:
+                def __init__(self):self.count=0
+                def open(self,request,timeout):
+                    self.count+=1
+                    raise bad
+            opening=Opener()
+            with self.subTest(status=status,reason=code),patch.object(R,'keychain_actions_token',return_value=dummy), \
+                 patch.object(R.urllib.request,'build_opener',return_value=opening):
+                with self.assertRaises(RuntimeError) as exc:R.github_receipt(N)
+                self.assertEqual(str(exc.exception),'GITHUB_ACTIONS_'+code)
+                self.assertEqual(opening.count,1)
+
+    def test_keychain_fixed_identity_token_never_transits_argv_or_env_and_errors_sanitized(self):
+        dummy='github_pat_'+'Y'*60
+        with patch.object(R.subprocess,'run',return_value=subprocess.CompletedProcess([],0,(dummy+'\n').encode(),b'')) as run:
+            self.assertEqual(R.keychain_actions_token(),dummy)
+        argv,=run.call_args.args
+        self.assertEqual(argv[:7],['/usr/bin/security','find-generic-password','-a','pvenus/ngs-platform',
+                                  '-s','com.vinus.ops.ngs-local.github-actions-read','-w'])
+        self.assertEqual(argv[7],str(Path.home()/'Library/Keychains/login.keychain-db'))
+        self.assertEqual(set(run.call_args.kwargs['env']),{'HOME','PATH','LANG'})
+        self.assertNotIn(dummy,repr(run.call_args))
+        for rc,text,reason in ((-25300,b'secret-raw','ITEM_MISSING'),(-25308,b'secret-raw','LOCKED_OR_DENIED'),
+                               (1,b'secret-raw','UNAVAILABLE'),(0,b'not fine-grained','ITEM_INVALID')):
+            op=subprocess.CompletedProcess([],rc,b'unsafe content',text)
+            with patch.object(R.subprocess,'run',return_value=op):
+                with self.assertRaises(RuntimeError) as exc:R.keychain_actions_token()
+                self.assertEqual(str(exc.exception),'GITHUB_KEYCHAIN_'+reason)
+
     def test_archive_constraint(self):
         def check(members):
             raw=tar(members)

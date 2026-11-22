@@ -15,10 +15,26 @@ identity. It rebuilds the OPS-only source archive directly from that Git
 commit, checks all extracted paths and local SHA-256, verifies the GitHub
 main ref again, and never downloads from a URL in the release data. The
 server-side artifact is audit evidence, not an unauthenticated binary
-download endpoint. It uses only standard public metadata reads and Git
-HTTPS, no new token or workflow secret. If GitHub access is rate-limited,
-unavailable, the installed commit is not an ancestor within fetched history,
-or the canonical proof doesn't match, nothing is applied.
+download endpoint. The fixed GitHub Actions workflow-runs GET uses the
+existing owner-enrolled fine-grained Actions-read item for `pvenus/ngs-services`
+in the login Keychain (service `com.vinus.ops.ngs-local.github-actions-read`,
+account `pvenus/ngs-platform`). It does not create or modify the Keychain.
+The token remains in process memory and is not passed to Git, redirected,
+printed, or written. Canonical head checks remain credential-free Git HTTPS.
+Missing or rejected auth, rate limits, unavailable GitHub, changed history,
+or mismatched proof leave the existing OPS deployment untouched. There is no
+anonymous Actions fallback.
+
+Source publication alone does not replace the detached installed script.
+An approved operator must compare the installed selector/script digest,
+ensure the existing owner-private roots and both updater/deploy locks are
+idle with no switching journal, save the exact previous executable outside
+the runnable path, and atomically replace only
+`~/Workspaces/OPS/runtime/ops-self-update/run_once.py` with the reviewed
+owner-only regular file (preserve the installed 0500 mode). Preserve
+the LaunchAgent, its interval, installed/status/transaction records, and
+the current web selector. A natural tick verifies the new code. Do not
+manually run the updater as an auth test: an eligible tick can deploy OPS.
 
 Before enabling separately, an operator needs to verify the existing
 LaunchAgent/OPS code and create the owner-private path
@@ -49,6 +65,8 @@ The terminal private `status.json` exposes only:
      "state":"current|pending|unchanged|busy|deployed|rolled_back|previous_attempt_rolled_back|failed",
      "sha":"<known complete installed SHA or null>","checkedAt":"<UTC Z>"}
 
+During a failure the status can include only a sanitized machine `reason`,
+such as `GITHUB_ACTIONS_READ_DENIED` or `GITHUB_ACTIONS_RATE_LIMITED`.
 No service is installed, no access policy changes and no credentials are
 provisioned by this branch.
 

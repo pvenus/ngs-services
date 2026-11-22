@@ -9,12 +9,14 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import ssl
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -32,6 +34,10 @@ PORT=8090
 PYTHON='/opt/homebrew/bin/python3.12'
 SHA=r'[a-f0-9]{40}'
 HEX=r'[a-f0-9]{64}'
+KEYCHAIN_SERVICE='com.vinus.ops.ngs-local.github-actions-read'
+KEYCHAIN_ACCOUNT='pvenus/ngs-platform'  # enrolled item identity; GitHub request is ngs-services only
+FINE_GRAINED=re.compile(rb'(github_pat_[A-Za-z0-9_]{30,240})\n?')
+MAX_RECEIPT=2*1024*1024
 ENV={'HOME':str(Path.home()),'PATH':'/opt/homebrew/bin:/usr/bin:/bin','GIT_CONFIG_NOSYSTEM':'1',
      'GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0','GIT_ALLOW_PROTOCOL':'https'}
 
@@ -87,17 +93,70 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs):return None
 
 
+def keychain_actions_token():
+    home=Path.home()
+    try:
+        result=subprocess.run(
+            ['/usr/bin/security','find-generic-password','-a',KEYCHAIN_ACCOUNT,'-s',KEYCHAIN_SERVICE,
+             '-w',str(home/'Library/Keychains/login.keychain-db')],
+            env={'HOME':str(home),'PATH':'/usr/bin:/bin','LANG':'C'}, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8,check=False)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('GITHUB_KEYCHAIN_LOCKED_OR_DENIED') from None
+    except (OSError,subprocess.SubprocessError):
+        raise RuntimeError('GITHUB_KEYCHAIN_UNAVAILABLE') from None
+    if result.returncode:
+        detail=result.stderr[:1024].strip().lower()
+        if result.returncode in (-25300,(-25300)%256) or detail.endswith(
+                b'the specified item could not be found in the keychain.'):
+            raise RuntimeError('GITHUB_KEYCHAIN_ITEM_MISSING')
+        if result.returncode in (-25308,(-25308)%256,-25293,(-25293)%256) or any(
+                detail.endswith(ending) for ending in (b'user interaction is not allowed.',
+                b'user interaction is required.',b'authorization/authentication failed.')):
+            raise RuntimeError('GITHUB_KEYCHAIN_LOCKED_OR_DENIED')
+        raise RuntimeError('GITHUB_KEYCHAIN_UNAVAILABLE')
+    found=FINE_GRAINED.fullmatch(result.stdout)
+    require(found,'GITHUB_KEYCHAIN_ITEM_INVALID')
+    return found[1].decode('ascii')
+
+
 def github_receipt(head):
-    require(re.fullmatch(SHA,head),'CANONICAL_HEAD_INVALID')
+    require(type(head) is str and re.fullmatch(SHA,head),'CANONICAL_HEAD_INVALID')
     query=urllib.parse.urlencode({'event':'push','branch':'main','head_sha':head,'per_page':20})
     url='https://api.github.com/repos/'+REPO+'/actions/workflows/prepare-ops-release.yml/runs?'+query
-    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
-    request=urllib.request.Request(url,headers={'Accept':'application/vnd.github+json','User-Agent':'ngs-ops-local-release',
-                                               'X-GitHub-Api-Version':'2022-11-28'})
-    with opener.open(request,timeout=10) as r:
-        raw=r.read(2*1024*1024+1)
-    require(len(raw)<=2*1024*1024,'GITHUB_RECEIPT_TOO_LARGE')
-    return verify_workflow(json.loads(raw),head)
+    # No ambient proxy, redirects or SSLKEYLOGFILE. Git canonical ref checks
+    # stay on the existing credential-free Git subprocess, not this transport.
+    request=urllib.request.Request(url,method='GET',headers={'Accept':'application/vnd.github+json',
+          'User-Agent':'ngs-ops-local-release','X-GitHub-Api-Version':'2022-11-28'})
+    request.add_unredirected_header('Authorization','Bearer '+keychain_actions_token())
+    tls=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    tls.load_default_certs()
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect(),
+                                       urllib.request.HTTPSHandler(context=tls))
+    try:
+        with opener.open(request,timeout=10) as response:
+            require(response.status==200 and response.geturl()==url,'GITHUB_ACTIONS_RESPONSE_INVALID')
+            raw=response.read(MAX_RECEIPT+1)
+    except urllib.error.HTTPError as error:
+        code=error.code
+        remaining=error.headers.get('X-RateLimit-Remaining') if error.headers else None
+        retry_after=error.headers.get('Retry-After') if error.headers else None
+        try:error.close()
+        except OSError:pass
+        if code==429 or (code==403 and (remaining=='0' or retry_after is not None)):
+            raise RuntimeError('GITHUB_ACTIONS_RATE_LIMITED') from None
+        if code in (401,403):
+            raise RuntimeError('GITHUB_ACTIONS_READ_DENIED') from None
+        raise RuntimeError('GITHUB_ACTIONS_RESPONSE_INVALID') from None
+    except (OSError,http.client.HTTPException,ValueError):
+        raise RuntimeError('GITHUB_ACTIONS_UNAVAILABLE') from None
+    require(len(raw)<=MAX_RECEIPT,'GITHUB_RECEIPT_TOO_LARGE')
+    try:
+        rows=json.loads(raw)
+        require(type(rows) is dict,'GITHUB_ACTIONS_RECEIPT_INVALID')
+        return verify_workflow(rows,head)
+    except (AttributeError,TypeError,ValueError,RecursionError):
+        raise RuntimeError('GITHUB_ACTIONS_RECEIPT_INVALID') from None
 
 
 def prepare(work, installed):
