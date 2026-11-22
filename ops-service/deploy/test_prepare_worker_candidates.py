@@ -6,6 +6,7 @@ import plistlib
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 import audio_cutover as audio
@@ -90,6 +91,16 @@ class WorkerCandidates(unittest.TestCase):
         self.blocked=set()
         self.calls=[]
         exe=write(self.home/'bin/node',b'fixture must not execute');exe.chmod(0o700)
+        self.image_python=write(self.home/'bin/python3.12',b'fixture must not execute')
+        self.image_python.chmod(0o700)
+        accessible=workers._accessible
+        def fixture_accessible(value, **options):
+            # The runtime intentionally pins this Mac path. Exercise the same
+            # real filesystem/X_OK guards on a fixture on every CI platform.
+            if value=='/opt/homebrew/bin/python3.12':
+                value=str(self.image_python)
+            return accessible(value, **options)
+        self.enterContext(patch.object(workers,'_accessible',side_effect=fixture_accessible))
         db=write(self.runtime/'workflow.sqlite',b'not opened')
         native=self.releases/'workflow-native-audio-resident-github-abcdef1'
         for name in audio.CODE:write(native/name,b'old content')
@@ -215,3 +226,11 @@ class WorkerCandidates(unittest.TestCase):
         self.assertEqual(self.prepare()['targets']['worker-file'],
                          {'state':'blocked','code':'WORKER_REGISTERED_CANDIDATE_DRIFT'})
         self.assertEqual(ready.read_bytes(),original)
+
+    def test_image_requires_executable_pinned_interpreter(self):
+        self.image_python.chmod(0o600)
+        result=self.prepare()['targets']
+        self.assertEqual(result['worker-image'],
+                         {'state':'blocked','code':'WORKER_RUNTIME_DEPENDENCY_UNVERIFIED'})
+        self.assertFalse((self.targets/'worker-image/ready.json').exists())
+        self.assertEqual(result['worker-document'],{'state':'ready'})
