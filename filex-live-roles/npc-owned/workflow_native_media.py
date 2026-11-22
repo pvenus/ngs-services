@@ -16,6 +16,8 @@ from server import Conflict
 CAPABILITY='workflowNativePNGMediaV1'
 DIRECTIONS=('n','ne','e','se','s','sw','w','nw')
 MOTIONS=('walk','run')
+MOTION_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+POSES=('idle','combat')
 RAW='ngs.animation-native-png-sequence.v1'
 ALPHA='ngs.animation-alpha-output.v1'
 RETENTION='retain-native-sequence-independently'
@@ -57,15 +59,29 @@ def frame_row(idx,aid,raw):
 
 
 def scope(kind,b):
-    require(kind in ('animation','frames') and type(b) is dict and
-            set(b)=={'officialRequestId','taskId','projectId','npcId','payloadSha256','motion','direction'}
+    base={'officialRequestId','taskId','projectId','npcId','payloadSha256','motion','direction'}
+    selected={'posePreset','assetSetSha256'}
+    require(kind in ('animation','frames') and type(b) is dict and set(b) in (base,base|selected)
             and b['projectId']=='binari' and txt(re.compile(r'request\.official\.[a-f0-9]{64}'),b['officialRequestId'])
             and txt(re.compile(r'(?:npc|character)\.[A-Za-z0-9][A-Za-z0-9._-]{0,120}'),b['npcId'])
-            and txt(SHA,b['payloadSha256']) and b['motion'] in MOTIONS and b['direction'] in DIRECTIONS,
-            'scope')
+            and txt(SHA,b['payloadSha256']) and b['direction'] in DIRECTIONS,'scope')
     oid,owner,motion,direction=(b[k] for k in ('officialRequestId','npcId','motion','direction'))
-    require(b['taskId']==task(oid,kind+'_'+motion+'_'+direction),'task')
-    return oid,owner,motion,direction
+    if selected<=b.keys():
+        pose,assets=b['posePreset'],b['assetSetSha256']
+        require(pose in POSES and txt(MOTION_ID,motion) and txt(SHA,assets),'selected source')
+        slot=hashlib.sha256(motion.encode('utf-8')).hexdigest()[:16]
+        stem=f'motion_{slot}_{direction}'
+    else:
+        require(motion in MOTIONS,'legacy motion')
+        pose,assets='idle',None
+        stem=f'{motion}_{direction}'
+    require(b['taskId']==task(oid,kind+'_'+stem),'task')
+    return oid,owner,motion,direction,pose,assets,stem
+
+
+def source_binding(oid, direction, motion, pose, assets):
+    base=[oid,'portrait_'+direction,motion]
+    return digest(base if assets is None else [*base,pose,assets])
 
 
 def task(oid,key):
@@ -74,7 +90,7 @@ def task(oid,key):
 
 class WorkflowNativeMedia:
     def _workflow_media_current(self,kind,scope_keys):
-        oid,owner,motion,direction=scope_keys
+        oid,owner,motion,direction,pose,assets,stem=scope_keys
         self.require_no_migration()
         state=self.state(owner);self.require_no_cleanup(state)
         if state['state']!='active':raise Conflict('workflow media owner inactive')
@@ -82,7 +98,7 @@ class WorkflowNativeMedia:
         require(owner in root['characterOrder'] and meta.get('id')==owner
                 and meta.get('creationBasis',{}).get('requestId')==task(oid,'preset'),
                 'current owner')
-        suffix=f'idle/{motion}/{direction}'
+        suffix=f'{pose}/{motion}/{direction}'
         if kind=='animation':
             key=f'idle/portrait/{direction}'
             view=docs.get(f'{owner}/pose-views/{key}.json',{})
@@ -92,9 +108,10 @@ class WorkflowNativeMedia:
                     and txt(PNG,view.get('assetId')),'current native portrait')
             return docs,state,view,suffix
         raw=docs.get(f'{owner}/animation-sequences/{suffix}.json',{})
-        require(raw.get('schemaVersion')==RAW and raw.get('requestId')==task(oid,f'animation_{motion}_{direction}')
+        require(raw.get('schemaVersion')==RAW and raw.get('requestId')==task(oid,'animation_'+stem)
+                and (assets is None or raw.get('sourceBindingHash')==source_binding(oid,direction,motion,pose,assets))
                 and all(raw.get(k)==v for k,v in (('npcId',owner),('generationId',state['generationId']),
-                ('posePreset','idle'),('presetId',motion),('direction',direction))), 'canonical raw sequence')
+                ('posePreset',pose),('presetId',motion),('direction',direction))), 'canonical raw sequence')
         return docs,state,raw,suffix
 
     def _workflow_static_pixel_current(self,b):
@@ -210,11 +227,12 @@ class WorkflowNativeMedia:
         with self.lock():
             _,_,source,_=self._workflow_media_current(kind,parsed)
             return {'motion':b['motion'],'direction':b['direction'],
+                    **({k:b[k] for k in ('posePreset','assetSetSha256')} if 'assetSetSha256' in b else {}),
                     **({'portraitAssetId':source['assetId']} if kind=='animation' else {'sequence':source})}
 
     def workflow_media_publish(self,kind,b,artifact):
         if kind=='portrait-pixel':return self.workflow_static_pixel_publish(b,artifact)
-        parsed=scope(kind,b);oid,owner,motion,direction=parsed
+        parsed=scope(kind,b);owner=parsed[1]
         # Structural checks precede lock; ownership and current dependencies
         # are checked under the existing Filex lock at commit, never at model start.
         require(type(artifact) is dict and set(artifact)==(
@@ -262,8 +280,9 @@ class WorkflowNativeMedia:
             require(total<=MAX_ASSETS,'raw aggregate bound')
             by_id[aid]=raw;rows.append(frame_row(idx,aid,raw))
         manifest={'schemaVersion':RAW,'requestId':b['taskId'],'npcId':b['npcId'],
-                  'generationId':state['generationId'],'posePreset':'idle','presetId':b['motion'],
-                  'direction':b['direction'],'sourceBindingHash':digest([b['officialRequestId'],'portrait_'+b['direction'],b['motion']]),
+                  'generationId':state['generationId'],'posePreset':b.get('posePreset','idle'),'presetId':b['motion'],
+                  'direction':b['direction'],'sourceBindingHash':source_binding(b['officialRequestId'],
+                      b['direction'],b['motion'],b.get('posePreset','idle'),b.get('assetSetSha256')),
                   'frameCount':len(rows),'fps':fps,'width':w,'height':h,'frames':rows}
         return {'animation-sequences/'+suffix+'.json':manifest},by_id
 

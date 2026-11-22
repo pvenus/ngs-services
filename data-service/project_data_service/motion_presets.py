@@ -6,7 +6,8 @@ from .filex_cas_transport import FilexCASTransport
 PREFIX='canonical-files/binari/motion-presets/'
 CONFIG=Path.home()/'Library/Application Support/NPCGen/pds-filex-motion-presets-cas.json'
 ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
-DIRECTIONS={'n','ne','e','se','s','sw','w','nw'}
+DIRECTION_ORDER=('n','ne','e','se','s','sw','w','nw')
+DIRECTIONS=set(DIRECTION_ORDER)
 WORKFLOW_CAS_TIMEOUT=1.5
 def factory():
  try:c=json.loads(private_read(CONFIG))
@@ -41,6 +42,19 @@ class MotionPresets:
   return s
  def list(self):
   s=self.snapshot();return {'schemaVersion':'ngs.motion-presets.v2','sourceVersion':s['sourceVersion'],'presets':[{**p,'presetHash':digest(p)}for p in s['documents'].values()]}
+ def selected_asset_sets(self,selection):
+  """Resolve all frozen selections from one authenticated catalog snapshot."""
+  docs=self.snapshot()['documents']
+  selected={}
+  for pick in selection:
+   pid,pose=pick['presetId'],pick['posePreset']
+   p=docs.get('presets/'+pid+'.json')
+   require(p is not None and (p['presetId'],p['posePreset'])==(pid,pose),'MOTION_PRESET_SELECTION_SCOPE')
+   hashes={row['direction']:row['sha256'] for row in p['directions']}
+   fingerprint=digest(['ngs.motion-assets.v1',pid,pose,[[d,hashes[d]] for d in DIRECTION_ORDER]])
+   require(fingerprint==pick['assetSetSha256'],'MOTION_PRESET_SELECTION_CHANGED')
+   selected[pid]=(digest(p),hashes)
+  return selected
  def get(self,preset_id,direction,*,expected_preset_hash=None,max_asset_bytes=None):
   require(ID.fullmatch(preset_id)and direction in DIRECTIONS,'MOTION_PRESET_SELECTOR')
   s=self.snapshot();p=s['documents'].get('presets/'+preset_id+'.json');require(p is not None,'MOTION_PRESET_NOT_FOUND');row=next(x for x in p['directions']if x['direction']==direction)

@@ -11,6 +11,7 @@ from .workflow_delete_claim import PrivatePlannerClaim,ClaimDenied
 from .filex_npc_authority import FilexCurrentNPC
 from .filex_read import digest, require
 from .pds_owned_transport import OwnedNPCTransport
+from .motion_presets import MotionPresets
 
 PATH='/v1/npcs/ownership/workflow-delete'
 NPC_ROOT='canonical-files/binari/npcs'
@@ -23,9 +24,9 @@ class WorkflowDeleteDenied(Exception):
 
 
 class WorkflowDelete:
-    def __init__(self,source,verifier):
+    def __init__(self,source,verifier,motion=None):
         require(isinstance(source,FilexCurrentNPC) and (callable(verifier) or isinstance(verifier,PrivatePlannerClaim)),'WORKFLOW_DELETE_AUTHORITY_REQUIRED')
-        self.source,self.verifier=source,verifier
+        self.source,self.verifier,self.motion=source,verifier,MotionPresets() if motion is None else motion
         self._folder_authorized=ContextVar('npc_storage_delete_authorized',default=None)
 
     def capability(self):
@@ -38,8 +39,8 @@ class WorkflowDelete:
     def apply(self,envelope):
         if isinstance(self.verifier,PrivatePlannerClaim):
             require(type(envelope) is dict and set(envelope)=={'claim'},'WORKFLOW_DELETE_ENVELOPE')
-            with self.verifier.authorized(envelope['claim']) as identity:
-                return self._commit(self._resolve(identity))
+            with self.verifier.authorized(envelope['claim']) as (identity,selection):
+                return self._commit(self._resolve(identity),selection=selection)
         require(type(envelope) is dict and set(envelope)=={'binding','claim'},'WORKFLOW_DELETE_ENVELOPE')
         b=envelope['binding']
         require(type(b) is dict and set(b)==KEYS and type(envelope['claim']) is dict
@@ -85,10 +86,10 @@ class WorkflowDelete:
         @contextmanager
         def authorize(claim):
             try:
-                with self.verifier.authorized(claim) as identity:
+                with self.verifier.authorized(claim) as (identity,selection):
                     exact={'operationId':identity['taskId'],
                            'target':{'root':NPC_ROOT,'path':identity['npcId'],'kind':'directory'}}
-                    token=self._folder_authorized.set((exact,identity))
+                    token=self._folder_authorized.set((exact,identity,selection))
                     try:yield exact
                     finally:self._folder_authorized.reset(token)
             except ClaimDenied as exc:raise StorageClaimDenied() from exc
@@ -96,11 +97,11 @@ class WorkflowDelete:
         def execute(command):
             selected=self._folder_authorized.get()
             if selected is None or command!=selected[0]:raise StorageClaimDenied()
-            return self._commit(self._resolve(selected[1]),target=command['target'])
+            return self._commit(self._resolve(selected[1]),target=command['target'],selection=selected[2])
 
         return AuthorizedStorage(authorize,execute,ready)
 
-    def _commit(self,b,*,target=None):
+    def _commit(self,b,*,target=None,selection=()):
         bh=digest(b);rid=b['taskId'];owner=b['npcId'];revision=b['expectedRevision']
         with self.source.store.factory() as transport:
             require(isinstance(transport,OwnedNPCTransport),'WORKFLOW_DELETE_FILEX_AUTHORITY_REQUIRED')
@@ -118,6 +119,11 @@ class WorkflowDelete:
                 metadata['_pdsCurrent']={'revision':revision+1,'savedAt':datetime.now(timezone.utc).isoformat(),
                                         'note':'Workflow exact NPC canonical deletion','operationHash':bh,
                                         'documentHash':digest(doc)}
+                if selection:
+                    # Fail before any NPC write when even one requested
+                    # asset-set/pose has drifted. Confirmed deletion receipts
+                    # remain replayable if the catalog later changes.
+                    self.motion.selected_asset_sets(selection)
             receipt=transport.workflow_delete_character(b,metadata,target=target) if target is not None else transport.workflow_delete_character(b,metadata)
         require(type(receipt) is dict and receipt.get('requestId')==rid and receipt.get('inputHash')==bh
                 and receipt.get('deletedCharacter')==owner and receipt.get('generationId')==b['generationId']

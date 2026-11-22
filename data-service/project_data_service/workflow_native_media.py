@@ -7,6 +7,7 @@ from .filex_npc_authority import FilexCurrentNPC
 from .filex_read import require
 from .pds_owned_transport import OwnedNPCTransport
 from .workflow_delete_claim import ClaimDenied,PrivatePlannerClaim
+from .motion_presets import MotionPresets
 
 PREFIX='/v1/npcs/ownership/workflow-'
 CAPABILITY='workflowNativePNGMediaV1'
@@ -16,13 +17,22 @@ ASSET=re.compile(r'[a-f0-9]{64}\.png')
 
 
 class NativeMedia:
-    def __init__(self,source,verifier):
+    def __init__(self,source,verifier,motion=None):
         require(isinstance(source,FilexCurrentNPC) and isinstance(verifier,PrivatePlannerClaim),'WORKFLOW_MEDIA_AUTHORITY')
-        self.source,self.verifier=source,verifier
+        self.source,self.verifier,self.motion=source,verifier,MotionPresets() if motion is None else motion
 
     @staticmethod
-    def _check(tx,kind):
-        require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get('workflowStaticPortraitPixelV1' if kind=='portrait-pixel' else CAPABILITY) is True,'WORKFLOW_MEDIA_WRITER')
+    def _check(tx,kind,selected=False):
+        require(isinstance(tx,OwnedNPCTransport),'WORKFLOW_MEDIA_WRITER')
+        capabilities=tx.capabilities()
+        require(capabilities.get('workflowStaticPortraitPixelV1' if kind=='portrait-pixel' else CAPABILITY) is True
+                and (not selected or capabilities.get('workflowSelectedMotionV1') is True),'WORKFLOW_MEDIA_WRITER')
+
+    def _selected_source(self,binding):
+        preset_id=binding['motion']
+        pin={'presetId':preset_id,**{k:binding[k] for k in ('posePreset','assetSetSha256')}}
+        preset_hash,hashes=self.motion.selected_asset_sets((pin,))[preset_id]
+        return {'referenceSha256':hashes[binding['direction']],'referencePresetHash':preset_hash}
 
     def capability(self,kind):
         with self.verifier.snapshot(),self.source.store.factory() as tx:self._check(tx,kind)
@@ -33,12 +43,15 @@ class NativeMedia:
         require(type(envelope) is dict and set(envelope)==keys[action],'WORKFLOW_MEDIA_ENVELOPE')
         # Pin only exact current claim in a short readonly transaction. Do not
         # block planner transitions across Filex HTTP, PNG decode, or disk writes.
-        authority=(self.verifier.authorized_static_pixel(envelope['claim']) if kind=='portrait-pixel' else
-                   self.verifier.authorized_media(envelope['claim'],kind))
-        with authority as authorized:
+        def authority():
+            return (self.verifier.authorized_static_pixel(envelope['claim']) if kind=='portrait-pixel' else
+                    self.verifier.authorized_media(envelope['claim'],kind))
+        with authority() as authorized:
             binding=dict(authorized)
+        selected='assetSetSha256' in binding
+        reference=self._selected_source(binding) if selected and action!='asset' else None
         with self.source.store.factory() as tx:
-            self._check(tx,kind)
+            self._check(tx,kind,selected)
             if action=='asset':
                 aid=envelope['assetId']
                 require(type(aid) is str and ASSET.fullmatch(aid),'WORKFLOW_MEDIA_ASSET')
@@ -48,7 +61,16 @@ class NativeMedia:
                          {frame['assetId'] for frame in current['sequence']['frames']})
                 require(aid in allowed,'WORKFLOW_MEDIA_ASSET_SCOPE')
                 return tx.asset_get(aid)
-            if action=='read':return tx.workflow_media(kind,action,binding)
+            if action=='read':
+                value=tx.workflow_media(kind,action,binding)
+                if selected and kind=='animation':return {**value,**reference}
+                return value
+            if selected:
+                # Catalog/writer I/O may have interleaved with a task change.
+                # Recheck before handing off to the existing Filex owner lock,
+                # without holding SQLite over the native-media transfer.
+                with authority() as fresh:
+                    require(fresh==binding,'WORKFLOW_MEDIA_CLAIM_CHANGED')
             ack=tx.workflow_media(kind,action,binding,envelope['artifact'])
             require(ack=={'ok':True},'WORKFLOW_MEDIA_ACK')
             return ack

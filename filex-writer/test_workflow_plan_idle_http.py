@@ -26,7 +26,7 @@ class Tests(unittest.TestCase):
     def start_new_writer(self):
         self.start_idle_writer()
 
-    def start_idle_writer(self,*,workflow_idle_portrait=False,workflow_direction_portrait=False,workflow_native_media=False):
+    def start_idle_writer(self,*,workflow_idle_portrait=False,workflow_direction_portrait=False,workflow_native_media=False,workflow_npc_folder_delete=False):
         from pathlib import Path
         from project_data_service.filex_npc_authority import FilexCurrentNPC
         from project_data_service.filex_npc_store import FilexNPCStore
@@ -34,7 +34,8 @@ class Tests(unittest.TestCase):
         from project_data_service.workflow_preset import WorkflowPreset
         _,url=self.start(handler(self.writer,self.original_token,workflow_delete=True,workflow_preset=True,
                                  workflow_representative=True,workflow_portrait=True,workflow_idle_plan=True,
-                                 workflow_idle_portrait=workflow_idle_portrait,workflow_direction_portrait=workflow_direction_portrait,workflow_native_media=workflow_native_media))
+                                 workflow_idle_portrait=workflow_idle_portrait,workflow_direction_portrait=workflow_direction_portrait,workflow_native_media=workflow_native_media,
+                                 workflow_npc_folder_delete=workflow_npc_folder_delete))
         cfg={'schemaVersion':'pds-filex-cas.v1','projectId':'binari','scope':'npc','enabled':True,
              'endpoint':url,'tokenFile':str(Path(self.writer.root).parent/'writer-token')}
         s=FilexCurrentNPC(FilexNPCStore(lambda:OwnedNPCTransport(cfg)))

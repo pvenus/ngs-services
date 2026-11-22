@@ -1,8 +1,11 @@
 import base64
 import hashlib
 import json
+from pathlib import Path
 import sqlite3
 import struct
+import subprocess
+import sys
 import unittest
 import zlib
 from unittest.mock import patch
@@ -29,7 +32,7 @@ def image(w,h,value):
 def b64(data):return base64.b64encode(data).decode()
 
 
-class Tests(unittest.TestCase):
+class NativeFixture(unittest.TestCase):
     start=portrait.Tests.start
     post=portrait.Tests.post
     plan=portrait.Tests.plan
@@ -45,7 +48,8 @@ class Tests(unittest.TestCase):
     upload=portrait.Tests.upload
 
     def start_new_writer(self):
-        idle.Tests.start_idle_writer(self,workflow_idle_portrait=True,workflow_direction_portrait=True,workflow_native_media=True)
+        idle.Tests.start_idle_writer(self,workflow_idle_portrait=True,workflow_direction_portrait=True,workflow_native_media=True,
+                                    workflow_npc_folder_delete=True)
 
     def setUp(self):
         portrait.Tests.setUp(self)
@@ -105,7 +109,7 @@ class Tests(unittest.TestCase):
             frames.append({'index':i,'sourceTimestamp':i/fps,'assetId':pp,'rawAssetId':f['assetId'],
                            'alphaAssetId':ap,'sourceBounds':[l,t,r,b]})
         alpha={**lineage,'schemaVersion':'ngs.animation-alpha-output.v1','requestId':aid,'rawRequestId':raw['requestId'],
-               'rawManifestId':f"canonical-files/binari/npcs/{raw['npcId']}/animation-sequences/idle/{raw['presetId']}/{raw['direction']}.json",
+               'rawManifestId':f"canonical-files/binari/npcs/{raw['npcId']}/animation-sequences/{raw['posePreset']}/{raw['presetId']}/{raw['direction']}.json",
                'rawManifestHash':rawhash,'dependencyHash':'a'*64,'width':w,'height':h,'frames':rows,
                'inferenceProvenance':{'engine':'birefnet-sam2','modelId':'approved','modelDigest':'a'*64,
                                       'policyHash':'b'*64,'inferenceRequestId':aid,'fixture':False},
@@ -117,6 +121,7 @@ class Tests(unittest.TestCase):
                'alphaManifestHash':digest(alpha),'normalizationHash':digest({'canvas':canvas,'pixelPolicy':policy})}
         return {'claim':claim,'artifact':{'alpha':alpha,'pixel':pixel,'assets':assets}}
 
+class Tests(NativeFixture):
     def test_actual_raw_and_corrected_33_frame_route_keeps_original_and_other_files(self):
         for kind in SCHEMAS:
             with urlopen(self.base+PREFIX+kind,timeout=5) as r:
@@ -250,3 +255,229 @@ class Tests(unittest.TestCase):
         m=json.loads(after[prefix+'pose-views/idle/pixel/e.json'])
         self.assertEqual((m['sourceArtifactId'],m['referenceArtifactId']),(predecessor,center_aid))
         self.assertEqual(self.writer.owner_files('npc.other'),other)
+
+
+class SelectedTests(NativeFixture):
+    def setUp(self):
+        self.picks=[]
+        self.references={}
+        for preset_id,pose in (('sword-attack','combat'),('sword-attack-2d','combat'),('walk-tiny','idle')):
+            clips={d:b'\0\0\0\x18ftypmp42'+f'{preset_id}:{d}'.encode() for d in DIRS}
+            preset={'schemaVersion':'ngs.motion-preset.v1','presetId':preset_id,'posePreset':pose,'label':preset_id,
+                'policy':{'motionInstruction':'Exact motion','framingPolicy':{'schemaVersion':'ngs.animation-motion-safe-frame.v1',
+                    'maxHeightRatio':0.8,'maxWidthRatio':0.8,'offsetY':0,'allowUpscale':False},
+                    'equipmentPolicy':{'heldItems':'','weaponState':'','excludedItems':[]}},
+                'directions':[{'direction':d,'assetId':sha(v)+'.mp4','sha256':sha(v),'bytes':len(v),
+                               'frameCount':2,'fps':24,'cycleCount':1} for d,v in clips.items()]}
+            self.references[preset_id]=(preset,clips)
+            self.picks.append({'presetId':preset_id,'posePreset':pose,
+                               'assetSetSha256':digest(['ngs.motion-assets.v1',preset_id,pose,
+                                                      [[d,sha(clips[d])] for d in DIRS]])})
+        super().setUp()
+        root=Path(self.writer.root).parent
+        path=root/'motion-fixture'
+        path.mkdir(mode=0o700)
+        token=root/'motion-token'
+        token.write_text('fixture-only'*4+'\n')
+        token.chmod(0o600)
+        script="""from server import handler,ThreadingHTTPServer
+from motion_store import MotionStore
+import pathlib,sys
+s=ThreadingHTTPServer(('127.0.0.1',0),handler(MotionStore(sys.argv[1]),pathlib.Path(sys.argv[2]).read_text().strip()))
+print(s.server_port,flush=True)
+s.serve_forever()
+"""
+        proc=subprocess.Popen([sys.executable,'-B','-c',script,str(path),str(token)],
+                cwd=Path(__file__).resolve().parents[1]/'filex-live-roles/motion-presets',
+                stdout=subprocess.PIPE,text=True)
+        def clean():
+            proc.terminate()
+            proc.wait(timeout=5)
+            proc.stdout.close()
+        self.addCleanup(clean)
+        port=int(proc.stdout.readline())
+        from project_data_service.motion_presets import MotionPresets
+        from project_data_service.filex_cas_transport import FilexCASTransport
+        cfg={'schemaVersion':'pds-filex-cas.v1','projectId':'binari','enabled':True,
+             'tokenFile':str(token),'endpoint':f'http://127.0.0.1:{port}'}
+        self.motion=MotionPresets(lambda:FilexCASTransport(cfg))
+        self.pds.workflow_native_media.motion=self.motion
+        for i,(preset,clips) in enumerate(self.references.values()):
+            if preset['presetId']=='sword-attack-2d':
+                source,origin=self.references['sword-attack']
+                variant={**preset,'variant':{'kind':'2d','sourcePresetId':source['presetId'],'sourcePresetHash':digest(source)}}
+                from contextlib import nullcontext
+                self.motion.publish_2d('request.official.'+'e'*64,source,variant,clips.__getitem__,nullcontext)
+                self.references[preset['presetId']]=(variant,clips)
+            else:
+                self.seed(preset,clips,f'fixture-{i:02d}')
+
+    def seed(self,preset,clips,rid,expected=None):
+        self.motion.register({'requestId':rid,'expectedHash':expected,'preset':preset,
+                              'assets':{sha(v)+'.mp4':b64(v) for v in clips.values()}})
+
+    def plan(self,*args,**kwargs):
+        super().plan(*args,**kwargs)
+        oid=self.c['officialRequestId']
+        with sqlite3.connect(self.db) as db:
+            payload=json.loads(db.execute('SELECT payload FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()[0])
+            payload.pop('includeCombat')
+            payload.update(schemaVersion='ngs.npc-one-stop.selection.v1',motionSelection=self.picks)
+            self.c['payloadSha256']=digest(payload)
+            db.execute('UPDATE workflow_runs SET schema_version=?,payload=?,payload_sha256=? WHERE official_request_id=?',
+                       (payload['schemaVersion'],encoded(payload).decode(),self.c['payloadSha256'],oid))
+
+    def selected_media(self,kind,parent,pick,d='e'):
+        oid=self.c['officialRequestId']
+        key=f"{kind}_motion_{sha(pick['presetId'].encode())[:16]}_{d}"
+        ident='workflow.task.'+digest([oid,key])
+        role,typ,io=('animation','npc.animation-native-png','output') if kind=='animation' else (
+                    'postprocess','npc.frames-postprocess','input')
+        inp={'npcId':self.c['npcId'],'direction':d,'motion':pick['presetId'],'posePreset':pick['posePreset'],
+             'assetSetSha256':pick['assetSetSha256'],io:'native-png'}
+        with sqlite3.connect(self.db) as db:
+            db.execute("INSERT INTO workflow_tasks VALUES(?,?,?,?,?,?,NULL,11,?,'running')",
+                       (ident,oid,key,typ,role,encoded(inp).decode(),parent['taskId']))
+        return {**self.c,'taskId':ident,'claimStamp':11}
+
+    def test_real_selected_roundtrip_has_independent_idle_and_combat_variant_scopes(self):
+        self.complete(self.direction_claim)
+        original=self.motion.snapshot()
+        unrelated=self.writer.owner_files('npc.other')
+        prior_appearance=self.writer.owner_files('npc.fresh')
+        owner='npc.fresh';d='e'
+        for pick in self.picks:
+            pid,pose=pick['presetId'],pick['posePreset']
+            source,mp4=self.references[pid]
+            anim=self.selected_media('animation',self.direction_claim,pick)
+            self.assertEqual(self.post({'claim':{**anim,'posePreset':'idle'}},path=ANIM+'/read')[0],403)
+            code,view=self.post({'claim':anim},path=ANIM+'/read')
+            self.assertEqual(code,200,view)
+            self.assertEqual(view,{'direction':d,'motion':pid,'posePreset':pose,'assetSetSha256':pick['assetSetSha256'],
+                 'portraitAssetId':sha(self.portrait_bytes)+'.png','referenceSha256':sha(mp4[d]),'referencePresetHash':digest(source)})
+            with self.fetch(ANIM+'/asset',{'claim':anim,'assetId':view['portraitAssetId']}) as r:
+                self.assertEqual(r.read(),self.portrait_bytes)
+            self.assertEqual(self.motion.get(pid,d,expected_preset_hash=view['referencePresetHash'])['base64'],b64(mp4[d]))
+            packet,raw_buffers=self.raw(anim,count=2,width=48,height=32)
+            self.assertEqual(self.post(packet,path=ANIM),(200,{'ok':True}))
+            frames=self.selected_media('frames',anim,pick)
+            self.assertEqual(self.post({'claim':frames},path=FRAMES+'/read')[0],403)
+            self.complete(anim)
+            code,read=self.post({'claim':frames},path=FRAMES+'/read')
+            self.assertEqual(code,200);raw=read['sequence']
+            self.assertEqual({k:v for k,v in read.items() if k!='sequence'},
+                {'direction':d,'motion':pid,'posePreset':pose,'assetSetSha256':pick['assetSetSha256']})
+            self.assertEqual(raw['sourceBindingHash'],digest([anim['officialRequestId'],'portrait_e',pid,pose,pick['assetSetSha256']]))
+            self.assertEqual((raw['posePreset'],raw['presetId'],raw['direction'],raw['requestId']),(pose,pid,d,anim['taskId']))
+            processed=self.corrected(frames,raw)
+            self.assertEqual(self.post(processed,path=FRAMES),(200,{'ok':True}))
+            output=self.writer.owner_files(owner)
+            suffix=f'{pose}/{pid}/{d}'
+            self.assertEqual(output[f'{owner}/assets/animation-sequences/{suffix}/raw-0.png'],raw_buffers[0])
+            for folder in ('animation-sequences','animation-alpha','animation-processed-directions'):
+                stored=json.loads(output[f'{owner}/{folder}/{suffix}.json'])
+                self.assertEqual((stored['posePreset'],stored['presetId'],stored['direction']),(pose,pid,d))
+        self.assertEqual(self.motion.snapshot(),original)
+        self.assertEqual(self.writer.owner_files('npc.other'),unrelated)
+        for key,value in prior_appearance.items():
+            if '/pose-views/' in key or '/portraits/' in key:
+                self.assertEqual(output[key],value)
+
+    def test_selected_payload_preserves_idle_static_pixel_authority(self):
+        self.complete(self.direction_claim)
+        key='portrait_pixel_idle_reference'
+        oid=self.c['officialRequestId']
+        tid='workflow.task.'+digest([oid,key])
+        with sqlite3.connect(self.db) as db:
+            db.execute('UPDATE workflow_tasks SET task_input=? WHERE task_id=?',
+                (encoded({'npcId':self.c['npcId'],'imageStyle':'pixel-sprite.v1'}).decode(),self.idle['taskId']))
+            db.execute("INSERT INTO workflow_tasks VALUES(?,?,?,'npc.portrait-pixel','postprocess',?,NULL,12,?,'running')",
+                (tid,oid,key,encoded({'npcId':self.c['npcId'],'posePreset':'idle','direction':None}).decode(),self.idle['taskId']))
+        claim={**self.c,'taskId':tid,'claimStamp':12}
+        code,view=self.post({'claim':claim},path=PREFIX+'portrait-pixel/read')
+        self.assertEqual(code,200)
+        self.assertEqual((view['posePreset'],view['direction']),('idle',None))
+        self.assertEqual(set(view['source']),{'assetId','sha256','bytes','mimeType'})
+
+    def test_wrong_task_input_and_changed_nw_source_reject_e_publication(self):
+        self.complete(self.direction_claim)
+        pick=self.picks[0]
+        anim=self.selected_media('animation',self.direction_claim,pick)
+        self.assertEqual(self.post({'claim':anim},path=ANIM+'/read')[0],200)
+        def update(pose):
+            inp={'npcId':self.c['npcId'],'direction':'e','motion':pick['presetId'],'posePreset':pose,
+                 'assetSetSha256':pick['assetSetSha256'],'output':'native-png'}
+            with sqlite3.connect(self.db) as db:
+                db.execute('UPDATE workflow_tasks SET task_input=? WHERE task_id=?',
+                           (encoded(inp).decode(),anim['taskId']))
+        update('idle')
+        self.assertEqual(self.post({'claim':anim},path=ANIM+'/read')[0],403)
+        update('combat')
+        self.drift_nw(pick)
+        before=self.writer.owner_files('npc.fresh')
+        self.assertEqual(self.post({'claim':anim},path=ANIM+'/read')[0],409)
+        packet,_=self.raw(anim,count=2,width=48,height=32)
+        self.assertEqual(self.post(packet,path=ANIM)[0],409)
+        self.assertEqual(before,self.writer.owner_files('npc.fresh'))
+
+    def drift_nw(self,pick):
+        original,clips=self.references[pick['presetId']]
+        clips={**clips,'nw':clips['nw']+b' changed'}
+        updated={**original,'directions':[
+            {**row,'assetId':sha(clips['nw'])+'.mp4','sha256':sha(clips['nw']),'bytes':len(clips['nw'])}
+            if row['direction']=='nw' else row for row in original['directions']]}
+        self.seed(updated,clips,'drift-nw-1',digest(original))
+
+    def replacement(self):
+        from project_data_service.single_target_delete import SingleTargetDelete
+        from project_data_service.workflow_delete import WorkflowDelete,NPC_ROOT
+        from project_data_service.workflow_delete_claim import SELECTION_REPLACE
+        oid='request.official.'+'9'*64
+        tid='workflow.task.'+digest([oid,'delete'])
+        owner='npc.test'
+        payload={'schemaVersion':SELECTION_REPLACE,'projectId':'binari','intent':'exact selected replacement',
+                 'character':{**self.art['character'],'npcId':owner},'sourceRefs':['fixture'],
+                 'motionSelection':self.picks}
+        claim={'officialRequestId':oid,'taskId':tid,'projectId':'binari','npcId':owner,
+               'payloadSha256':digest(payload),'claimStamp':20}
+        value={'npcId':owner,'scope':'exact-npc-folder','preserveRequestHistory':True,'noOldDataReuse':True}
+        with sqlite3.connect(self.db) as db:
+            db.execute("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,1,'planned',1,NULL)",
+                       (oid,'binari','npc.workflow',SELECTION_REPLACE,encoded(payload).decode(),digest(payload)))
+            db.execute("INSERT INTO workflow_tasks VALUES(?,?,'delete','npc.delete-folder','file',?,NULL,20,NULL,'running')",
+                       (tid,oid,encoded(value).decode()))
+        media=self.pds.workflow_native_media
+        self.pds.workflow_delete=WorkflowDelete(media.source,media.verifier,self.motion)
+        self.pds.single_target_delete=SingleTargetDelete({NPC_ROOT:self.pds.workflow_delete.storage_provider()})
+        return claim,{'root':NPC_ROOT,'path':owner,'kind':'directory'}
+
+    def test_both_delete_entrypoints_refuse_even_one_stale_selection_before_npc_change(self):
+        from project_data_service.single_target_delete import PATH as STORAGE
+        from project_data_service.workflow_delete import PATH as DELETE
+        claim,target=self.replacement()
+        before=self.writer.snapshot()
+        owner=self.writer.owner_files(claim['npcId'])
+        self.drift_nw(self.picks[-1])
+        self.assertEqual(self.post({'claim':claim},path=DELETE)[0],409)
+        self.assertEqual(self.post({'claim':claim,'target':target},path=STORAGE)[0],409)
+        self.assertEqual(self.writer.snapshot(),before)
+        self.assertEqual(self.writer.owner_files(claim['npcId']),owner)
+        self.assertFalse(self.writer.receipt_path(claim['taskId']).exists())
+
+    def test_matching_selected_replacement_backup_and_receipt_replay_after_catalog_moves(self):
+        from project_data_service.single_target_delete import PATH as STORAGE
+        claim,target=self.replacement()
+        code,receipt=self.post({'claim':claim,'target':target},path=STORAGE)
+        self.assertEqual(code,200,receipt)
+        self.assertTrue(receipt['targetAbsent'])
+        self.assertEqual(receipt['operationId'],claim['taskId'])
+        state=self.writer.receipt(claim['taskId'])
+        self.assertTrue(state['backupVerified'])
+        self.assertEqual(self.writer.verified_restorable_backup(state['backupId'])[0]['characterId'],claim['npcId'])
+        self.drift_nw(self.picks[-1])
+        self.assertEqual(self.post({'claim':claim,'target':target},path=STORAGE),(200,receipt))
+
+
+DIRS=('n','ne','e','se','s','sw','w','nw')
+
+def sha(data):return hashlib.sha256(data).hexdigest()
