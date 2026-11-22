@@ -1,5 +1,5 @@
 """Opt-in exact official audio workflow. No reservations, provider or file access."""
-import contextlib,re,sqlite3,json
+import contextlib,hashlib,re,sqlite3,json
 from .concept_filex import FilexConcept
 from .database import DataError
 from .filex_read import canonical,digest
@@ -13,6 +13,7 @@ PREFIX='canonical-files/binari/audio/'
 MAX_WAV=24*1024*1024
 MAX_BODY=((MAX_WAV+2)//3)*4+16384
 MAX_SOURCE=256*1024
+DIRECT='direct'
 CID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 SHA=re.compile(r'[a-f0-9]{64}')
 OFFICIAL=re.compile(r'request\.official\.[a-f0-9]{64}')
@@ -29,18 +30,23 @@ def need(ok):
     if not ok:raise Rejected(REJECTION)
 
 def payload(value):
-    def text(v,n):return type(v) is str and 1<=len(v)<=n and v==v.strip(JS_TRIM) and not CONTROL.search(v)
+    def nonblank(v,n):return type(v) is str and 1<=len(v)<=n and bool(v.strip(JS_TRIM)) and not CONTROL.search(v)
+    def text(v,n):return nonblank(v,n) and v==v.strip(JS_TRIM)
     fields={'schemaVersion','projectId','kind','title','conceptId','brief','text','durationSeconds'}
-    need(type(value) is dict and set(value)-{'targetDurationSeconds'}==fields
+    need(type(value) is dict and set(value)-{'targetDurationSeconds','conceptText','lyricsRequest'}==fields
          and value['schemaVersion']==PAYLOAD and value['projectId']=='binari'
          and value['kind']=='bgm' and text(value['title'],120)
          and not re.search(r'[\t\r\n\u2028\u2029]',value['title']) and match(value['conceptId'],CID)
          and text(value['brief'],4000))
+    need((value['conceptId']==DIRECT)==('conceptText' in value)
+         and ('conceptText' not in value or text(value['conceptText'],4000)))
     duration=value['durationSeconds']
+    if 'lyricsRequest' in value:
+        need(duration is None and value['text']=='' and text(value['lyricsRequest'],4000))
     if 'targetDurationSeconds' in value:
         target=value['targetDurationSeconds']
         need(duration is None and type(target) is int and target==60)
-    need((value['text']=='' or text(value['text'],4000)) if duration is None else
+    need((value['text']=='' or nonblank(value['text'],4000)) if duration is None else
          value['text']=='' and type(duration) in (int,float) and 10<=duration<=30)
     return value
 
@@ -78,13 +84,17 @@ class WorkflowAudio:
             p=payload(json.loads(row['payload']))
             need(row['payload']==canonical(p).decode() and digest(p)==claim['payloadSha256']
                  and row['task_input']==canonical({k:p[k] for k in ('kind','conceptId')}).decode())
-            yield {**{k:claim[k] for k in ('officialRequestId','taskId','projectId','payloadSha256')},
-                   **{k:p[k] for k in ('kind','title','conceptId','durationSeconds')}}
+            yield ({**{k:claim[k] for k in ('officialRequestId','taskId','projectId','payloadSha256')},
+                    **{k:p[k] for k in ('kind','title','conceptId','durationSeconds')}},p.get('conceptText'))
 
     def run(self,body,*,reading,started):
         need(type(body) is dict and set(body)==({'claim'} if reading else {'claim','source','artifact'}))
-        with self.selected(body['claim']) as binding,self.concept.factory() as t:
+        with self.selected(body['claim']) as (binding,concept_text),contextlib.ExitStack() as stack:
+            direct_sha=hashlib.sha256(concept_text.encode('utf-8')).hexdigest() if concept_text is not None else None
             if reading:
+                if direct_sha is not None:
+                    return {'conceptId':DIRECT,'sectionSha256':direct_sha,'title':'직접 입력','content':concept_text}
+                t=stack.enter_context(self.concept.factory())
                 output=t.call('POST',WRITER_PATH+'/read',{'conceptId':binding['conceptId']})
                 if (type(output) is not dict or set(output)!={'conceptId','sectionSha256','title','content'}
                     or output['conceptId']!=binding['conceptId'] or not match(output['sectionSha256'],SHA)
@@ -94,11 +104,14 @@ class WorkflowAudio:
                 return output
             s=body['source'];a=body['artifact']
             need(type(s) is dict and set(s)=={'conceptId','sectionSha256'} and s['conceptId']==binding['conceptId']
-                 and match(s['sectionSha256'],SHA)
+                 and match(s['sectionSha256'],SHA) and (direct_sha is None or s['sectionSha256']==direct_sha)
                  and type(a) is dict and set(a) in ({'mimeType','sha256','bytes','base64'},{'mimeType','sha256','bytes','base64','bpm'})
                  and (a.get('bpm') is None or type(a['bpm']) is int and 30<=a['bpm']<=300) and a['mimeType']=='audio/wav'
                  and match(a['sha256'],SHA) and type(a['bytes']) is int and 44<=a['bytes']<=MAX_WAV
                  and type(a['base64']) is str and len(a['base64'])==((a['bytes']+2)//3)*4)
+            if direct_sha is not None:
+                binding['directConceptSha256']=direct_sha
+            t=stack.enter_context(self.concept.factory())
             started.append(True)
             result=t.call('POST',WRITER_PATH,{'binding':binding,'source':s,'artifact':a})
             if result!={'ok':True,'resultRef':PREFIX+binding['officialRequestId']+'/metadata.json'}:

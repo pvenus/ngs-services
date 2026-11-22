@@ -9,6 +9,7 @@ WRITER_PATH='/v1/workflow/audio'
 PREFIX='canonical-files/binari/audio/'
 MAX_WAV=24*1024*1024
 MAX_SOURCE=256*1024
+DIRECT='direct'
 MAX_BODY=((MAX_WAV+2)//3)*4+16384
 CID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 SHA=re.compile(r'[a-f0-9]{64}')
@@ -97,7 +98,7 @@ class AudioResult:
             raise Conflict('audio result root changed')
 
     def concept_locked(self,cid):
-        require(match(cid,CID))
+        require(match(cid,CID) and cid!=DIRECT)
         root_path=self.store.path(self.store.namespace+'metadata.json')
         root=json.loads(bytes_of(root_path,4*1024*1024))
         hierarchy=root['document']['hierarchy']
@@ -196,23 +197,28 @@ class AudioResult:
     def publish(self,value):
         require(type(value) is dict and set(value)=={'binding','source','artifact'})
         b=value['binding'];s=value['source']
-        require(type(b) is dict and set(b)=={'officialRequestId','taskId','projectId','payloadSha256','kind','title','conceptId','durationSeconds'}
+        fields={'officialRequestId','taskId','projectId','payloadSha256','kind','title','conceptId','durationSeconds'}
+        direct=type(b) is dict and b.get('conceptId')==DIRECT
+        require(type(b) is dict and set(b)==(fields|{'directConceptSha256'} if direct else fields)
                 and b['projectId']=='binari' and match(b['officialRequestId'],OFFICIAL) and match(b['taskId'],TASK)
                 and b['taskId']=='workflow.task.'+digest([b['officialRequestId'],'audio_generate'])
                 and match(b['payloadSha256'],SHA) and match(b['conceptId'],CID)
                 and b['kind']=='bgm' and type(b['title']) is str and 1<=len(b['title'])<=120
                 and (b['durationSeconds'] is None or type(b['durationSeconds']) in (int,float) and 10<=b['durationSeconds']<=30)
                 and type(s) is dict and set(s)=={'conceptId','sectionSha256'} and s['conceptId']==b['conceptId'] and match(s['sectionSha256'],SHA))
+        if direct:
+            require(match(b['directConceptSha256'],SHA) and b['directConceptSha256']==s['sectionSha256'])
         raw,info=wav_artifact(value['artifact'],b['durationSeconds'])
         bpm=value['artifact'].get('bpm')
-        meta={'schemaVersion':'workflow.audio-result.v1',**b,'source':s,'bpm':bpm,'bpmBasis':'model' if bpm is not None else 'unavailable',
+        meta={'schemaVersion':'workflow.audio-result.v1',**{k:b[k] for k in fields},'source':s,'bpm':bpm,'bpmBasis':'model' if bpm is not None else 'unavailable',
               'audio':{'path':'audio.wav',**info}}
         path=self.root/b['officialRequestId']
         with self.store.lock():
             self.check_root()
             if path.exists() or path.is_symlink():return self.existing(path,meta,raw)
-            current=self.concept_locked(b['conceptId'])
-            require(current['sectionSha256']==s['sectionSha256'])
+            if not direct:
+                current=self.concept_locked(b['conceptId'])
+                require(current['sectionSha256']==s['sectionSha256'])
             meta['generatedAt']=time.time_ns()//1_000_000
             stage=Path(tempfile.mkdtemp(prefix='.audio-stage-',dir=self.root))
             try:

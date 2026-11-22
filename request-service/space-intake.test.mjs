@@ -148,3 +148,49 @@ test('local official registration and Planner preserve automatic 60-second targe
  for(const row of requests)assert.equal(buildPlan(row).tasks[0].type,'audio.generate');
  assert.deepEqual(requests.map(r=>r.payload.targetDurationSeconds).sort(),[60,undefined]);
 });
+
+test('direct concept and vocal modes carry canonical private inputs through MCP and Planner',async t=>{
+ const {call}=await fixture(t);
+ const {buildPlan}=await import('../workflow-planner/planner.mjs');
+ const submit=(id,payload)=>call('request_submit',{sourceId:'local',requestType:'audio.generate',idempotencyKey:id,payload});
+ const conceptText='직접 적은 컨셉\n청음용 🎵';
+ const lyricsRequest='달의 표정을 그릴 짧은 가사\n반복하지 않기';
+ const verbatim='  [Verse]\r\n별이 떴어\n  ';
+ const direct={...generated,conceptId:'direct',conceptText};
+ const requested={...direct,lyricsRequest,targetDurationSeconds:60};
+ const exact={...direct,text:verbatim};
+ assert.equal((await submit('direct-generated',{...requested,conceptText:'  '+conceptText+'\u00a0',lyricsRequest:'\n'+lyricsRequest+' '})).status,'registered');
+ assert.equal((await submit('direct-verbatim',exact)).status,'registered');
+ assert.equal((await submit('master-generated',{...generated,lyricsRequest})).status,'registered');
+ assert.equal((await submit('direct-generated',requested)).status,'registered');
+ assert.equal((await submit('direct-verbatim',{...exact,text:verbatim.trim()})).status,409);
+ const {requests}=await call('request_workflow_list',{});
+ assert.equal(requests.length,3);
+ for(const row of requests){
+  const plan=buildPlan(row);
+  assert.equal(plan.payload,canonical(row.payload));
+  assert.equal(row.payloadSha256,sha(plan.payload));
+  assert.equal(plan.tasks.length,1);
+  assert.deepEqual(plan.tasks[0].input,{kind:'bgm',conceptId:row.payload.conceptId});
+ }
+ for(const payload of [requested,exact,{...generated,lyricsRequest}])
+  assert.ok(requests.some(row=>canonical(row.payload)===canonical(payload)));
+ for(const bad of [
+  {...generated,conceptId:'direct'},
+  {...generated,conceptText},
+  {...direct,conceptText:' \n '},
+  {...direct,conceptText:'🎵'.repeat(4001)},
+  {...direct,conceptText:'forbidden\u0000control'},
+  {...direct,conceptText:'\u000bforbidden control'},
+  {...direct,lyricsRequest:''},
+  {...direct,lyricsRequest:'🎵'.repeat(4001)},
+  {...direct,lyricsRequest:'forbidden\u0000control'},
+  {...exact,lyricsRequest},
+  {...requested,durationSeconds:30},
+  {...exact,durationSeconds:30},
+  {...direct,text:' \n '},
+  {...direct,unexpectedField:true},
+ ]){
+  assert.equal((await submit('invalid',bad)).status,400);
+ }
+});

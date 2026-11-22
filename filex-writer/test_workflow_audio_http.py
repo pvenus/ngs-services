@@ -66,13 +66,13 @@ class Tests(unittest.TestCase):
         except HTTPError as exc:r=exc
         with r:return r.code,json.load(r)
 
-    def plan(self,kind='bgm',cid=None,*,key='fixture',duration=10,text=''):
+    def plan(self,kind='bgm',cid=None,*,key='fixture',duration=10,text='',extra=None):
         cid=cid or self.section
         oid='request.official.'+sha(key.encode())
         tid='workflow.task.'+digest([oid,'audio_generate'])
         p={'schemaVersion':'ngs.audio-generate.v1','projectId':'binari','kind':kind,'conceptId':cid,
            'title':'Official audio fixture','brief':'not copied to result','text':'isolated synthetic text' if kind=='tts' else text,
-           'durationSeconds':None if kind=='tts' else duration}
+           'durationSeconds':None if kind=='tts' else duration,**(extra or {})}
         with sqlite3.connect(self.db) as q:
             q.execute("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,1,'planned',1,NULL)",
                       (oid,'binari','audio.generate',p['schemaVersion'],encoded(p).decode(),digest(p)))
@@ -108,6 +108,46 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.call({**wire,'artifact':audio(wav(amplitude=1))})[0],409)
         self.assertEqual((d/'audio.wav').read_bytes(),raw)
         self.assertEqual(self.db.read_bytes(),before)
+
+
+    def test_direct_concept_is_derived_from_exact_claim_and_never_reads_filex_master(self):
+        direct='직접 입력한 콘셉트\n가창은 짧게 🎵'
+        expected={'conceptId':'direct','sectionSha256':sha(direct.encode('utf-8')),
+                  'title':'직접 입력','content':direct}
+        c=self.plan(cid='direct',duration=None,extra={'conceptText':direct,'lyricsRequest':'별빛으로 짧게'})
+        with patch.object(self.audio,'concept_locked',side_effect=AssertionError('no Filex concept lookup')):
+            self.assertEqual(self.call({'claim':c},'/read'),(200,expected))
+            self.assertEqual(self.call({'claim':{**c,'payloadSha256':'f'*64}},'/read'),(422,{'error':REJECTION}))
+            self.assertEqual(self.call({'claim':c,'conceptText':'spoofed'},'/read'),(422,{'error':REJECTION}))
+            wire=self.body(c,wav())
+            forged={**wire,'source':{**wire['source'],'sectionSha256':'f'*64}}
+            self.assertEqual(self.call(forged),(422,{'error':REJECTION}))
+            self.assertEqual(list(self.root.iterdir()),[])
+            self.assertEqual(self.call(wire)[0],200)
+            self.assertEqual(self.call(wire)[0],200)
+        recorded=json.loads((self.root/c['officialRequestId']/'metadata.json').read_bytes())
+        self.assertEqual(recorded['source'],wire['source'])
+        self.assertEqual(recorded['payloadSha256'],c['payloadSha256'])
+        for key in ('conceptText','directConceptSha256','lyricsRequest','text','brief'):
+            self.assertNotIn(key,recorded)
+
+    def test_vocal_private_payload_contract_and_untrimmed_lyrics(self):
+        valid=self.plan(cid='direct',duration=None,text='  [Verse]\r\n별이 떴어\n  ',
+                        extra={'conceptText':'직접 입력'})
+        self.assertEqual(self.call({'claim':valid},'/read')[0],200)
+        for i,(cid,duration,text,extra) in enumerate([
+            ('direct',None,'',{}),
+            ('direct',None,'',{'conceptText':'  uncanonical  '}),
+            ('direct',None,'',{'conceptText':'x'*4001}),
+            (self.section,None,'',{'conceptText':'잘못된 조합'}),
+            (self.section,None,'',{'lyricsRequest':'  uncanonical  '}),
+            (self.section,None,'fixture lyric',{'lyricsRequest':'가사 요청'}),
+            (self.section,None,' \n ',{}),
+            (self.section,10,'',{'lyricsRequest':'가사 요청'}),
+        ]):
+            claim=self.plan(cid=cid,key='invalid'+str(i),duration=duration,text=text,extra=extra)
+            self.assertEqual(self.call({'claim':claim},'/read'),(422,{'error':REJECTION}))
+        self.assertEqual(list(self.root.iterdir()),[])
 
     def test_model_chosen_duration_false_before_write_and_actual_in_result(self):
         claim=self.plan(duration=None,text='[Humming]\n음—')

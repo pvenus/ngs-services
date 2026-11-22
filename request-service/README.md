@@ -133,3 +133,21 @@ The optional `targetDurationSeconds: 60` is valid only on `audio.generate`
 with `durationSeconds: null`. Registration preserves the target in the
 official request digest. It is a composition target, not a minimum publication
 length; existing audio generation and Filex result formats are unchanged.
+
+Audio generation uses the same one-result workflow for both concept sources.
+For a catalogue sound concept, supply its `conceptId` and omit `conceptText`.
+For direct input, supply the reserved `conceptId: "direct"` and a nonblank
+`conceptText`. There is no Filex master-concept lookup in direct mode. PDS
+returns the text from the exact claimed request and binds publication to
+its UTF-8 SHA-256; the result records only the existing source identity and
+hash, never the direct text.
+
+An instrumental request uses `text: ""` and omits `lyricsRequest`. For
+user-supplied lyrics, put that exact text in `text`. To request generated
+lyrics, use `text: ""` and supply a nonblank `lyricsRequest`; the audio
+worker prepares the lyrics before music generation. Both vocal variants
+require `durationSeconds: null`. The optional direct concept and lyrics
+request each allow multiline content up to 4,000 Unicode characters and
+are trimmed at registration. Nonblank supplied lyrics are retained exactly,
+including line breaks and leading and trailing whitespace. This extends
+`ngs.audio-generate.v1` without changing stored legacy requests or their hashes.

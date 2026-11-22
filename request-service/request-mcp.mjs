@@ -4,7 +4,7 @@ import {conceptCategoryRequestType,conceptCategorySchema,conceptCategoryAddIdPat
 import {npcPlanningUpdateType,npcPlanningUpdateSchema,npcPlanningRoles,npcPlanningUpdateIdPattern,
  npcPlanningRequirementsLimit} from './npc-planning-update-envelope.mjs';
 import {npcPlanningAddType,npcPlanningAddSchema,npcPlanningAddIdPattern,npcPlanningAddCategoryIdPattern} from './npc-planning-add-envelope.mjs';
-import {audioRequestType,audioSchema,audioKind,audioTitleLimit,audioBriefLimit,audioVocalTextLimit,audioConceptIdPattern,audioDuration} from './audio-generate-envelope.mjs';
+import {audioRequestType,audioSchema,audioKind,audioTitleLimit,audioBriefLimit,audioVocalTextLimit,audioConceptTextLimit,audioLyricsRequestLimit,audioDirectConcept,audioConceptIdPattern,audioDuration} from './audio-generate-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema,audioOfficialIdPattern} from './audio-delete-envelope.mjs';
 import {defaultLimit,listTool,maxCursor,maxLimit,statuses,workflowListTool} from './request-list.mjs';
 
@@ -55,10 +55,16 @@ const audioPayload={type:'object',properties:{
  schemaVersion:{const:audioSchema},projectId:{const:'binari'},kind:{const:audioKind},
  title:{type:'string',minLength:1,maxLength:audioTitleLimit},conceptId:{type:'string',pattern:audioConceptIdPattern},
  brief:{type:'string',minLength:1,maxLength:audioBriefLimit},text:{type:'string',maxLength:audioVocalTextLimit},
+ conceptText:{type:'string',minLength:1,maxLength:audioConceptTextLimit},
+ lyricsRequest:{type:'string',minLength:1,maxLength:audioLyricsRequestLimit},
  targetDurationSeconds:{const:60},
  durationSeconds:{anyOf:[{type:'number',minimum:audioDuration.min,maximum:audioDuration.max},{type:'null'}]},
  },required:['schemaVersion','projectId','kind','title','conceptId','brief','text','durationSeconds'],additionalProperties:false,
- allOf:[{if:{properties:{durationSeconds:{type:'number'}}},then:{properties:{text:{const:''}},not:{required:['targetDurationSeconds']}}}]};
+ allOf:[
+  {if:{properties:{durationSeconds:{type:'number'}}},then:{properties:{text:{const:''}},not:{anyOf:[{required:['targetDurationSeconds']},{required:['lyricsRequest']}]}}},
+  {if:{properties:{conceptId:{const:audioDirectConcept}}},then:{required:['conceptText']},else:{not:{required:['conceptText']}}},
+  {if:{required:['lyricsRequest']},then:{properties:{text:{const:''},durationSeconds:{type:'null'}}}},
+ ]};
 const audioDeletePayload={type:'object',properties:{
  schemaVersion:{const:audioDeleteSchema},projectId:{const:'binari'},officialRequestId:{type:'string',pattern:audioOfficialIdPattern,minLength:81,maxLength:81},
  },required:['schemaVersion','projectId','officialRequestId'],additionalProperties:false};

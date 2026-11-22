@@ -1,6 +1,7 @@
 // Real isolated RS → Planner → Audio Worker → HTTP PDS/Filex; injected PCM fixtures only.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {once} from 'node:events';
 import {chmodSync,mkdtempSync,readFileSync,readdirSync,realpathSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -33,11 +34,15 @@ let booted=false;
 try{
  const lines=createInterface({input:py.stdout})[Symbol.asyncIterator]();
  const {port,audio,conceptId}=JSON.parse((await lines.next()).value);booted=true;
- const ids={};
- for(const [variant,inputDuration,text] of [['legacy',10,''],['auto',null,'[Humming]\n음—']]){
+ const ids={},variants={
+  legacy:{durationSeconds:10},
+  auto:{text:'  [Humming]\r\n음—  '},
+  direct:{conceptId:'direct',conceptText:'직접 입력한 콘셉트\n밤하늘 🎵',lyricsRequest:'짧은 가사'},
+ };
+ for(const [variant,fields] of Object.entries(variants)){
   const kind='bgm';
-  const payload={schemaVersion:'ngs.audio-generate.v1',projectId:'binari',kind,title:'실제 경로 시험',
-   conceptId,brief:'isolated fixture only',text,durationSeconds:inputDuration};
+  const payload={schemaVersion:'ngs.audio-generate.v1',projectId:'binari',kind,title:'실제 경로 시험 '+variant,
+   conceptId,brief:'isolated fixture only',text:'',durationSeconds:null,...fields};
   const response=await fetch('http://127.0.0.1:'+rsPort+'/mcp',{method:'POST',
    headers:{Accept:'application/json, text/event-stream','Content-Type':'application/json','MCP-Protocol-Version':'2025-06-18'},
    body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'request_submit',
@@ -45,35 +50,56 @@ try{
   const {result}=await response.json();assert.equal(result.isError,false,JSON.stringify(result));
   ids[variant]=result.structuredContent.officialRequestId;
  }
- let polled=await pollOnce(store,client);assert.equal(polled.acknowledged,2);
+ const count=Object.keys(variants).length;
+ let polled=await pollOnce(store,client);assert.equal(polled.acknowledged,count);
  const pds=audioPorts({transport:o=>requestLocalJson({...o,port})});
  assert(await pds.capability());
- const rates={bgm:48000},calls=[];
- const adapters=Object.fromEntries(Object.entries(rates).map(([kind,rate])=>[kind,async input=>{
-  const variant=input.durationSeconds===null?'auto':'legacy';
-  calls.push(variant);assert.equal(kind,input.kind);assert.match(input.prompt,/한글/);
-  if(variant==='auto')assert.equal(input.text,'[Humming]\n음—');
+ const rate=48000,calls=[],lyrics='[Verse]\n별이 뜨네';
+ const variantOf=title=>title.split(' ').at(-1);
+ const lyricCalls=[];
+ const composeLyrics=async ({masterConcept,request,lyricsRequest})=>{
+  assert.equal(variantOf(request.title),'direct');
+  assert.deepEqual(masterConcept,{title:'직접 입력',content:variants.direct.conceptText});
+  assert.equal(lyricsRequest,variants.direct.lyricsRequest);
+  lyricCalls.push(request.title);
+  return lyrics;
+ };
+ const composeCaption=async ({masterConcept,request})=>{
+  const variant=variantOf(request.title);
+  assert.match(masterConcept.content,variant==='direct'?/직접 입력한 콘셉트/:/한글/);
+  assert.equal(request.vocalMode,variant==='legacy'?'instrumental':'use supplied vocal text only');
+  return 'Quiet restrained strings and sparse piano, with a measured pulse and spacious phrasing.';
+ };
+ const adapters={bgm:async input=>{
+  const variant=variantOf(input.title);
+  calls.push(variant);assert.equal(input.kind,'bgm');assert.match(input.prompt,/sparse piano/);
+  if(variant==='auto')assert.equal(input.text,variants.auto.text);
+  else if(variant==='direct')assert.equal(input.text,lyrics);
   else assert(!Object.hasOwn(input,'text'));
-  return {wav:wav(rate,variant==='auto'?73:10),bpm:80,bpmBasis:'model'};
- }]));
- for(let i=0;i<2;i++){
+  return {wav:wav(rate,variant==='legacy'?10:73),bpm:80,bpmBasis:'model'};
+ }};
+ for(let i=0;i<count;i++){
   const row=nextAudioFromPath(dbPath);
   const {officialRequestId,taskId}=row;
-  const result=await runAudioFromPath({dbPath,taskId,officialRequestId,pds,adapters});
+  const result=await runAudioFromPath({dbPath,taskId,officialRequestId,pds,adapters,composeCaption,composeLyrics});
   assert.equal(result.state,'completed',JSON.stringify(result));
   assert.deepEqual(readdirSync(join(audio,officialRequestId)).sort(),['audio.wav','metadata.json']);
   const meta=JSON.parse(readFileSync(join(audio,officialRequestId,'metadata.json'),'utf8'));
-  const variant=calls.at(-1),duration=variant==='auto'?73:10;
-  assert.equal(meta.kind,'bgm');assert.equal(meta.officialRequestId,ids[variant]);assert.equal(meta.audio.sampleRate,rates[meta.kind]);
-  assert.equal(meta.durationSeconds,variant==='auto'?null:10);
+  const variant=calls.at(-1),duration=variant==='legacy'?10:73;
+  assert.equal(meta.kind,'bgm');assert.equal(meta.officialRequestId,ids[variant]);assert.equal(meta.audio.sampleRate,rate);
+  assert.equal(meta.durationSeconds,variant==='legacy'?10:null);
   assert.deepEqual([meta.bpm,meta.bpmBasis,meta.audio.durationSeconds],[80,'model',duration]);
-  assert.deepEqual(readFileSync(join(audio,officialRequestId,'audio.wav')),wav(rates[meta.kind],duration));
+  assert.deepEqual(readFileSync(join(audio,officialRequestId,'audio.wav')),wav(rate,duration));
+  if(variant==='direct')assert.deepEqual(meta.source,{conceptId:'direct',
+   sectionSha256:createHash('sha256').update(variants.direct.conceptText,'utf8').digest('hex')});
+  for(const key of ['brief','conceptText','lyricsRequest','text'])assert(!Object.hasOwn(meta,key));
  }
  assert.deepEqual(calls.slice().sort(),Object.keys(ids).sort());
+ assert.equal(lyricCalls.length,1);
  assert.equal(nextAudioFromPath(dbPath),null);
- polled=await pollOnce(store,client);assert.equal(polled.completed,2);
- assert.equal(readdirSync(audio).length,2);
- console.log('PASS actual isolated RS/Planner/audio-worker/PDS/Filex chain, BGM lane with injected PCM only');
+ polled=await pollOnce(store,client);assert.equal(polled.completed,count);
+ assert.equal(readdirSync(audio).length,count);
+ console.log('PASS actual isolated RS/Planner/audio-worker/PDS/Filex chain: legacy instrumental, verbatim lyrics, direct concept + requested lyrics; no model calls');
 }finally{
  if(booted)py.stdin.end('close\n');else py.stdin.end();
  const [code]=await done;
