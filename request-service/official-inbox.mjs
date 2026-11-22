@@ -5,6 +5,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {oneStopSchemas,requestType,validateCancel,validateStatusUpdate} from './one-stop-envelope.mjs';
 import {validateOfficialSubmit,workflowScopeSql} from './request-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema} from './concept-category-envelope.mjs';
+import {motion2DRequestType,motion2DSchema} from './motion-preset-convert-2d-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema} from './audio-delete-envelope.mjs';
 import {audioRequestType,audioSchema} from './audio-generate-envelope.mjs';
 import {initializeOfficialSchema} from './official-inbox-schema.mjs';
@@ -40,6 +41,9 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
  const targetCategory=db.prepare(`SELECT official_request_id FROM official_requests
   WHERE project_id=? AND request_type=? AND schema_version=? AND state IN ('registered','planned')
   AND json_extract(payload_json,'$.categoryId')=? COLLATE NOCASE LIMIT 1`);
+ const motionVariant=db.prepare(`SELECT 1 FROM official_requests
+  WHERE project_id=? AND request_type=? AND schema_version=? AND state IN ('registered','planned')
+  AND json_extract(payload_json,'$.variantPresetId')=? COLLATE NOCASE LIMIT 1`);
  const audioSource=db.prepare(`SELECT 1 FROM official_requests
    WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id=? AND request_type=? AND schema_version=? AND state='completed'
     AND json_extract(payload_json,'$.kind')='bgm'`);
@@ -90,6 +94,8 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
      }else if(kind===conceptCategoryRequestType&&targetCategory.get(projectId,conceptCategoryRequestType,conceptCategorySchema,categoryId)){
       throw Error('OFFICIAL_REQUEST_CONCEPT_CATEGORY_ALREADY_REGISTERED');
      }
+     if(kind===motion2DRequestType&&motionVariant.get(projectId,kind,motion2DSchema,JSON.parse(payload).variantPresetId))
+      throw Error('OFFICIAL_MOTION_2D_VARIANT_ALREADY_REGISTERED');
      if(kind===audioDeleteType){
       const audioId=JSON.parse(payload).officialRequestId;
       if(!audioSource.get(audioId,projectId,audioRequestType,audioSchema))throw Error('OFFICIAL_AUDIO_DELETE_TARGET_NOT_COMPLETED');

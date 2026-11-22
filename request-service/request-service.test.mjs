@@ -455,7 +455,7 @@ const conceptExisting=(operation,categoryId='concept.test-fixture')=>({...legacy
 test('exact concept envelopes reject mismatched families, unsafe placement, legacy extras and malformed text',async t=>{
  const {directory,path}=folder(t),{submit,rpc}=await listener(t,directory);
  const schema=(await rpc('tools/list',{})).result.tools[0].inputSchema;
- assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete']);
+ assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','motion-preset.convert-2d']);
  assert.deepEqual(schema.oneOf[1].properties.payload.required,['schemaVersion','projectId','operation','categoryId','groupId','title','outline','requirements']);
  const expected={error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400};
  for(const bad of [
@@ -556,4 +556,40 @@ test('historical exact add without section list remains replayable, listable and
  assert.deepEqual((await out(workflow({}))).requests[0].payload,body);
  assert.equal((await out(update({officialRequestId:id,status:'planned'}))).status,'planned');
  assert.equal((await out(update({officialRequestId:id,status:'completed'}))).status,'completed');
+});
+
+test('2D motion request registration is typed, retains original and guards separate active result IDs',async t=>{
+ const {directory,path}=folder(t),{submit,list,workflow,cancel,rpc}=await listener(t,directory);
+ const requestType='motion-preset.convert-2d';
+ const args={sourceId:'local',requestType,idempotencyKey:'motion-plan',payload:{schemaVersion:'ngs.motion-preset-convert-2d.v1',
+  projectId:'binari',sourcePresetId:'Walk.3D',variantPresetId:'walk-sprite-2d',label:'걷기 2D'}};
+ const bad=[
+  {sourcePresetId:'../walk'},{sourcePresetId:'Walk-Sprite-2D'},{variantPresetId:'Walk-2d'},{variantPresetId:'w'},
+  {variantPresetId:'a'.repeat(65)},{variantPresetId:'walk.2d'},{label:'한\n줄'},{label:'two\u2028lines'},{label:' 과한 '},
+  {label:'\ud800'},{label:'🎶'.repeat(121)},{projectId:'other'},{schemaVersion:'wrong'},{outputPath:'/tmp/motion'},
+ ];
+ for(const overrides of bad){
+  const res=(await submit({...args,payload:{...args.payload,...overrides}})).result;
+  assert.equal(res.isError,true);
+  assert.deepEqual(res.structuredContent,{error:'NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID',status:400});
+ }
+ assert.deepEqual(read(path),[]);
+ const tools=(await rpc('tools/list',{})).result.tools;
+ const advertised=tools.find(tool=>tool.name==='request_submit').inputSchema.oneOf.find(option=>option.properties.requestType.const===requestType);
+ assert.equal(advertised.properties.payload.properties.variantPresetId.pattern,'^[a-z][a-z0-9-]{1,63}$');
+ const registered=(await submit(args)).result.structuredContent;
+ assert.equal(registered.status,'registered');
+ assert.deepEqual((await submit(args)).result.structuredContent,registered);
+ assert.deepEqual((await submit({...args,payload:{...args.payload,label:'변경'}})).result.structuredContent,
+  {error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ assert.deepEqual((await submit({...args,idempotencyKey:'different',payload:{...args.payload,sourcePresetId:'run'}})).result.structuredContent,
+  {error:'OFFICIAL_MOTION_2D_VARIANT_ALREADY_REGISTERED',status:409});
+ const summary=(await list({})).result.structuredContent.requests[0];
+ assert.equal(summary.targetNpcId,args.payload.variantPresetId);assert.equal(summary.targetName,args.payload.label);
+ const actual=(await workflow({})).result.structuredContent.requests[0];
+ assert.equal(actual.officialRequestId,registered.officialRequestId);
+ assert.equal(actual.payloadSha256,sha(canonical(args.payload)));assert.deepEqual(actual.payload,args.payload);
+ assert.deepEqual((await cancel({officialRequestId:registered.officialRequestId})).result.structuredContent,
+  {officialRequestId:registered.officialRequestId,status:'cancelled'});
+ assert.equal((await submit({...args,idempotencyKey:'after-cancel',payload:{...args.payload,label:'🎶'.repeat(120)}})).result.structuredContent.status,'registered');
 });

@@ -151,3 +151,16 @@ request each allow multiline content up to 4,000 Unicode characters and
 are trimmed at registration. Nonblank supplied lyrics are retained exactly,
 including line breaks and leading and trailing whitespace. This extends
 `ngs.audio-generate.v1` without changing stored legacy requests or their hashes.
+
+### 3D to 2D motion preset conversion
+
+`request_submit` accepts `motion-preset.convert-2d` with precisely
+`{schemaVersion:'ngs.motion-preset-convert-2d.v1',projectId:'binari',sourcePresetId,variantPresetId,label}`.
+The source ID uses the existing motion preset identifier grammar. The result
+requires a different lowercase slug (2–64 characters); case-only aliases of
+the source are rejected. Its single-line label must be trimmed and at most 120
+Unicode characters. Verified Space requests use the existing owner-reader
+path and the same ledger rules. Only one registered/planned request can target
+the same result ID across Local and Space. Intake neither checks mutable Filex
+state nor creates output; PDS independently checks the real source, the
+result's absence, and authorized publication.

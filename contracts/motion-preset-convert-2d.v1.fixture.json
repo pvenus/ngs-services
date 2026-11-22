@@ -1,0 +1,160 @@
+{
+  "submit": {
+    "sourceId": "local",
+    "requestType": "motion-preset.convert-2d",
+    "idempotencyKey": "fixture-2d-v1",
+    "payload": {
+      "schemaVersion": "ngs.motion-preset-convert-2d.v1",
+      "projectId": "binari",
+      "sourcePresetId": "walk",
+      "variantPresetId": "walk-stylized-2d",
+      "label": "걷기 2D"
+    }
+  },
+  "row": {
+    "officialRequestId": "request.official.4ec9fcca84e0839dfb2b37142f360737b5b275ca71c56e53e06dc3e14ef35181",
+    "projectId": "binari",
+    "requestType": "motion-preset.convert-2d",
+    "schemaVersion": "ngs.motion-preset-convert-2d.v1",
+    "payload": {
+      "schemaVersion": "ngs.motion-preset-convert-2d.v1",
+      "projectId": "binari",
+      "sourcePresetId": "walk",
+      "variantPresetId": "walk-stylized-2d",
+      "label": "걷기 2D"
+    },
+    "payloadSha256": "bab3b0dca09fe9cb4889eeb154053e98613717cf8aef7a7603684808ddf70542",
+    "status": "registered",
+    "registeredAt": 1795290000000
+  },
+  "tasks": [
+    {
+      "id": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "key": "motion_2d_image",
+      "type": "motion-preset.convert-2d.image",
+      "workerType": "image",
+      "dependsOn": null,
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d"
+      }
+    },
+    {
+      "id": "workflow.task.b4f406f6205c34981b5ae82076a34cee79bfb22433222f963676ea78a84d021f",
+      "key": "motion_2d_n",
+      "type": "motion-preset.convert-2d.clip",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "n"
+      }
+    },
+    {
+      "id": "workflow.task.846397dd45847dc0b3dcce447d127ab3cfd74694d01632d0f9cfe3c73c0f110d",
+      "key": "motion_2d_ne",
+      "type": "motion-preset.convert-2d.clip",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "ne"
+      }
+    },
+    {
+      "id": "workflow.task.5e8ea827c5d2f1f66d66eb2edff2a39dc3ecd39ce405d016e191d868e89206ab",
+      "key": "motion_2d_e",
+      "type": "motion-preset.convert-2d.clip",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "e"
+      }
+    },
+    {
+      "id": "workflow.task.fd861c59e915ff5f01ae822b7d2b16712b5257dfdfc3f88816f9240c25b2742c",
+      "key": "motion_2d_se",
+      "type": "motion-preset.convert-2d.clip",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "se"
+      }
+    },
+    {
+      "id": "workflow.task.429d15beec9c21d56582a9097fc97d9ae620ec8db0fea3eb1857a073866cb939",
+      "key": "motion_2d_s",
+      "type": "motion-preset.convert-2d.clip",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "s"
+      }
+    },
+    {
+      "id": "workflow.task.5ee62a9520fe21e494af58c62231bf06d979e09abc5f0fee5283061185e570da",
+      "key": "motion_2d_sw",
+      "type": "motion-preset.convert-2d.clip",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "sw"
+      }
+    },
+    {
+      "id": "workflow.task.b2e17a09ce55de744355f663a6caf907abeddc0a0c3fc48e5cd56035d8288bdb",
+      "key": "motion_2d_w",
+      "type": "motion-preset.convert-2d.clip",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "w"
+      }
+    },
+    {
+      "id": "workflow.task.527609a5c45239411414830c48f2b400620ae7c6eca370a51f1e79dfd16e09da",
+      "key": "motion_2d_nw",
+      "type": "motion-preset.convert-2d.clip",
+      "workerType": "animation",
+      "dependsOn": "workflow.task.3ee7d48a0270e9ff6cd2ae5053963fbf61e6a6d3acd37b5bb0db139647e3bc05",
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "direction": "nw"
+      }
+    },
+    {
+      "id": "workflow.task.eb96f1569f15c50a99ea39d3c6c1facd0c6d27c41172b8b21949d99a8be5f515",
+      "key": "motion_2d_finalize",
+      "type": "motion-preset.convert-2d.finalize",
+      "workerType": "animation",
+      "dependsOn": null,
+      "input": {
+        "sourcePresetId": "walk",
+        "variantPresetId": "walk-stylized-2d",
+        "dependsOnTaskIds": [
+          "workflow.task.b4f406f6205c34981b5ae82076a34cee79bfb22433222f963676ea78a84d021f",
+          "workflow.task.846397dd45847dc0b3dcce447d127ab3cfd74694d01632d0f9cfe3c73c0f110d",
+          "workflow.task.5e8ea827c5d2f1f66d66eb2edff2a39dc3ecd39ce405d016e191d868e89206ab",
+          "workflow.task.fd861c59e915ff5f01ae822b7d2b16712b5257dfdfc3f88816f9240c25b2742c",
+          "workflow.task.429d15beec9c21d56582a9097fc97d9ae620ec8db0fea3eb1857a073866cb939",
+          "workflow.task.5ee62a9520fe21e494af58c62231bf06d979e09abc5f0fee5283061185e570da",
+          "workflow.task.b2e17a09ce55de744355f663a6caf907abeddc0a0c3fc48e5cd56035d8288bdb",
+          "workflow.task.527609a5c45239411414830c48f2b400620ae7c6eca370a51f1e79dfd16e09da"
+        ]
+      }
+    }
+  ]
+}

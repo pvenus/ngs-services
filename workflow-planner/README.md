@@ -59,3 +59,31 @@ project and queue ID, then uses the same type-specific task graph. No SQLite
 migration or worker task/claim DTO change. Before rolling back to the old
 Planner, stop Space intake and drain any unplanned Space registrations;
 already materialized runs remain compatible.
+
+### 2D motion preset DAG
+
+The active typed planner accepts `motion-preset.convert-2d` schema
+`ngs.motion-preset-convert-2d.v1`. The original motion preset is read-only;
+the requested `variantPresetId` is the independent publication target.
+
+| Task key | Type suffix under `motion-preset.convert-2d` | Worker | Dependency |
+| --- | --- | --- | --- |
+| `motion_2d_image` | `.image` | image | none |
+| `motion_2d_{n,ne,e,se,s,sw,w,nw}` | `.clip` | animation | exact image task |
+| `motion_2d_finalize` | `.finalize` | animation | the exact eight ordered clip task IDs |
+
+All input rows bind the original source and target IDs. Clip inputs add their
+direction; final input adds `dependsOnTaskIds` in the table's given direction
+order. Finalization leaves the historical scalar dependency column empty,
+not as a readiness signal: a compatible animation claim selector must
+enforce this exact eight-ID fan-in against completed clip receipts and
+PDS must independently verify all eight before canonical publication. Do not
+activate intake until these consumers are installed. No workflow DB schema
+migration or change to legacy NPC execution. RS's completed notification
+requires the exact persisted graph, status completed on all ten tasks, and
+matching typed result refs: `motion.2d.image.<sha256>`,
+`motion.2d.clip.<direction>.<sha256>`, and
+`motion.2d.published.<presetHash>`. These refs are worker/PDS evidence, not an
+independent Filex read by the Planner. Invalid/partial graphs do not report
+completion. The historical Laya configuration is not on this intake path;
+registration and routing are in the typed RS family and active planner code.

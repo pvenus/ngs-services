@@ -194,3 +194,25 @@ test('direct concept and vocal modes carry canonical private inputs through MCP 
   assert.equal((await submit('invalid',bad)).status,400);
  }
 });
+
+test('2D motion conversion uses verified Space provenance and the same active destination conflict as Local',async t=>{
+ const type='motion-preset.convert-2d';
+ const payload={schemaVersion:'ngs.motion-preset-convert-2d.v1',projectId:'binari',
+  sourcePresetId:'Walk.3D',variantPresetId:'walk-sprite-2d',label:'걷기 2D'};
+ const snapshots=new Map([['site-motion',spaceQueue('site-motion',type,payload)]]);
+ const {call,root}=await fixture(t,async id=>snapshots.get(id));
+ const official=await call(toolSubmit,{queueId:'site-motion'});
+ assert.equal(official.status,'registered');
+ const [{sourceId,sourceKey,officialRequestId,...feed}]=(await call('request_workflow_list',{})).requests;
+ assert.equal(sourceId,'space');assert.equal(sourceKey,'site-motion');assert.equal(officialRequestId,official.officialRequestId);
+ const modules=process.env.WORKFLOW_PLANNER_SITE_SOURCE??fileURLToPath(new URL('../workflow-planner',import.meta.url));
+ const {PlannerStore}=await import(pathToFileURL(join(modules,'planner.mjs')).href);
+ const store=new PlannerStore(join(root,'planner.sqlite'));t.after(()=>store.close());
+ assert.throws(()=>store.stage({...feed,sourceId,sourceKey:'spoofed',officialRequestId}),/WORKFLOW_ROW_INVALID/);
+ assert.equal(store.stage({...feed,sourceId,sourceKey,officialRequestId}),true);
+ assert.equal(store.db.prepare('SELECT count(*) AS n FROM workflow_tasks').get().n,10);
+ assert.equal((await call('request_submit',{sourceId:'local',requestType:type,idempotencyKey:'local-motion',payload})).status,409);
+ assert.equal((await call('request_cancel',{officialRequestId})).status,404);
+ assert.equal((await call('request_update_status',{officialRequestId,status:'planned'})).status,'planned');
+ assert.equal((await call(toolSubmit,{queueId:'site-motion'})).status,'planned');
+});

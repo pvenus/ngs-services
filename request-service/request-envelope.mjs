@@ -7,6 +7,7 @@ import {npcPlanningUpdateType,npcPlanningUpdateSchema,validateNPCPlanningUpdate}
 import {npcPlanningAddType,npcPlanningAddSchema,validateNPCPlanningAdd} from './npc-planning-add-envelope.mjs';
 
 import {audioRequestType,audioSchema,validateAudioGenerate} from './audio-generate-envelope.mjs';
+import {motion2DRequestType,motion2DSchema,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema,validateAudioDelete} from './audio-delete-envelope.mjs';
 
 const fields=['sourceId','requestType','idempotencyKey','payload'];
@@ -17,6 +18,7 @@ const workflowFamilies=new Map([
  [npcPlanningAddType,{schemas:[npcPlanningAddSchema],validate:validateNPCPlanningAdd}],
  [audioRequestType,{schemas:[audioSchema],validate:validateAudioGenerate}],
  [audioDeleteType,{schemas:[audioDeleteSchema],validate:validateAudioDelete}],
+ [motion2DRequestType,{schemas:[motion2DSchema],validate:validateMotion2D}],
 ]);
 // All SQL fragments derive only from these fixed service constants, never
 // the caller's type, schema or target. Bind every request value separately.

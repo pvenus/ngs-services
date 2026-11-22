@@ -11,6 +11,9 @@ import {audioRequestType,audioTaskKey,validateAudioGenerate} from './audio-gener
 import {audioDeleteType,audioDeleteTaskKey,validateAudioDelete} from './audio-delete-envelope.mjs';
 import {createWorkflowTasksSql,RETRY_COUNT_COLUMN,migrateWorkflowAudioTask} from './audio-task-schema.mjs';
 
+import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
+import {buildMotion2DTasks,hasCompleteMotion2DGraph} from './motion-preset-convert-2d-plan.mjs';
+
 export const portraitPixelTaskType='npc.portrait-pixel';
 export const pixelImageStyle='pixel-sprite.v1';
 export const directions=Object.freeze(['n','ne','e','se','s','sw','w','nw']);
@@ -23,10 +26,11 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,motion2DRequestType].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
- const payload=(row.requestType===audioDeleteType?validateAudioDelete:
+ const payload=(row.requestType===motion2DRequestType?validateMotion2D:
+  row.requestType===audioDeleteType?validateAudioDelete:
   row.requestType===audioRequestType?validateAudioGenerate:
   row.requestType===npcPlanningAddType?validateNPCPlanningAdd:
   row.requestType===npcPlanningUpdateType?validateNPCPlanningUpdate:
@@ -40,6 +44,7 @@ export function buildPlan(row,{pixelPortraits=true}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true){
+ if(row.requestType===motion2DRequestType)return {payload,tasks:buildMotion2DTasks(row)};
  if(row.requestType===audioDeleteType){
   const {officialRequestId}=row.payload;
   ensure(officialRequestId!==row.officialRequestId,'NGS_AUDIO_DELETE_PAYLOAD_INVALID');
@@ -155,11 +160,33 @@ export class PlannerStore{
  pending(){return this.db.prepare("SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' ORDER BY registered_at,official_request_id").all();}
  acknowledge(id){return this.db.prepare("UPDATE workflow_runs SET state='planned',updated_at=? WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id).changes;}
  conflict(id){this.db.prepare("UPDATE workflow_runs SET state='not_claimable',updated_at=?,reason='WORKFLOW_RS_STATUS_CONFLICT' WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id);}
- terminalReady(){return this.db.prepare(`SELECT r.official_request_id FROM workflow_runs r
-  WHERE r.state='planned' AND r.reason IS NULL
-    AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id)
-    AND NOT EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id AND t.status<>'completed')
-  ORDER BY r.registered_at,r.official_request_id`).all();}
+ terminalReady(){
+  const result=[];
+  this.db.exec('BEGIN');
+  try{
+   const candidates=this.db.prepare(`SELECT r.official_request_id,r.request_type,r.schema_version,r.project_id,r.payload,r.payload_sha256
+    FROM workflow_runs r
+    WHERE r.state='planned' AND r.reason IS NULL
+      AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id)
+      AND NOT EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id AND t.status<>'completed')
+    ORDER BY r.registered_at,r.official_request_id`).all();
+   const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 11');
+   for(const row of candidates){
+    if(row.request_type===motion2DRequestType){
+     let payload;
+     try{
+      payload=JSON.parse(row.payload);
+      if(payload.schemaVersion!==row.schema_version||validateMotion2D(payload,row.project_id)!==row.payload||
+         sha(row.payload)!==row.payload_sha256)continue;
+     }catch{continue;}
+     if(!hasCompleteMotion2DGraph({officialRequestId:row.official_request_id,payload},evidence.all(row.official_request_id)))continue;
+    }
+    result.push({official_request_id:row.official_request_id});
+   }
+   this.db.exec('COMMIT');
+  }catch(error){this.db.exec('ROLLBACK');throw error;}
+  return result;
+ }
  terminalAcknowledged(id){
   return this.db.prepare("UPDATE workflow_runs SET reason='RS_COMPLETED',updated_at=? WHERE official_request_id=? AND state='planned' AND reason IS NULL")
    .run(Date.now(),id).changes;
@@ -179,7 +206,7 @@ export async function pollOnce(store,rs){
     try{staged+=Number(store.stage(row));}
     catch(e){
      if(e.message==='WORKFLOW_COMBAT_NOT_SUPPORTED'){unsupported++;continue;}
-     if(!['WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID'].includes(e.message))throw e;
+     if(!['WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID'].includes(e.message))throw e;
      invalid++;
     }
    }
