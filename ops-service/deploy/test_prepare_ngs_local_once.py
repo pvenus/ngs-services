@@ -38,7 +38,8 @@ class Tests(unittest.TestCase):
         self.lookup = Mock(return_value=PAT)
         self.get = Mock(side_effect=self.open)
         opener = Mock(open=self.get)
-        self.github = transport.KeychainGitHubEvidence(token=self.lookup, opener=opener)
+        self.main_ref=Mock(side_effect=lambda repo: self.latest)
+        self.github = transport.KeychainGitHubEvidence(token=self.lookup, opener=opener, main_ref=self.main_ref)
         self.assembler = Mock()
         self.assembler.assemble_verified.side_effect = self.assemble
         self.on_assemble = lambda: None
@@ -60,9 +61,7 @@ class Tests(unittest.TestCase):
             return Response(200,self.zip)
         self.assertEqual(url.netloc,'api.github.com')
         route=url.path[1:]
-        if route==auto.MAIN_ROUTE:
-            self.assertNotIn("Authorization",request.headers)
-            return Response(200,prep.json_bytes({'ref':prep.REF,'object':{'type':'commit','sha':self.latest}}))
+        self.assertNotEqual(route,auto.MAIN_ROUTE) # public refs use Git, not HTTP
         self.assertEqual(request.get_header("Authorization"),"Bearer "+PAT)
         name=route.removeprefix(transport.PREFIX)
         if name=='actions/workflows/prepare-ngs-release.yml': result=self.fix.workflow
@@ -108,7 +107,8 @@ class Tests(unittest.TestCase):
         self.assertEqual(json.loads(ready)['runnerSha256'], prep.digest(b'REFUSE TO RUN ME'))
         before_calls=self.get.call_count
         self.assertEqual(self.run_once()['state'],'ready')
-        self.assertEqual(self.get.call_count-before_calls,1)
+        self.assertEqual(self.get.call_count,before_calls)
+        self.main_ref.assert_called_with(transport.REPO)
         self.assembler.assemble_verified.assert_called_once()
         self.assertEqual((self.target / 'ready.json').read_bytes(), ready)
 
