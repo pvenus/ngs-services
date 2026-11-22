@@ -10,7 +10,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
-from prepare_ngs_release import OUTER_LIMIT, REPO, Refused, json_bytes, json_load, need
+if __package__:
+    from .prepare_ngs_release import OUTER_LIMIT, REPO, Refused, json_bytes, json_load, need
+else:
+    # The detached Mac preparers intentionally load owner-pinned top-level modules.
+    from prepare_ngs_release import OUTER_LIMIT, REPO, Refused, json_bytes, json_load, need
 
 KEYCHAIN_SERVICE = "com.vinus.ops.ngs-local.github-actions-read"
 KEYCHAIN_ACCOUNT = "pvenus/ngs-platform"
