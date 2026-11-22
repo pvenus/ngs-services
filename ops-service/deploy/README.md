@@ -95,3 +95,57 @@ bound to the observed prior source and exact selector. Do not write a ready
 record or deployment timestamp for equivalent code. Service/worker target
 publication is separate from source verification and stays in the supported
 private OPS runtime, not a repository checkout.
+
+## Automatic NGS Local preparation only
+
+`prepare_ngs_local_once.py` is a fixed, no-arguments, noninteractive preparation
+entrypoint. It verifies the current canonical `pvenus/ngs-platform` main and
+its successful CI artifact, uses only the separately reviewed native Mac
+assembler and existing owner-private offline cache, then registers its exact
+SHA in the existing **NGS Local** button lane. It cannot invoke the apply
+adapter, change a selector, start or stop a service, publish Space, or update
+OPS itself. An already selected or already ready exact SHA returns without
+downloading or assembling again.
+
+Provision copies of the preparer and `prepare_ngs_release.py` (0600) in
+`~/Workspaces/OPS/runtime/deploy-control/bin`. In the same directory install
+(0600) the exact `tools/ops-deploy/assemble_mac_release.py` from reviewed
+NGS commit `2395719a30c6ea83d2306992409ecd039a70b229`, SHA-256
+`959547928ccafe7a27f6d05e0649ba6e24d770feaba3ea8a63b961d777765547`.
+The preparer checks those assembler bytes before importing them. Supply the
+already approved owner-private (0700) npm cache at
+`deploy-control/ngs-local-npm-cache`; do not let the assembler install
+online or run dependency lifecycle scripts.
+
+If the Mac already provides a read-authorized `/opt/homebrew/bin/gh`, the
+existing read-only verifier can obtain the CI ZIP directly. Otherwise the
+owner-trusted connector coordinator writes private (0600) `ci.zip`, then
+`evidence.json` (both atomic replacements) in the private (0700)
+`deploy-control/ngs-local-evidence` directory. The exact evidence schema is:
+
+```json
+{"schemaVersion":"ops.ngs-local-connector-evidence.v1","headSha":"<40 hex>","run":{},"artifact":{}}
+```
+
+Use the authenticated first-party connector's exact CI run and artifact
+metadata, including workflow ID, repo/head repo, attempt, event, ref, result,
+artifact ID, digest, byte size, expiry and run association. The fixed expected
+workflow ID is 426191244. The connector must not accept an uploaded or
+browser-supplied ZIP. The Mac independently reads canonical current main both
+before staging and just before registration using public GitHub HTTPS or the
+fixed configuration-free Git remote (only provisioned loopback HTTPS proxy
+transport may be inherited; no Git or credential config). Failure to verify means no new ready
+record. No new credentials, API grants, or external artifact mirrors are
+provisioned by this feature.
+
+Run with `/opt/homebrew/bin/python3.12 -B -u <fixed-bin>/prepare_ngs_local_once.py`.
+The source includes a detached, optional 300-second launchd template, but
+neither it nor any timer is installed by checkout. A connector timer may
+instead invoke this fixed command after handoff. Do not install both timers
+to do the same polling. Public main movement, changed plist/runner, active or
+uncertain deploy, partial packages and npm-cache misses do not produce new
+readiness. Review incomplete private staging manually; do not remove an apply
+attempt marker or overwrite a staged tree. Existing verified readiness and
+prior deployed observations are not cleared by polling.
+
+Tests: `python3 -B -m unittest discover -s ops-service/deploy -p 'test_prepare_ngs_local_once.py'`.
