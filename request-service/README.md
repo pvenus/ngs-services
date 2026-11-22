@@ -181,3 +181,17 @@ bytes, hashes and request IDs do not change. Only these failed rows expose
 the optional `failureReason` in the read-only operator list. A replacement is a
 new request, registered normally using a new idempotency key. The Planner
 continues to refuse unsupported graphs, and it does not set this RS status.
+
+### NPC workflow with published motion selection
+
+The `npc.workflow` request also accepts version
+`ngs.npc-one-stop.selection.v1` (create) or
+`ngs.npc-one-stop.selection.replace.v1` (replace). Both replace the historical
+`includeCombat` and preset map with a required `motionSelection` array of one
+to eight exact `{presetId,posePreset,assetSetSha256}` entries. The submitted
+array and its order are immutable. Preset IDs are path-safe, unique ignoring
+ASCII case, and cannot collide in their deterministic task-key slots. Pose is
+`idle` or `combat`, and the selected published asset-set digest is lowercase
+SHA-256. Movement defaults are client suggestions, not additions to a request
+that the Planner or workers infer. This route does not enable the legacy
+combat-portrait workflow or inspect the mutable preset catalog.

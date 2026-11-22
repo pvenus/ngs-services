@@ -1,5 +1,5 @@
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
-import {cancelTool,oneStopSchemas,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
+import {cancelTool,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionLimit,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema,conceptCategoryAddIdPattern,conceptCategoryIdPattern,conceptCategoryGroupIdPattern} from './concept-category-envelope.mjs';
 import {npcPlanningUpdateType,npcPlanningUpdateSchema,npcPlanningRoles,npcPlanningUpdateIdPattern,
  npcPlanningRequirementsLimit} from './npc-planning-update-envelope.mjs';
@@ -26,10 +26,16 @@ const known={
  REQUEST_LIST_INVALID:400,REQUEST_CANCEL_INVALID:400,OFFICIAL_REQUEST_NOT_FOUND:404,OFFICIAL_REQUEST_CANCEL_CONFLICT:409,
 };
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
-const npcPayload={type:'object',properties:{schemaVersion:{enum:oneStopSchemas},projectId:{const:'binari'},
- intent:{type:'string'},character:{type:'object'},sourceRefs:{type:'array',items:{type:'string'}},
+const npcCommon={projectId:{const:'binari'},intent:{type:'string'},character:{type:'object'},sourceRefs:{type:'array',items:{type:'string'}}};
+const npcLegacyPayload={type:'object',properties:{schemaVersion:{enum:legacyOneStopSchemas},...npcCommon,
  includeCombat:{type:'boolean'},motionPresets:{type:'object'},combatMotionPresets:{type:'array',items:{type:'string'}}},
  required:['schemaVersion','projectId','intent','character','sourceRefs','includeCombat'],additionalProperties:false};
+const npcSelectionPayload={type:'object',properties:{schemaVersion:{enum:selectionSchemas},...npcCommon,
+ motionSelection:{type:'array',minItems:1,maxItems:motionSelectionLimit,items:{type:'object',properties:{
+  presetId:{type:'string',pattern:selectedMotionIdPattern},posePreset:{enum:motionSelectionPoses},
+  assetSetSha256:{type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64},
+ },required:['presetId','posePreset','assetSetSha256'],additionalProperties:false}}},
+ required:['schemaVersion','projectId','intent','character','sourceRefs','motionSelection'],additionalProperties:false};
 const conceptId={type:'string',pattern:conceptCategoryIdPattern},groupId={type:'string',pattern:conceptCategoryGroupIdPattern};
 const conceptPayload={type:'object',properties:{schemaVersion:{const:conceptCategorySchema},projectId:{const:'binari'},
  operation:{enum:['add','update','migrate','remove']},categoryId:conceptId,
@@ -83,7 +89,7 @@ const tool={
   sourceId:{const:'local'},requestType:{enum:['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,motion2DRequestType]},
   idempotencyKey:{type:'string',minLength:1,maxLength:200},payload:{type:'object'},
  },required:['sourceId','requestType','idempotencyKey','payload'],additionalProperties:false,
- oneOf:[{properties:{requestType:{const:'npc.workflow'},payload:npcPayload}},
+ oneOf:[{properties:{requestType:{const:'npc.workflow'},payload:{oneOf:[npcLegacyPayload,npcSelectionPayload]}}},
   {properties:{requestType:{const:conceptCategoryRequestType},payload:conceptPayload}},
   {properties:{requestType:{const:npcPlanningUpdateType},payload:npcPlanningUpdatePayload}},
   {properties:{requestType:{const:npcPlanningAddType},payload:npcPlanningAddPayload}},

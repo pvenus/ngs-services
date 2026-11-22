@@ -210,7 +210,7 @@ test('2D motion conversion uses verified Space provenance and the same active de
  const store=new PlannerStore(join(root,'planner.sqlite'));t.after(()=>store.close());
  assert.throws(()=>store.stage({...feed,sourceId,sourceKey:'spoofed',officialRequestId}),/WORKFLOW_ROW_INVALID/);
  assert.equal(store.stage({...feed,sourceId,sourceKey,officialRequestId}),true);
- assert.equal(store.db.prepare('SELECT count(*) AS n FROM workflow_tasks').get().n,10);
+ assert.equal(store.db.prepare('SELECT count(*) AS n FROM workflow_tasks').get().n,18);
  assert.equal((await call('request_submit',{sourceId:'local',requestType:type,idempotencyKey:'local-motion',payload})).status,409);
  assert.equal((await call('request_cancel',{officialRequestId})).status,404);
  assert.equal((await call('request_update_status',{officialRequestId,status:'planned'})).status,'planned');

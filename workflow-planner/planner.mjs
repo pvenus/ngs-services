@@ -1,5 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
-import {canonical,sha,validateOneStop,replaceSchemaVersion} from './envelope.mjs';
+import {canonical,sha,validateOneStop,isReplaceSchema,isSelectionSchema,motionSelectionSlot} from './envelope.mjs';
 
 import {conceptCategoryRequestType,validateConceptCategory} from './concept-category-envelope.mjs';
 
@@ -81,9 +81,14 @@ function materializePlan(row,payload,pixelPortraits=true){
    type:'concept.category-generate',workerType:'document',dependsOn:operation==='replace'?id('category_delete'):null,input:{categoryId}});
   return {payload,tasks};
  }
- // The currently approved DAG covers only the noncombat workflow.
+ // Legacy combat envelopes requested an unsupported dedicated portrait workflow.
+ // A newly selected combat preset only changes the motion reference and final slot.
  if(row.payload.includeCombat)throw Error('WORKFLOW_COMBAT_NOT_SUPPORTED');
- const npcId=row.payload.character.npcId,replace=row.schemaVersion===replaceSchemaVersion;
+ const npcId=row.payload.character.npcId,replace=isReplaceSchema(row.schemaVersion);
+ const selected=isSelectionSchema(row.schemaVersion);
+ const motions=selected?row.payload.motionSelection.map(({presetId,posePreset,assetSetSha256})=>(
+  {motion:presetId,key:'motion_'+motionSelectionSlot(presetId),posePreset,assetSetSha256}
+ )):['walk','run'].map(motion=>({motion,key:motion}));
  const tasks=[];
  const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
  const add=(key,type,workerType,dep,extra={})=>{
@@ -103,10 +108,10 @@ function materializePlan(row,payload,pixelPortraits=true){
   const portrait='portrait_'+direction;
   add(portrait,'npc.portrait-direction','image',pixelPortraits?'portrait_pixel_idle_reference':'portrait_idle_reference',pixelPortraits?{direction,imageStyle:pixelImageStyle}:{direction});
   if(pixelPortraits)add('portrait_pixel_idle_'+direction,portraitPixelTaskType,'postprocess',portrait,{posePreset:'idle',direction});
-  for(const motion of ['walk','run']){
-   const animation='animation_'+motion+'_'+direction;
-   add(animation,'npc.animation-native-png','animation',portrait,{direction,motion,output:'native-png'});
-   add('frames_'+motion+'_'+direction,'npc.frames-postprocess','postprocess',animation,{direction,motion,input:'native-png'});
+  for(const {key,...source} of motions){
+   const animation='animation_'+key+'_'+direction;
+   add(animation,'npc.animation-native-png','animation',portrait,{direction,...source,output:'native-png'});
+   add('frames_'+key+'_'+direction,'npc.frames-postprocess','postprocess',animation,{direction,...source,input:'native-png'});
   }
  }
  return {payload,tasks};

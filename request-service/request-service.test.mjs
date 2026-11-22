@@ -258,7 +258,7 @@ test('same-ID replacement is registered and cancellable through the same tools w
  const {submit,cancel,rpc}=await listener(t,files.directory);
  const list=await rpc('tools/list',{});
  assert.deepEqual(list.result.tools.map(t=>t.name),['request_submit','request_cancel','request_list','request_workflow_list','request_update_status']);
- assert.deepEqual(list.result.tools[0].inputSchema.oneOf[0].properties.payload.properties.schemaVersion.enum,[
+ assert.deepEqual(list.result.tools[0].inputSchema.oneOf[0].properties.payload.oneOf[0].properties.schemaVersion.enum,[
   'ngs.npc-one-stop.v1','ngs.npc-one-stop.replace.v1',
  ]);
  const body=replacement();
@@ -665,4 +665,38 @@ test('fresh unsupported combat cannot create a stuck registration; a valid reque
  const receipt=await result(submit(input('new-supported')));
  assert.equal(receipt.status,'registered');
  assert.equal((await result(workflow({}))).requests[0].officialRequestId,receipt.officialRequestId);
+});
+
+test('new exact selected-preset schemas register immutable payloads and share old/new NPC target fences',async t=>{
+ const {directory,path}=folder(t),{submit,workflow,cancel}=await listener(t,directory);
+ const selected={schemaVersion:'ngs.npc-one-stop.selection.v1',projectId:'binari',
+  intent:payload.intent,character:payload.character,sourceRefs:payload.sourceRefs,
+  motionSelection:[{presetId:'attack-flat',posePreset:'combat',assetSetSha256:'1'.repeat(64)},
+   {presetId:'run-2d',posePreset:'idle',assetSetSha256:'a'.repeat(64)}]};
+ const [first,second]=selected.motionSelection;
+ const wire=async args=>(await submit(args)).result.structuredContent;
+ for(const body of [{...selected,motionSelection:[]},{...selected,includeCombat:false},
+  {...selected,motionPresets:{walk:'walk',run:'run'}},{...selected,combatMotionPresets:['attack-flat']},
+  {...selected,motionSelection:[first,{...second,presetId:'ATTACK-FLAT'}]},
+  ...[{presetId:'..'},{presetId:'evil/name'},{presetId:'run-2d\n'},{posePreset:'walk'},
+   {assetSetSha256:'A'.repeat(64)},{assetSetSha256:'a'.repeat(63)},{hash:'extra'}].map(change=>({...selected,motionSelection:[{...first,...change}]})),
+  {...selected,motionSelection:Array.from({length:9},(_,i)=>({...first,presetId:'m'+i}))},
+  {...selected,schemaVersion:'ngs.npc-one-stop.selection.replace.v1',character:{...selected.character,npcId:'wrong'}}]){
+   assert.deepEqual(await wire(input('bad-selection',body)),{error:'NGS_ONE_STOP_PAYLOAD_INVALID',status:400});
+ }
+ assert.deepEqual(read(path),[]);
+ const created=await wire(input('selected',selected));
+ assert.equal(created.status,'registered');assert.deepEqual(await wire(input('selected',selected)),created);
+ assert.deepEqual(await wire(input('selected',{...selected,motionSelection:[second,first]})),
+  {error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ assert.deepEqual(await wire(input('legacy',payload)),{error:'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED',status:409});
+ const feed=(await workflow({})).result.structuredContent.requests[0];
+ assert.equal(feed.officialRequestId,created.officialRequestId);assert.deepEqual(feed.payload,selected);
+ assert.equal(feed.payloadSha256,sha(canonical(selected)));
+ await cancel({officialRequestId:created.officialRequestId});
+ const legacy=await wire(input('legacy',payload));assert.equal(legacy.status,'registered');
+ const replace={...selected,schemaVersion:'ngs.npc-one-stop.selection.replace.v1'};
+ assert.deepEqual(await wire(input('selected-replacement',replace)),{error:'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED',status:409});
+ await cancel({officialRequestId:legacy.officialRequestId});
+ assert.equal((await wire(input('selected-replacement',replace))).status,'registered');
 });

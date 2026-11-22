@@ -38,7 +38,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
   WHERE source_id=? AND project_id=? AND idempotency_key=?`);
  try{ensurePendingReasonTable(db);}catch(error){db.close();throw error;}
  const target=db.prepare(`SELECT official_request_id FROM official_requests
-  WHERE project_id=? AND request_type='npc.workflow' AND schema_version IN (?,?) AND state IN ('registered','planned')
+  WHERE project_id=? AND request_type='npc.workflow' AND schema_version IN (${oneStopSchemas.map(()=>'?').join(',')}) AND state IN ('registered','planned')
   AND (json_extract(payload_json,'$.character.npcId')=? COLLATE NOCASE
    OR json_extract(payload_json,'$.character.slug')=? COLLATE NOCASE) LIMIT 1`);
  const targetCategory=db.prepare(`SELECT official_request_id FROM official_requests

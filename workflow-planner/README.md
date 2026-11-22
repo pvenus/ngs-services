@@ -95,3 +95,19 @@ the existing 10-task graph is accepted only for historical completion evidence.
 Do not select the new planner independently of the matching PDS and worker
 release, and drain any old active graph on its current installed workers before selecting
 the split release.
+
+### NPC selected movement
+
+The selected one-stop schemas (create and replace) keep the existing
+preparation and directional portrait tasks, then plan only the exact
+selected motions. Each direction/preset yields
+`animation_motion_<slot>_<direction>` and
+`frames_motion_<slot>_<direction>`, where `slot` is the first 16 lowercase
+hex digits of SHA-256 of the exact UTF-8 preset ID. Tasks keep their existing
+types and worker lanes. Task inputs pin the exact preset ID in `motion`,
+its pose in `posePreset`, and the expected `assetSetSha256`. The validated
+directional character portrait supplies appearance for either pose group;
+a combat motion is not a request to create a separate combat portrait.
+Frames depend on the same exact preset/direction animation. PDS enforces
+published source identity at execution. The existing walk/run graph for old
+noncombat rows is unchanged.
