@@ -297,3 +297,24 @@ secrets are emitted. Filex Writer preparation is off by default; see
 [the separately pinned, manual-only Filex candidate path](FILEX-PREPARATION.md).
 A staged Filex receipt must never be interpreted as active compatibility for
 a Backend Stack candidate.
+
+### Re-proven Image Worker manual retry
+
+A historical Image Worker failure remains visible and unchanged. For the
+exact failed SHA only, the authenticated candidate preparer can rebind the
+same artifact, immutable release tree and runner to the current prior
+selector. The previous verified installed image worker must be the actual
+loaded process, have no running work in the original read-only workflow
+ledger, and report a fresh provider-backed heartbeat after the failure and
+current selector/host-binding changes. The host binding must still match its
+configured hash. Failed rollback history is not treated as recovered without
+this independent live proof.
+
+A separate owner-private retry offer binds the exact failure and candidate
+bytes. The single Image Worker row is the only entrypoint; neither bulk nor
+scheduled deployment may select it. The cycle requires the same offer on
+click, requires a recent matching preparation status, re-proves the selected
+baseline and locks, archives the exact previous
+result before invoking the unchanged fixed adapter, and retains a journal
+on uncertain execution outcome. This lane only supports Image Worker. Other
+worker/service types, Filex, Local NGS and Space keep their own existing rules.

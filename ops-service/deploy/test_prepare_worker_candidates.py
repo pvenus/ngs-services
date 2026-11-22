@@ -158,10 +158,10 @@ class WorkerCandidates(unittest.TestCase):
         self.calls.append(target)
         return target not in self.blocked and pin==digest(self.selector_paths[target].read_bytes())
 
-    def prepare(self,evidence=None,main=None):
+    def prepare(self,evidence=None,main=None,retry_probe=None):
         return workers.prepare_worker_candidates(self.evidence if evidence is None else evidence,
                 repo=self.repo,home=self.home,control=self.control,
-                read_main=main or (lambda:self.head), idle=self.idle)
+                read_main=main or (lambda:self.head), idle=self.idle, retry_probe=retry_probe)
 
     def test_all_six_real_artifact_bindings_publish_manual_only_and_rerun_is_noop(self):
         original={p:p.read_bytes() for p in self.selector_paths.values()}|self.old_bindings
@@ -234,3 +234,42 @@ class WorkerCandidates(unittest.TestCase):
                          {'state':'blocked','code':'WORKER_RUNTIME_DEPENDENCY_UNVERIFIED'})
         self.assertFalse((self.targets/'worker-image/ready.json').exists())
         self.assertEqual(result['worker-document'],{'state':'ready'})
+
+    def test_failed_image_retry_only_rebinds_prior_selector_after_verified_recovery(self):
+        self.prepare()
+        target='worker-image'
+        folder=self.targets/target
+        prior=folder/'candidate.json'
+        ready=folder/'ready.json'
+        old_plan=json_load(prior.read_bytes())
+        old_ready=ready.read_bytes()
+        baseline='abcdef1'+'a'*33
+        last=folder/'last-result.json'
+        atomic_write(last,json_bytes({'schemaVersion':workers.TERMINAL,'target':target,'attemptedSha':self.head,
+             'state':'failed','finishedAt':'2026-11-22T16:08:26Z','observed':{'sha':baseline,
+               'deployedAt':'2026-11-21T12:28:46Z'},'failure':{'phase':'health','code':'TARGET_HEALTH_TIMEOUT',
+               'rollback':'failed'}}))
+        last_bytes=last.read_bytes()
+        selector=self.selector_paths[target]
+        changed=plistlib.loads(selector.read_bytes())
+        cfg=Path(changed['EnvironmentVariables']['WORKFLOW_IMAGE_HOST_CONFIG'])
+        write(cfg,b'verified revised Codex pin')
+        changed['EnvironmentVariables']['WORKFLOW_IMAGE_HOST_CONFIG_SHA256']=digest(cfg.read_bytes())
+        write(selector,plistlib.dumps(changed))
+        self.assertEqual(self.prepare(retry_probe=lambda *_:False)['targets'][target],
+                         {'state':'blocked','code':'WORKER_RETRY_BASELINE_UNPROVEN'})
+        self.assertFalse((folder/'retry-ready.json').exists())
+        def authoritative_probe(t,h,p,finished):
+            self.assertEqual((t,p,finished),(target,baseline,'2026-11-22T16:08:26Z'))
+            return h==digest(selector.read_bytes())
+        self.assertEqual(self.prepare(retry_probe=authoritative_probe)['targets'][target],{'state':'ready'})
+        new_plan=json_load(prior.read_bytes())
+        self.assertEqual(new_plan,{**old_plan,'expectedPriorPlistSha256':digest(selector.read_bytes())})
+        self.assertEqual(ready.read_bytes(),old_ready)
+        self.assertEqual(last.read_bytes(),last_bytes)
+        retry=json_load((folder/'retry-ready.json').read_bytes())
+        self.assertEqual(retry['failureSha256'],digest(last_bytes))
+        self.assertEqual(retry['candidateSha256'],digest(prior.read_bytes()))
+        atomic_write(prior,json_bytes({**new_plan,'treeSha256':'c'*64}))
+        self.assertEqual(self.prepare(retry_probe=authoritative_probe)['targets'][target],
+                         {'state':'blocked','code':'WORKER_REGISTERED_CANDIDATE_DRIFT'})

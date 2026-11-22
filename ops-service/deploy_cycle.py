@@ -13,7 +13,8 @@ import threading
 import uuid
 
 from deploy_control import KEY, bounded_private, is_sha, reject, secure_directory, stamp
-from release_equivalence import equivalent_release
+from release_equivalence import actual_selector_sha, equivalent_release
+from deploy.prepare_ops_candidates_once import image_retry_baseline
 
 
 TARGETS=(
@@ -27,6 +28,9 @@ TARGETS=(
 GROUPS=(('ngs','NGS'),('services','서비스'),('workers','워커'))
 IDS={item[0] for item in TARGETS}
 READY='ops.deploy-target-ready.v1'
+IMAGE_RETRY='worker-image'
+IMAGE_RETRY_READY='ops.worker-manual-retry-ready.v1'
+IMAGE_RETRY_ARCHIVE='ops.worker-manual-retry-admission.v1'
 RECEIPT='ops.deploy-target-receipt.v1'
 ERROR='ops.deploy-target-error.v1'
 PHASES={'preflight','unload','selector','start','health'}
@@ -343,9 +347,11 @@ def proof(value,target,sha):
 
 
 class DeploymentCycle:
-    def __init__(self,root,*,runner=fixed_runner):
+    def __init__(self,root,*,runner=fixed_runner,retry_probe=image_retry_baseline,home=None):
         self.root=Path(root)
         self.runner=runner
+        self.retry_probe=retry_probe
+        self.home=Path.home() if home is None else Path(home)
         self.guard=threading.RLock()
         self.active=None
 
@@ -371,7 +377,9 @@ class DeploymentCycle:
         value=optional(self.root/'active.json')
         if value is not None:
             retry='retry' in value if type(value) is dict else False
-            check(exact(value,'schemaVersion','selection','targets','startedAt',*(['retry'] if retry else [])) and value['schemaVersion']==ACTIVE and
+            worker_retry='workerRetry' in value if type(value) is dict else False
+            extra=['retry'] if retry else ['workerRetry'] if worker_retry else []
+            check(not (retry and worker_retry) and exact(value,'schemaVersion','selection','targets','startedAt',*extra) and value['schemaVersion']==ACTIVE and
                   type(value['selection']) is str and value['selection'] in IDS|{k for k,_ in GROUPS}|{'all'} and
                   type(value['targets']) is list and value['targets'] and
                   len(value['targets'])==len(set(value['targets'])) and set(value['targets']) <= set(self._selection(value['selection'])),
@@ -383,6 +391,11 @@ class DeploymentCycle:
                       exact(item,'sha','attemptId','previousAttemptId') and is_sha(item['sha']) and
                       retry_id(item['attemptId']) and retry_id(item['previousAttemptId'],previous=True) and
                       item['attemptId']!=item['previousAttemptId'],'OPS_DEPLOY_JOURNAL_INVALID')
+            if worker_retry:
+                item=value['workerRetry']
+                check(value['selection']==IMAGE_RETRY and value['targets']==[IMAGE_RETRY] and
+                      exact(item,'sha','attemptId','offerSha256') and is_sha(item['sha']) and
+                      retry_id(item['attemptId']) and sha256(item['offerSha256']),'OPS_DEPLOY_JOURNAL_INVALID')
         return value
 
     def _target(self,target):
@@ -393,7 +406,7 @@ class DeploymentCycle:
         if state is not None:
             fields=('schemaVersion','target','attemptedSha','state','finishedAt','observed')
             if type(state) is dict and 'attemptId' in state:
-                check(target=='ngs-local' and retry_id(state['attemptId']),'OPS_TARGET_RESULT_INVALID')
+                check(target in ('ngs-local',IMAGE_RETRY) and retry_id(state['attemptId']),'OPS_TARGET_RESULT_INVALID')
                 fields+=('attemptId',)
             check((exact(state,*fields) or exact(state,*fields,'failure')) and
                   state['schemaVersion']==TERMINAL and state['target']==target and is_sha(state['attemptedSha']) and
@@ -527,6 +540,12 @@ class DeploymentCycle:
                 retry=self._retry_plan(record,initial)
                 if retry:
                     row['retry']={'sha':record['sha'],'previousAttemptId':retry[2]['previousAttemptId']}
+            if target==IMAGE_RETRY and phase=='failed' and not (locked or journal):
+                retry=self._image_retry_plan(record['sha'])
+                if retry:
+                    row['workerRetry']={'sha':record['sha'],'offerSha256':retry[0]}
+                    row['canDeploy']=True
+                    row['manualOnly']=True
             if row['ready']:plans[target]=(record,initial,phase)
             rows.append(row)
         ready={row['id']:row['ready'] for row in rows}
@@ -543,7 +562,7 @@ class DeploymentCycle:
         all_ready=bool(not (locked or journal) and all(ready.values()))
         # Space publication and Local same-version retries have independent
         # approval paths; bulk cutover covers only actionable ordinary rows.
-        can_deploy_all=any(r['id']!='ngs-space' and r['canDeploy'] for r in rows)
+        can_deploy_all=any(r['id']!='ngs-space' and r['canDeploy'] and r['state']=='ready' for r in rows)
         return ({'groups':groups,'targets':rows,'allReady':all_ready,'canDeployAll':can_deploy_all,
                  'active':active,'comparison':compare,**({'preparation':preparation} if preparation else {})},
                 plans,bool(journal or locked))
@@ -726,12 +745,122 @@ class DeploymentCycle:
             finally:
                 if fd is not None:os.close(fd)
 
+    def _image_retry_plan(self,sha,*,live=False):
+        target=IMAGE_RETRY
+        directory=self.root/'targets'/target
+        try:
+            record,initial,phase=self._target(target)
+            check(phase=='failed' and record is not None and record['sha']==sha and
+                  record.get('manualOnly') is True and initial and initial['sha']!=sha,'OPS_WORKER_RETRY_UNVERIFIED')
+            prep=preparation_status(self.root)
+            check(prep and prep['targets'].get(target)=={'state':'ready','sha':sha}
+                  and 0<=(stamp(now())-stamp(prep['checkedAt'])).total_seconds()<=900,
+                  'OPS_WORKER_RETRY_UNVERIFIED')
+            raw=bounded_private(directory/'retry-ready.json',4096)
+            offer=json.loads(raw,object_pairs_hook=unique_pairs)
+            check(exact(offer,'schemaVersion','target','sha','failureSha256','candidateSha256','runnerSha256')
+                  and offer['schemaVersion']==IMAGE_RETRY_READY and offer['target']==target and offer['sha']==sha
+                  and offer['runnerSha256']==record['runnerSha256'],'OPS_WORKER_RETRY_UNVERIFIED')
+            last_raw=bounded_private(directory/'last-result.json',4096)
+            manifest_raw=bounded_private(directory/'candidate.json',4096)
+            check(offer['failureSha256']==hashlib.sha256(last_raw).hexdigest() and
+                  offer['candidateSha256']==hashlib.sha256(manifest_raw).hexdigest(),'OPS_WORKER_RETRY_UNVERIFIED')
+            last=json.loads(last_raw,object_pairs_hook=unique_pairs)
+            manifest=json.loads(manifest_raw,object_pairs_hook=unique_pairs)
+            check('failure' in last and last['observed']==initial and exact(manifest,'schemaVersion','target','sha','archiveSha256',
+                  'treeSha256','expectedPriorPlistSha256') and manifest['schemaVersion']=='ops.mac-target-candidate.v1'
+                  and manifest['target']==target and manifest['sha']==sha
+                  and manifest['archiveSha256']==record['artifactSha256'] and sha256(manifest['treeSha256'])
+                  and manifest['expectedPriorPlistSha256']==actual_selector_sha(target,home=self.home),
+                  'OPS_WORKER_RETRY_UNVERIFIED')
+            if live:
+                check(self.retry_probe(self.home,target,manifest['expectedPriorPlistSha256'],
+                                       initial['sha'],last['finishedAt']) is True,'OPS_WORKER_RETRY_UNVERIFIED')
+            return (hashlib.sha256(raw).hexdigest(),record,initial,last_raw)
+        except (OSError,ValueError,KeyError,AttributeError,TypeError,OverflowError,RecursionError):
+            return None
+
+    def _run_image_retry(self,fd,job,expected):
+        target=IMAGE_RETRY
+        retry=job['workerRetry']
+        settled=False
+        try:
+            if self._image_retry_plan(retry['sha'],live=True)!=expected:
+                settled=True # Refused without invoking the executable.
+                return
+            _,record,prior,_=expected
+            try:
+                value=self.runner(self.root/'targets'/target,record)
+                after=proof(value,target,record['sha'])
+            except TargetFailure as error:
+                self._terminal(target,record,'failed',prior,error.diagnostic,attempt_id=retry['attemptId'])
+            else:
+                self._terminal(target,record,'deployed',after,attempt_id=retry['attemptId'])
+            sync_dir(self.root/'targets'/target)
+            settled=True
+        except Exception:
+            # Missing trustworthy execution receipt: retain the exact journal.
+            pass
+        finally:
+            with self.guard:
+                try:
+                    if settled and self._journal()==job:
+                        (self.root/'active.json').unlink()
+                        sync_dir(self.root)
+                finally:
+                    self.active=None
+                    os.close(fd)
+
+    def retry_worker(self,target,sha,offer_sha):
+        if target!=IMAGE_RETRY or not is_sha(sha) or not sha256(offer_sha):
+            reject(400,'OPS_WORKER_RETRY_SELECTION_INVALID')
+        with self.guard:
+            fd=None
+            try:
+                if not self._configured():reject(503,'OPS_DEPLOY_CYCLE_UNAVAILABLE')
+                fd=self._executor_lock()
+                if self._journal() is not None:reject(409,'OPS_DEPLOY_CYCLE_BUSY_OR_UNVERIFIED')
+                plan=self._image_retry_plan(sha,live=True)
+                if not plan or plan[0]!=offer_sha:
+                    reject(409,'OPS_WORKER_RETRY_STALE_OR_UNVERIFIED')
+                attempt=uuid.uuid4().hex
+                payload={'sha':sha,'attemptId':attempt,'offerSha256':offer_sha}
+                job={'schemaVersion':ACTIVE,'selection':target,'targets':[target],'startedAt':now(),'workerRetry':payload}
+                archive=self.root/'targets'/target/'manual-retries'
+                archive.mkdir(mode=0o700,exist_ok=True)
+                secure_directory(archive)
+                previous=archive/(attempt+'.previous.json')
+                admission=archive/(attempt+'.json')
+                check(not os.path.lexists(previous) and not os.path.lexists(admission),'OPS_WORKER_RETRY_UNVERIFIED')
+                with os.fdopen(os.open(previous,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600),'wb') as out:
+                    out.write(plan[3]);out.flush();os.fsync(out.fileno())
+                persist(admission,{'schemaVersion':IMAGE_RETRY_ARCHIVE,'target':target,**payload,
+                                   'acceptedAt':job['startedAt'],'previousResultSha256':hashlib.sha256(plan[3]).hexdigest()})
+                sync_dir(archive)
+                sync_dir(archive.parent)
+                persist(self.root/'active.json',job)
+                sync_dir(self.root)
+                self.active=job
+                try:
+                    threading.Thread(target=self._run_image_retry,args=(fd,job,plan),daemon=True).start()
+                except RuntimeError:
+                    self.active=None
+                    reject(503,'OPS_DEPLOY_CYCLE_UNAVAILABLE')
+                fd=None
+                return {**self._snapshot()[0],'workerRetry':payload}
+            except BlockingIOError:
+                reject(409,'OPS_DEPLOY_CYCLE_BUSY_OR_UNVERIFIED')
+            except (OSError,ValueError,TypeError,OverflowError):
+                reject(503,'OPS_DEPLOY_CYCLE_UNAVAILABLE')
+            finally:
+                if fd is not None:os.close(fd)
+
     def sweep(self):
         """An opt-in periodic host can admit one verified target per tick."""
         status=self.status()
         if status['active'] is not None:return status
         preferred=self._selection('all')
         pending={row['id'] for row in status['targets']
-                 if row['canDeploy'] and row.get('manualOnly') is not True}
+                 if row['canDeploy'] and row['state']=='ready' and row.get('manualOnly') is not True}
         if not pending:return status
         return self.trigger(next(key for key in preferred if key in pending),automatic=True)

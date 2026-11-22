@@ -43,13 +43,14 @@ class CoordinatorTest(unittest.TestCase):
             self.assertIsNone(assert_current(A))
             return {key:dict(target=key,sha=A,state='registered') for key in p.SERVICE_TARGETS}
 
-        def workers(evidence, *, repo, home, control, read_main, idle, trusted_deploy):
+        def workers(evidence, *, repo, home, control, read_main, idle, trusted_deploy, retry_probe):
             self.calls.append(('worker',repo.name))
             self.assertEqual(set(evidence),{'head','workflow','run','artifact','raw'})
             self.assertEqual(evidence['raw'],b'sealed ZIP')
             self.assertEqual(read_main(),B)
             self.assertEqual(trusted_deploy,control/'bin')
             self.assertFalse(idle('unknown','f'*64))
+            self.assertFalse(retry_probe('unknown','f'*64,'a'*40,'2026-11-22T12:00:00Z'))
             return {'sha':B,'targets':{key:{'state':'already_ready'} for key in p.WORKER_TARGETS}}
 
         def relay(control,home,head,*,assert_current,host):

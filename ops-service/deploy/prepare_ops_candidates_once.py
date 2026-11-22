@@ -1,6 +1,7 @@
 """Private Mac OPS candidate detector. Never applies, activates or publishes."""
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
+import http.client
 import fcntl
 import hashlib
 import importlib.abc
@@ -52,7 +53,7 @@ PENDING = frozenset(('GITHUB_TARGET_RUN_NOT_READY GITHUB_TARGET_RUN_MOVED GITHUB
                      'WORKER_MAIN_ADVANCED PREP_LOCK_BUSY PREP_ACTIVE_DEPLOYMENT WORKER_DEPLOY_ACTIVE_OR_UNVERIFIED '
                      'SERVICE_LOCAL_ARTIFACT_UNAVAILABLE FILEX_WORKFLOW_NOT_READY FILEX_MAIN_ADVANCED '
                      'FILEX_PREPARATION_LOCK_BUSY').split())
-BLOCKED = frozenset(('WORKER_RUNNER_UNVERIFIED WORKER_RUNNER_DEPENDENCY_UNVERIFIED WORKER_SELECTOR_INVALID '
+BLOCKED = frozenset(('WORKER_RETRY_BASELINE_UNPROVEN WORKER_RUNNER_UNVERIFIED WORKER_RUNNER_DEPENDENCY_UNVERIFIED WORKER_SELECTOR_INVALID '
                      'WORKER_RUNTIME_PATH_INVALID WORKER_RUNTIME_DEPENDENCY_UNVERIFIED WORKER_DATABASE_UNVERIFIED '
                      'WORKER_IMAGE_CONFIG_UNVERIFIED WORKER_OUTCOME_UNVERIFIED WORKER_ATTEMPT_FAILED '
                      'WORKER_IDLE_UNPROVEN WORKER_AUDIO_PROOF_DRIFT WORKER_ADMISSION_INPUT_DRIFT '
@@ -321,6 +322,76 @@ def worker_idle(deps, home, host, target, expected):
         return False
 
 
+
+# The existing image worker reports heartbeat only after its provider probe.
+# Other roles need their own equivalent recovery proof before enabling retry.
+IMAGE_RETRY_TARGET = 'worker-image'
+IMAGE_RETRY_LABEL = 'com.vinus.workflow.image-worker'
+
+
+def loaded_image_selector(report,args,working_directory):
+    lines=report.splitlines()
+    try:
+        start=lines.index('\targuments = {')+1
+        end=lines.index('\t}',start)
+    except ValueError:
+        return False
+    return (lines[start:end]==['\t\t'+p for p in args]
+            and lines.count('\tworking directory = '+working_directory)==1)
+
+
+def image_heartbeat():
+    conn=http.client.HTTPConnection('127.0.0.1',8090,timeout=2)
+    try:
+        conn.request('GET','/api/service-status')
+        response=conn.getresponse()
+        raw=response.read(256*1024+1)
+        require(response.status==200 and len(raw)<=256*1024,'WORKER_RETRY_BASELINE_UNPROVEN')
+        return json.loads(raw)['services']
+    finally:
+        conn.close()
+
+
+def image_retry_baseline(home,target,selector_sha,observed_sha,finished_at,*,host=None,heartbeat=None,clock=None):
+    """Reprove the pre-failure installed image worker without writing or claiming."""
+    if target!=IMAGE_RETRY_TARGET or not valid(DIGEST,selector_sha) or not valid(SHA,observed_sha):
+        return False
+    host=ReadonlyHost() if host is None else host
+    heartbeat=image_heartbeat if heartbeat is None else heartbeat
+    clock=(lambda: datetime.now(UTC)) if clock is None else clock
+    home=Path(home)
+    try:
+        path=home/'Library/LaunchAgents'/(IMAGE_RETRY_LABEL+'.plist')
+        raw=read_private(path,65536)
+        if sha(raw)!=selector_sha:return False
+        selector=plistlib.loads(raw)
+        entry=Path(selector['ProgramArguments'][1])
+        releases=home/'Workspaces/Workers/code/releases'
+        relative=entry.relative_to(releases).parts
+        match=re.fullmatch(r'workflows-github-([a-f0-9]{7,40})',relative[0]) if relative else None
+        if (not match or relative[1:]!=('image','image-cli.mjs') or not observed_sha.startswith(match[1])
+                or entry.resolve(strict=True)!=entry or not entry.is_file()):return False
+        environment=selector['EnvironmentVariables']
+        host_config=Path(environment['WORKFLOW_IMAGE_HOST_CONFIG'])
+        host_digest=environment['WORKFLOW_IMAGE_HOST_CONFIG_SHA256']
+        if (not host_config.is_absolute() or host_config.resolve(strict=True)!=host_config
+                or sha(read_private(host_config,128*1024))!=host_digest):return False
+        deps=SimpleNamespace(target_specs={target:SimpleNamespace(label=IMAGE_RETRY_LABEL)},
+                             loaded_selector=loaded_image_selector)
+        if not worker_idle(deps,home,host,target,selector_sha):return False
+        cutoff=max(datetime.fromisoformat(finished_at),datetime.fromtimestamp(path.stat().st_mtime,UTC),
+                   datetime.fromtimestamp(host_config.stat().st_mtime,UTC))
+        rows=[row for row in heartbeat() if row.get('serverName')=='image-worker']
+        if len(rows)!=1 or rows[0].get('state')!='connected':return False
+        beat=datetime.fromisoformat(rows[0]['lastReceivedAt'])
+        current=clock()
+        return (cutoff<=beat<=current and (current-beat).total_seconds()<=125
+                and read_private(path,65536)==raw
+                and sha(read_private(host_config,128*1024))==host_digest)
+    except (OSError,ValueError,KeyError,IndexError,TypeError,AttributeError,http.client.HTTPException):
+        return False
+
+
 def row(state, *, head=None, code=None):
     out = {'state':state if state in STATES else 'failed'}
     if valid(SHA, head):
@@ -377,7 +448,9 @@ def run_once(deps, home, control, *, fetch=fetch_git, host=None):
                 else:
                     package = deps.prepare_workers({k:v for k,v in ev.items() if k!='verified'},repo=git,
                         home=home,control=control,read_main=main,
-                        idle=lambda target,prior:worker_idle(deps,home,host,target,prior),trusted_deploy=control/'bin')
+                        idle=lambda target,prior:worker_idle(deps,home,host,target,prior),trusted_deploy=control/'bin',
+                        retry_probe=lambda target,pin,prior,finished:image_retry_baseline(
+                            home,target,pin,prior,finished,host=host))
                     require(type(package) is dict and package.get('sha')==head,'GITHUB_TARGET_EVIDENCE_INVALID')
                     result = package['targets']
                 require(type(result) is dict and set(result)==set(catalog),'GITHUB_TARGET_EVIDENCE_INVALID')

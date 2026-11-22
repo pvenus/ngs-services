@@ -18,6 +18,8 @@ READY = 'ops.deploy-target-ready.v1'
 CANDIDATE = 'ops.mac-target-candidate.v1'
 TERMINAL = 'ops.deploy-target-result.v1'
 MAX_CONTROL = 128 * 1024
+RETRY_TARGET = 'worker-image'
+RETRY_READY = 'ops.worker-manual-retry-ready.v1'
 # Trusted production adapters are read and compared, never imported from the
 # live target directories or executed by this module.
 SUPPORT = ('prepare_ngs_release.py', 'planner_cutover.py', 'audio_cutover.py')
@@ -139,24 +141,35 @@ def verify_worker_runtime(target, proposed):
 
 
 def _prior_attempt(target_dir, target, head):
-    last = _optional(target_dir/'last-result.json')
-    if last is None:
-        return False
+    try:
+        raw=read_private(target_dir/'last-result.json',4096,mode=0o600)
+    except FileNotFoundError:
+        return None
+    last=json_load(raw)
     need(type(last) is dict and last.get('schemaVersion') == TERMINAL and last.get('target') == target
          and type(last.get('attemptedSha')) is str and last.get('state') in ('failed','deployed'),
          'WORKER_OUTCOME_UNVERIFIED')
-    return last['attemptedSha'] == head and last['state'] == 'failed'
+    return (last,digest(raw)) if last['attemptedSha']==head and last['state']=='failed' else None
 
 
-def _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle):
+def _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle, retry_probe):
     directory = control/'targets'/target
     private_directory(directory)
     head = verified['proof']['headSha']
-    need(not _prior_attempt(directory, target, head), 'WORKER_ATTEMPT_FAILED')
+    failed=_prior_attempt(directory,target,head)
+    need(not failed or target==RETRY_TARGET and retry_probe is not None,'WORKER_ATTEMPT_FAILED')
     prior, _, _, proposed = _selector(target, home, release)
     if proposed is None:
+        need(not failed,'WORKER_RETRY_BASELINE_UNPROVEN')
         return 'current', None
     prior_hash = digest(prior)
+    if failed:
+        last, _ = failed
+        previous=last.get('observed')
+        need(type(last.get('failure')) is dict and type(previous) is dict and set(previous)=={'sha','deployedAt'} and
+             type(previous['sha']) is str and previous['sha']!=head and
+             retry_probe(target,prior_hash,previous['sha'],last.get('finishedAt')) is True,
+             'WORKER_RETRY_BASELINE_UNPROVEN')
     need(idle(target, prior_hash) is True, 'WORKER_IDLE_UNPROVEN')
     verification = _runner(target, directory, trusted_deploy)
     verify_worker_runtime(target, proposed)
@@ -168,7 +181,7 @@ def _plan(verified, repo, home, control, release, full_tree, target, trusted_dep
         need(all(staged.get(k)==v for k,v in candidate.items()) and set(staged)==set(candidate)|{'audioBindingSha256'},
              'WORKER_AUDIO_PROOF_DRIFT')
         candidate = staged
-    return 'verified', (candidate, verification, prior)
+    return 'verified', (candidate, verification, prior, failed)
 
 
 def _publish(directory, candidate, runner, stamp):
@@ -204,7 +217,33 @@ def _publish(directory, candidate, runner, stamp):
     return 'ready'
 
 
-def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle, trusted_deploy=None):
+
+def _publish_retry(directory,candidate,runner,failed):
+    # Rebinding only the prior selector is allowed, and only after re-reading
+    # the same exact Git/archive tree + installed runner and the repaired prior.
+    ready=_optional(directory/'ready.json')
+    prior=_optional(directory/'candidate.json')
+    keys=('schemaVersion','target','sha','archiveSha256','treeSha256')
+    need(type(prior) is dict and set(prior)==set(candidate) and all(prior[k]==candidate[k] for k in keys)
+         and type(ready) is dict and set(ready)=={'schemaVersion','target','sha','verifiedAt',
+            'artifactSha256','runnerSha256','manualOnly'} and ready['schemaVersion']==READY
+         and ready['manualOnly'] is True and ready['target']==candidate['target'] and ready['sha']==candidate['sha']
+         and ready['artifactSha256']==candidate['archiveSha256'] and ready['runnerSha256']==runner,
+         'WORKER_REGISTERED_CANDIDATE_DRIFT')
+    candidate_bytes=json_bytes(candidate)
+    offer={'schemaVersion':RETRY_READY,'target':candidate['target'],'sha':candidate['sha'],
+           'failureSha256':failed[1],'candidateSha256':digest(candidate_bytes),'runnerSha256':runner}
+    if prior!=candidate:
+        atomic_write(directory/'candidate.json',candidate_bytes)
+    elif digest(read_private(directory/'candidate.json',4096,mode=0o600))!=offer['candidateSha256']:
+        # Preserve exact already-published bytes rather than canonically rewriting.
+        offer['candidateSha256']=digest(read_private(directory/'candidate.json',4096,mode=0o600))
+    if _optional(directory/'retry-ready.json')!=offer:
+        atomic_write(directory/'retry-ready.json',json_bytes(offer))
+    return 'ready'
+
+
+def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle, trusted_deploy=None, retry_probe=None):
     """Accept exact authenticated metadata/ZIP; publish only after trusted idle and CAS checks.
 
     Transport and process supervision are separate. `read_main()` fetches the
@@ -234,7 +273,7 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
         plans, rows = {}, {}
         for target in TARGET_IDS:
             try:
-                state, plan = _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle)
+                state, plan = _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle, retry_probe)
                 rows[target] = {'state': state}
                 if plan:
                     plans[target] = plan
@@ -246,25 +285,27 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
             need(not os.path.lexists(control/'active.json'), 'WORKER_DEPLOY_ACTIVE_OR_UNVERIFIED')
             need(_exact_source(release, tracked) == full_tree, 'WORKER_RELEASE_SOURCE_DRIFT')
             verified_plans = {}
-            for target, (candidate, pins, prior) in plans.items():
+            for target, (candidate, pins, prior, failed) in plans.items():
                 try:
                     updated_state, updated_plan = _plan(verified, repo, home, control, release, full_tree,
-                                                       target, trusted_deploy, idle)
-                    need(updated_state == 'verified' and updated_plan == (candidate,pins,prior),
+                                                       target, trusted_deploy, idle, retry_probe)
+                    need(updated_state == 'verified' and updated_plan == (candidate,pins,prior,failed),
                          'WORKER_ADMISSION_INPUT_DRIFT')
-                    verified_plans[target] = (candidate, pins[0])
+                    verified_plans[target] = (candidate, pins[0], failed)
                 except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
                     rows[target] = {'state': 'blocked', 'code': _safe_reason(exc)}
             if verified_plans:
                 need(read_main() == head, 'WORKER_MAIN_ADVANCED')
                 stamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                for target, (candidate, runner) in verified_plans.items():
+                for target, (candidate, runner, failed) in verified_plans.items():
                     directory = control/'targets'/target
                     try:
                         prior, _, _, proposed = _selector(target, home, release)
                         need(proposed is not None and digest(prior) == candidate['expectedPriorPlistSha256']
-                             and not _prior_attempt(directory, target, head),'WORKER_ADMISSION_INPUT_DRIFT')
-                        rows[target] = {'state': _publish(directory, candidate, runner, stamp)}
+                             and _prior_attempt(directory,target,head)==failed,'WORKER_ADMISSION_INPUT_DRIFT')
+                        state=(_publish_retry(directory,candidate,runner,failed) if failed else
+                               _publish(directory,candidate,runner,stamp))
+                        rows[target] = {'state':state}
                     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
                         rows[target] = {'state': 'blocked', 'code': _safe_reason(exc)}
         return {'sha': head, 'targets': rows}
@@ -273,7 +314,7 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
 SAFE_CODES = frozenset(('WORKER_RUNNER_UNVERIFIED WORKER_RUNNER_DEPENDENCY_UNVERIFIED '
     'WORKER_SELECTOR_INVALID WORKER_RUNTIME_PATH_INVALID WORKER_RUNTIME_DEPENDENCY_UNVERIFIED '
     'WORKER_DATABASE_UNVERIFIED WORKER_IMAGE_CONFIG_UNVERIFIED WORKER_OUTCOME_UNVERIFIED '
-    'WORKER_ATTEMPT_FAILED WORKER_IDLE_UNPROVEN WORKER_AUDIO_PROOF_DRIFT '
+    'WORKER_ATTEMPT_FAILED WORKER_RETRY_BASELINE_UNPROVEN WORKER_IDLE_UNPROVEN WORKER_AUDIO_PROOF_DRIFT '
     'WORKER_ADMISSION_INPUT_DRIFT WORKER_REGISTERED_CANDIDATE_DRIFT '
     'TARGET_SELECTOR_LABEL TARGET_SELECTOR_ARGUMENTS TARGET_SELECTOR_ENTRY TARGET_SELECTOR_WORKDIR '
     'TARGET_UNHANDLED_RELEASE_ARG TARGET_UNHANDLED_RELEASE_REFERENCE TARGET_RELEASE_ENTRY_MISSING '

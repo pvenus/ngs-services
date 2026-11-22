@@ -267,3 +267,22 @@ test('bulk stays disabled when there are no ordinary ready targets',async()=>{
  app.of('deploy-all').fire('click');await flush();
  assert.equal(app.hits.filter(([,o])=>o.method==='POST').length,0);
 });
+
+test('re-proven failed image keeps its failure badge and submits exact single-row retry',async()=>{
+ const model=data({all:false}),image=model.cycle.targets.find(row=>row.id==='worker-image');
+ Object.assign(image,{state:'failed',canDeploy:true,manualOnly:true,
+   failure:{phase:'health',code:'TARGET_HEALTH_TIMEOUT',rollback:'failed'},
+   workerRetry:{sha:a,offerSha256:'c'.repeat(64)}});
+ const app=fixtures(async(_url,opts)=>opts.method==='POST'?
+  Response.json({error:'OPS_WORKER_RETRY_STALE_OR_UNVERIFIED'},{status:409}):Response.json(model));
+ await flush();
+ const row=app.row('worker-image'),button=app.find(row,n=>n.tag==='button');
+ assert.equal(row.dataset.deployState,'failed');
+ assert.ok(app.find(row,n=>n.textContent.includes('TARGET_HEALTH_TIMEOUT')));
+ assert.equal(button.disabled,false);
+ assert.equal(app.of('deploy-all').disabled,true);
+ button.fire('click');button.fire('click');app.of('deploy-all').fire('click');await flush();
+ const requests=app.hits.filter(([,o])=>o.method==='POST');
+ assert.equal(requests.length,1);
+ assert.deepEqual(JSON.parse(requests[0][1].body),{action:'retry-worker',target:'worker-image',sha:a,offerSha256:'c'.repeat(64)});
+});

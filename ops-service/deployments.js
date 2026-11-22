@@ -145,6 +145,11 @@ function localRetry(item){
  if(previous!=='initial'&&!(typeof previous==='string'&&/^(?!0{32}$)[a-f0-9]{32}$/u.test(previous)&&previous.length===32))return null;
  return result;
 }
+function imageRetry(target,item){
+ const offer=item?.workerRetry;
+ return target==='worker-image'&&item?.state==='failed'&&item.canDeploy===true&&offer?.sha===item.candidateSha&&
+   isSha(offer.sha)&&typeof offer.offerSha256==='string'&&offer.offerSha256.length===64&&keyPattern.test(offer.offerSha256)?offer:null;
+}
 function groupSection(id,layout,value,targets){
  const section=node('section',undefined,'deploy-group');
  section.dataset.group=id;section.setAttribute('aria-labelledby','deploy-heading-'+id);
@@ -190,11 +195,13 @@ function groupSection(id,layout,value,targets){
   const queue=spaceUnlinked&&Boolean(publication?.configured||publication?.latest);
   const handoff=spaceUnlinked&&!queue?spaceHandoff(item):null;
   const retry=target==='ngs-local'?localRetry(item):null;
-  const action=node('td'),button=node('button',retry?'같은 버전 다시 배포':queue?'스페이스 게시 요청':handoff?(handoff.url?'배포 스레드에 전달':'배포 요청 복사'):'배포','deploy-row-action');button.type='button';
+  const retryImage=imageRetry(target,item);
+  const action=node('td'),button=node('button',retry||retryImage?'같은 버전 다시 배포':queue?'스페이스 게시 요청':handoff?(handoff.url?'배포 스레드에 전달':'배포 요청 복사'):'배포','deploy-row-action');button.type='button';
   button.setAttribute('aria-label',retry?'로컬 같은 버전 다시 배포':queue?'스페이스 게시 요청':handoff?'배포 스레드에 전달 (직접 전송)':label+' 배포');
   button.disabled=active||(!retry&&(queue?(!publication.canRequest||!publication.candidate||publication.busy||publication.blocked):(!handoff&&(item?.canDeploy!==true||state==='running'||spaceUnlinked))));
   rowButtons.set(target,button);action.append(button);
   if(retry)button.addEventListener('click',()=>void retryLocal(button,retry));
+  else if(retryImage)button.addEventListener('click',()=>void retryWorker(target,button,retryImage));
   else if(queue)button.addEventListener('click',()=>void queueSpace(button));
   else if(handoff){
    if(!handoff.url)action.append(node('small','전송 대상: '+handoff.title));
@@ -267,6 +274,13 @@ async function retryLocal(button,shown){
  if(!retry||retry.sha!==shown.sha||retry.previousAttemptId!==shown.previousAttemptId)return;
  await submitDeployment({action:'retry-local',target:'ngs-local',sha:retry.sha,expectedPreviousAttemptId:retry.previousAttemptId},
   '확인된 같은 로컬 버전의 재배포를 요청하는 중입니다.');
+}
+async function retryWorker(target,button,shown){
+ if(active||!current||button.disabled)return;
+ const exact=imageRetry(target,current.targets.get(target));
+ if(!exact||exact.sha!==shown.sha||exact.offerSha256!==shown.offerSha256)return;
+ await submitDeployment({action:'retry-worker',target,sha:exact.sha,offerSha256:exact.offerSha256},
+  '이미지 워커의 같은 버전 재배포를 요청하는 중입니다.');
 }
 async function deploy(target,button){
  if(active||!current||button.disabled)return;
