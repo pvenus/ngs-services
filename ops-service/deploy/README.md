@@ -202,3 +202,31 @@ disabled. This marker does not alter `ready.json`, the failed result,
 NGS selectors, or other targets. Normal preparation later publishes the
 ordinary adapter pin for a different candidate as usual. Installation does
 not attempt a retry.
+
+### Filex concept/BGM writer image preparation (not deployable)
+
+`prepare-filex-writer.yml` attests the existing `filex-writer` image source
+closure separately. It leaves the existing service-target artifact format and
+`backend-stack` scope unchanged. The source-phase artifact is not an image or
+a deploy request. With separately provisioned read-only GitHub evidence,
+the canonical Git objects, and an approved locally available Python image
+digest, `prepare_filex_writer.prepare(github, repo, control, base)` can verify
+the exact successful main workflow/attempt and immutable artifact before
+constructing the minimal Git blob context. The build substitute is limited
+to replacing the existing base tag with that reviewed digest.
+
+The fixed Mac backend uses the `colima-ngs-s3` image store, builds an
+untagged image, and runs only an isolated authenticated capability fixture
+under the registered UID/GID with temporary volumes and no network or
+production mounts. It saves an owner-private
+`filex-writer-prepared/<sha>.json` candidate receipt bound to the immutable
+image ID. An existing receipt is historical preparation evidence, not proof
+that the image still exists or a signal to replace anything.
+
+No ready target, Compose changes, production service start or restart, live
+token read, image tag switch, or deploy action occurs here. The active
+`concept-writer` and its live runtime registration retain their current
+pins. A dedicated fixed Compose executor must be reviewed separately to
+verify those pins and safely support owner-click-only switch and rollback
+without touching other Filex roles. The native launchctl target executor
+cannot be used for this container.
