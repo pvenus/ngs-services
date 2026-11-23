@@ -6,7 +6,7 @@ import {npcPlanningUpdateType,npcPlanningUpdateSchema,npcPlanningRoles,npcPlanni
 import {npcPlanningAddType,npcPlanningAddSchema,npcPlanningAddIdPattern,npcPlanningAddCategoryIdPattern} from './npc-planning-add-envelope.mjs';
 import {audioRequestType,audioSchema,audioKind,audioTitleLimit,audioBriefLimit,audioVocalTextLimit,audioConceptTextLimit,audioLyricsRequestLimit,audioDirectConcept,audioConceptIdPattern,audioDuration} from './audio-generate-envelope.mjs';
 import {motion2DRequestType,motion2DSchema,motionPresetIdPattern,variantPresetIdPattern,motion2DLabelLimit} from './motion-preset-convert-2d-envelope.mjs';
-import {npcAnimationRegenerateType,npcAnimationRegenerateSchema,npcAnimationOwnerPattern} from './npc-animation-regenerate-envelope.mjs';
+import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,npcAnimationOwnerPattern} from './npc-animation-regenerate-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema,audioOfficialIdPattern} from './audio-delete-envelope.mjs';
 import {defaultLimit,listTool,maxCursor,maxLimit,statuses,workflowListTool} from './request-list.mjs';
 
@@ -37,7 +37,7 @@ const npcSelectionPayload={type:'object',properties:{schemaVersion:{enum:selecti
   assetSetSha256:{type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64},
  },required:['presetId','posePreset','assetSetSha256'],additionalProperties:false}}},
  required:['schemaVersion','projectId','intent','character','sourceRefs','motionSelection'],additionalProperties:false};
-const npcAnimationRegeneratePayload={type:'object',properties:{schemaVersion:{const:npcAnimationRegenerateSchema},
+const npcAnimationRegeneratePayload={type:'object',properties:{schemaVersion:{enum:npcAnimationRegenerateSchemas},
  projectId:{const:'binari'},npcId:{type:'string',pattern:npcAnimationOwnerPattern},motionSelection:npcSelectionPayload.properties.motionSelection},
  required:['schemaVersion','projectId','npcId','motionSelection'],additionalProperties:false};
 const conceptId={type:'string',pattern:conceptCategoryIdPattern},groupId={type:'string',pattern:conceptCategoryGroupIdPattern};

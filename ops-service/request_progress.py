@@ -16,13 +16,13 @@ WORKERS = {'file', 'document', 'image', 'animation', 'postprocess', 'audio'}
 # Upper bound implied by one accepted canonical payload, not a selection cap.
 # A valid motion record always carries the exact keys, at least one byte of
 # preset ID, the shortest pose ("idle"), and all 64 hash digits. Each adds 16
-# tasks (animation + frames, eight directions). Full plans add at most 25
+# tasks (animation + frames, eight directions). Full plans add at most 44
 # setup tasks; older workflows fit inside the same projection.
 CANONICAL_PAYLOAD_BYTES = 64 * 1024
 MIN_MOTION_RECORD_BYTES = len(json.dumps(
     {'presetId':'a','posePreset':'idle','assetSetSha256':'a'*64},
     separators=(',',':')).encode('utf-8'))
-MAX_TASKS = 25 + 16 * (CANONICAL_PAYLOAD_BYTES // MIN_MOTION_RECORD_BYTES)
+MAX_TASKS = 44 + 16 * (CANONICAL_PAYLOAD_BYTES // MIN_MOTION_RECORD_BYTES)
 
 
 class ProgressUnavailable(Exception):

@@ -10,12 +10,12 @@ import {audioRequestType,audioSchema,validateAudioGenerate} from './audio-genera
 import {motion2DRequestType,motion2DSchema,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema,validateAudioDelete} from './audio-delete-envelope.mjs';
 
-import {npcAnimationRegenerateType,npcAnimationRegenerateSchema,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
+import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
 const fields=['sourceId','requestType','idempotencyKey','payload'];
 const workflowFamilies=new Map([
  [npcRequestType,{schemas:oneStopSchemas,validate:validateOneStop}],
- [npcAnimationRegenerateType,{schemas:[npcAnimationRegenerateSchema],validate:validateNpcAnimationRegenerate}],
+ [npcAnimationRegenerateType,{schemas:npcAnimationRegenerateSchemas,validate:validateNpcAnimationRegenerate}],
  [conceptCategoryRequestType,{schemas:[conceptCategorySchema],validate:validateConceptCategory}],
  [npcPlanningUpdateType,{schemas:[npcPlanningUpdateSchema],validate:validateNPCPlanningUpdate}],
  [npcPlanningAddType,{schemas:[npcPlanningAddSchema],validate:validateNPCPlanningAdd}],

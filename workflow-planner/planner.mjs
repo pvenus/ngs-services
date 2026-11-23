@@ -1,5 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
-import {canonical,sha,validateOneStop,isReplaceSchema,isSelectionSchema,motionSelectionSlot} from './envelope.mjs';
+import {canonical,sha,validateOneStop,isReplaceSchema,isSelectionSchema,isPoseSelectionSchema,motionSelectionSlot,motionPoseRegistry,motionSelectionPoses} from './envelope.mjs';
 
 import {conceptCategoryRequestType,validateConceptCategory} from './concept-category-envelope.mjs';
 
@@ -99,18 +99,24 @@ function materializePlan(row,payload,pixelPortraits=true){
   return {payload,tasks};
  }
  // Legacy combat envelopes requested an unsupported dedicated portrait workflow.
- // A newly selected combat preset only changes the motion reference and final slot.
+ // Selected v1 continues to use the original historical idle-portrait graph.
  if(row.payload.includeCombat)throw Error('WORKFLOW_COMBAT_NOT_SUPPORTED');
  const npcId=row.payload.character.npcId,replace=isReplaceSchema(row.schemaVersion);
- const selected=isSelectionSchema(row.schemaVersion);
+ const selected=isSelectionSchema(row.schemaVersion),poseSelection=isPoseSelectionSchema(row.schemaVersion);
+ // v2 always uses the canonical pixel appearance chain; the optional graph
+ // setting exists solely for verification of historical persisted plans.
+ pixelPortraits=poseSelection||pixelPortraits;
  const motions=selected?row.payload.motionSelection.map(({presetId,posePreset,assetSetSha256})=>(
   {motion:presetId,key:'motion_'+motionSelectionSlot(presetId),posePreset,assetSetSha256}
  )):['walk','run'].map(motion=>({motion,key:motion}));
- const tasks=[];
- const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
+ const required=new Set(['idle',...(poseSelection?motions.map(motion=>motion.posePreset):[])]);
+ const poses=motionSelectionPoses.filter(pose=>required.has(pose));
+ const tasks=[],ids=new Map();
  const add=(key,type,workerType,dep,extra={})=>{
-  ensure(dep===null||tasks.some(t=>t.key===dep),'WORKFLOW_DEPENDENCY_NOT_EARLIER');
-  tasks.push({id:id(key),key,type,workerType,dependsOn:dep===null?null:id(dep),input:{npcId,...extra}});
+  ensure(dep===null||ids.has(dep),'WORKFLOW_DEPENDENCY_NOT_EARLIER');
+  const id='workflow.task.'+sha(canonical([row.officialRequestId,key]));
+  ids.set(key,id);
+  tasks.push({id,key,type,workerType,dependsOn:dep===null?null:ids.get(dep),input:{npcId,...extra}});
  };
  if(replace)add('delete','npc.delete-folder','file',null,{scope:'exact-npc-folder',preserveRequestHistory:true,noOldDataReuse:true});
  add('preset','npc.preset','document',replace?'delete':null,{mode:replace?'fresh-replacement':'new',noOldDataReuse:true});
@@ -118,16 +124,27 @@ function materializePlan(row,payload,pixelPortraits=true){
  add('planning_portrait_art','npc.plan-portrait-art','document','planning_overview');
  add('planning_representative','npc.plan-representative','document','planning_portrait_art');
  add('portrait_representative','npc.portrait-representative','image','planning_representative');
- add('planning_idle','npc.plan-idle','document','planning_representative');
- add('portrait_idle_reference','npc.portrait-idle-reference','image','planning_idle',pixelPortraits?{imageStyle:pixelImageStyle}:{});
- if(pixelPortraits)add('portrait_pixel_idle_reference',portraitPixelTaskType,'postprocess','portrait_idle_reference',{posePreset:'idle',direction:null});
+ for(const pose of poses){
+  const lane=motionPoseRegistry[pose],pixel='portrait_pixel_'+pose+'_reference';
+  add(lane.planKey,lane.planType,'document','planning_representative');
+  add(lane.referenceKey,lane.referenceType,'image',lane.planKey,pixelPortraits?{imageStyle:pixelImageStyle}:{});
+  if(pixelPortraits)add(pixel,portraitPixelTaskType,'postprocess',lane.referenceKey,{posePreset:pose,direction:null});
+ }
  for(const direction of directions){
-  const portrait='portrait_'+direction;
-  add(portrait,'npc.portrait-direction','image',pixelPortraits?'portrait_pixel_idle_reference':'portrait_idle_reference',pixelPortraits?{direction,imageStyle:pixelImageStyle}:{direction});
-  if(pixelPortraits)add('portrait_pixel_idle_'+direction,portraitPixelTaskType,'postprocess',portrait,{posePreset:'idle',direction});
+  const appearance=new Map();
+  for(const pose of poses){
+   const lane=motionPoseRegistry[pose],portrait=lane.directionPrefix+direction;
+   const pixel='portrait_pixel_'+pose+'_'+direction;
+   add(portrait,lane.directionType,'image',pixelPortraits?'portrait_pixel_'+pose+'_reference':lane.referenceKey,
+       pixelPortraits?{direction,imageStyle:pixelImageStyle}:{direction});
+   if(pixelPortraits)add(pixel,portraitPixelTaskType,'postprocess',portrait,{posePreset:pose,direction});
+   appearance.set(pose,poseSelection?pixel:portrait);
+  }
   for(const {key,...source} of motions){
    const animation='animation_'+key+'_'+direction;
-   add(animation,'npc.animation-native-png','animation',portrait,{direction,...source,output:'native-png'});
+   const predecessor=appearance.get(poseSelection?source.posePreset:'idle');
+   ensure(predecessor,'WORKFLOW_POSE_STAGE_REQUIRED');
+   add(animation,'npc.animation-native-png','animation',predecessor,{direction,...source,output:'native-png'});
    add('frames_'+key+'_'+direction,'npc.frames-postprocess','postprocess',animation,{direction,...source,input:'native-png'});
   }
  }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {request} from 'node:http';
-import {chmodSync,mkdirSync,mkdtempSync,realpathSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
+import {chmodSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,symlinkSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
@@ -768,4 +768,23 @@ test('full replacement retains the exact legacy identity and both selected route
  const schema=(await rpc('tools/list',{})).result.tools.find(x=>x.name==='request_submit').inputSchema.oneOf;
  assert.equal(schema[0].properties.payload.oneOf[1].properties.motionSelection.maxItems,undefined);
  assert.equal(schema.find(x=>x.properties.requestType.const==='npc.animation.regenerate').properties.payload.properties.motionSelection.maxItems,undefined);
+});
+
+test('v2 scoped appearance contracts admit full/animation-only, and older versions share target collision guards',async t=>{
+ const {directory}=folder(t),api=await listener(t,directory);
+ const fixture=name=>JSON.parse(readFileSync(new URL('../contracts/'+name,import.meta.url)));
+ const full=fixture('npc-one-stop-motion-selection.v2.fixture.json').cases[0].submit;
+ const regen=fixture('npc-animation-regenerate.v2.fixture.json').submit;
+ const wire=async args=>(await api.submit(args)).result.structuredContent;
+ const accepted=await wire(full);assert.equal(accepted.status,'registered');
+ const conflict={error:'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED',status:409};
+ assert.deepEqual(await wire({...full,idempotencyKey:'old-full',payload:{...full.payload,schemaVersion:'ngs.npc-one-stop.selection.v1'}}),conflict);
+ assert.deepEqual(await wire({...regen,idempotencyKey:'regen-on-active-full',payload:{...regen.payload,npcId:full.payload.character.npcId}}),conflict);
+ const animated=await wire(regen);assert.equal(animated.status,'registered');
+ assert.deepEqual(await wire({...regen,idempotencyKey:'old-regen',payload:{...regen.payload,schemaVersion:'ngs.npc-animation.regenerate.v1'}}),conflict);
+ assert.deepEqual(await wire({...full,idempotencyKey:'whole-on-active-regen',payload:{...full.payload,
+  schemaVersion:'ngs.npc-one-stop.selection.replace.v2',character:{...full.payload.character,npcId:regen.payload.npcId}}}),conflict);
+ const {requests}= (await api.workflow({})).result.structuredContent;
+ assert.deepEqual(requests.find(x=>x.officialRequestId===accepted.officialRequestId).payload,full.payload);
+ assert.deepEqual(requests.find(x=>x.officialRequestId===animated.officialRequestId).payload,regen.payload);
 });
