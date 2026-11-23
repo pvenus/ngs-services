@@ -81,7 +81,8 @@ class OwnedNPCTransport(NPCTransport):
  def workflow_plan_idle(self,binding,content):
   return self.call('POST','/v1/workflow/plan-idle',{'binding':binding,'content':content})
  def workflow_portrait_representative(self,binding,base64_png,*,mode='representative'):
-  path={'representative':'portrait-representative','idle':'portrait-idle-reference','direction':'portrait-direction'}[mode]
+  path={'representative':'portrait-representative','idle':'portrait-idle-reference','direction':'portrait-direction','combat':'portrait-combat-reference',
+        'combat_direction':'portrait-combat-direction'}[mode]
   return self.call('POST','/v1/workflow/'+path,{'binding':binding,'base64':base64_png})
  def workflow_media(self,kind,action,binding,artifact=None):
   require((kind in ('animation','frames','portrait-pixel') and action in ('read','publish')) or

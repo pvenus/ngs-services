@@ -9,6 +9,7 @@ import sqlite3
 import stat
 
 from .filex_read import canonical,digest
+from .workflow_pose_recipes import POSE_RECIPES
 
 IDENTITY=('officialRequestId','taskId','projectId','npcId','payloadSha256')
 SCHEMA='ngs.npc-one-stop.replace.v1'
@@ -17,11 +18,15 @@ SELECTION_NEW='ngs.npc-one-stop.selection.v1'
 SELECTION_REPLACE='ngs.npc-one-stop.selection.replace.v1'
 REGENERATE_TYPE='npc.animation.regenerate'
 REGENERATE_SCHEMA='ngs.npc-animation.regenerate.v1'
-SELECTION_SCHEMAS=(SELECTION_NEW,SELECTION_REPLACE)
-REPLACE_SCHEMAS=(SCHEMA,SELECTION_REPLACE)
+REGENERATE_V2='ngs.npc-animation.regenerate.v2'
+SELECTION_V2_NEW='ngs.npc-one-stop.selection.v2'
+SELECTION_V2_REPLACE='ngs.npc-one-stop.selection.replace.v2'
+SELECTION_V2=(SELECTION_V2_NEW,SELECTION_V2_REPLACE)
+SELECTION_SCHEMAS=(SELECTION_NEW,SELECTION_REPLACE,*SELECTION_V2)
+REPLACE_SCHEMAS=(SCHEMA,SELECTION_REPLACE,SELECTION_V2_REPLACE)
 NPC_SCHEMAS=(SCHEMA,NEW_SCHEMA,*SELECTION_SCHEMAS)
 MOTION_ID=r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}'
-POSES=('idle','combat')
+POSES=tuple(POSE_RECIPES)
 DIRECTIONS=('n','ne','e','se','s','sw','w','nw')
 HASH=r'[a-f0-9]{64}'
 CLAIM_KEYS=set(IDENTITY)|{'claimStamp'}
@@ -101,8 +106,8 @@ class PrivatePlannerClaim:
 
     @contextmanager
     def authorized(self,claim):
-        with self._selected(claim,'delete') as (identity,_,selection):
-            yield identity,selection
+        with self._selected(claim,'delete') as (identity,_,selection,pose_recipe):
+            yield identity,selection,pose_recipe
 
     @contextmanager
     def authorized_preset(self,claim):
@@ -122,7 +127,7 @@ class PrivatePlannerClaim:
     @contextmanager
     def authorized_document_chain(self,claim,stage):
         key={'overview':'planning_overview','portrait-art':'planning_portrait_art',
-             'representative':'planning_representative','idle':'planning_idle'}[stage]
+             'representative':'planning_representative','idle':'planning_idle','combat':'planning_combat'}[stage]
         with self._selected(claim,key,chain_result=True) as authenticated:
             yield authenticated
 
@@ -137,14 +142,24 @@ class PrivatePlannerClaim:
             yield authenticated
 
     @contextmanager
-    def authorized_direction_portrait(self,claim):
+    def authorized_combat_portrait(self,claim):
+        with self._selected(claim,POSE_RECIPES['combat'].reference_key,pose='combat') as authenticated:
+            yield authenticated
+
+    @contextmanager
+    def authorized_combat_direction_portrait(self,claim):
+        with self.authorized_direction_portrait(claim,pose='combat') as authenticated:
+            yield authenticated
+
+    @contextmanager
+    def authorized_direction_portrait(self,claim,*,pose='idle'):
         require(type(claim) is dict and type(claim.get('officialRequestId')) is str)
         oid=claim['officialRequestId']
-        directions=[d for d in ('n','ne','e','se','s','sw','w','nw')
-                    if claim.get('taskId')=='workflow.task.'+digest([oid,'portrait_'+d])]
+        stem=POSE_RECIPES[pose].direction_prefix
+        directions=[d for d in DIRECTIONS if claim.get('taskId')=='workflow.task.'+digest([oid,stem+d])]
         require(len(directions)==1)
-        with self._selected(claim,'portrait_'+directions[0],direction=directions[0],chain_result=True) as (identity,character,pixel_direction):
-            yield {**identity,'direction':directions[0],**({'referenceStage':'portrait_pixel_idle_reference'} if pixel_direction else {})},character
+        with self._selected(claim,stem+directions[0],direction=directions[0],chain_result=True,pose=pose) as (identity,character,pixel_direction):
+            yield {**identity,'direction':directions[0],**({'referenceStage':'portrait_pixel_'+pose+'_reference'} if pixel_direction else {})},character
 
     @contextmanager
     def authorized_media(self,claim,kind):
@@ -163,26 +178,32 @@ class PrivatePlannerClaim:
     def authorized_static_pixel(self,claim):
         require(type(claim) is dict and matches(claim.get('officialRequestId'),r'request\.official\.[a-f0-9]{64}'))
         oid=claim['officialRequestId']
-        choices={'workflow.task.'+digest([oid,'portrait_pixel_idle_'+(d or 'reference')]):d
-                 for d in (None,'n','ne','e','se','s','sw','w','nw')}
+        choices={'workflow.task.'+digest([oid,f'portrait_pixel_{pose}_{d or "reference"}']):(pose,d)
+                 for pose in POSES for d in (None,*DIRECTIONS)}
         require(type(claim.get('taskId')) is str and claim['taskId'] in choices)
-        direction=choices[claim['taskId']]
-        with self._selected(claim,'portrait_pixel_idle_'+(direction or 'reference'),pixel=(direction,)) as (identity,_):
-            yield {**identity,'posePreset':'idle','direction':direction}
+        pose,direction=choices[claim['taskId']]
+        with self._selected(claim,f'portrait_pixel_{pose}_{direction or "reference"}',pixel=(pose,direction)) as (identity,_):
+            yield {**identity,'posePreset':pose,'direction':direction}
 
     @contextmanager
-    def _selected(self,claim,key,*,media=None,direction=None,chain_result=False,pixel=None):
+    def _selected(self,claim,key,*,media=None,direction=None,chain_result=False,pixel=None,pose='idle'):
         is_npc_task=key!='delete'
+        gated_pose=(pixel[0] if pixel else pose if direction is not None else
+                    next((name for name,r in POSE_RECIPES.items() if key in (r.plan_key,r.reference_key)),None))
+        recipe=POSE_RECIPES.get(gated_pose)
+        combat_task=gated_pose=='combat'
         task_type,worker=(('npc.portrait-pixel','postprocess') if pixel is not None else {'animation':('npc.animation-native-png','animation'),
-                           'frames':('npc.frames-postprocess','postprocess')}[media[0]] if media else ('npc.portrait-direction','image') if direction else {
+                           'frames':('npc.frames-postprocess','postprocess')}[media[0]] if media else (recipe.direction_type,'image') if direction else {
             'delete':('npc.delete-folder','file'),
             'preset':('npc.preset','document'),
             'planning_overview':('npc.plan-overview','document'),
             'planning_portrait_art':('npc.plan-portrait-art','document'),
             'planning_representative':('npc.plan-representative','document'),
             'planning_idle':('npc.plan-idle','document'),
+            'planning_combat':('npc.plan-combat','document'),
             'portrait_representative':('npc.portrait-representative','image'),
             'portrait_idle_reference':('npc.portrait-idle-reference','image'),
+            'portrait_combat_reference':('npc.portrait-combat-reference','image'),
         }[key])
         require(type(claim) is dict and set(claim)==CLAIM_KEYS
                 and matches(claim['officialRequestId'],r'request\.official\.[a-f0-9]{64}')
@@ -212,7 +233,7 @@ class PrivatePlannerClaim:
                 AND t.result_ref IS NULL AND (? OR t.depends_on_task_id IS NULL) AND r.state='planned'""",
                 (task,oid,task_type,worker,key,is_npc_task)).fetchone()
             regeneration=(row is not None and selected_media and row['request_type']==REGENERATE_TYPE
-                          and row['schema_version']==REGENERATE_SCHEMA)
+                          and row['schema_version'] in (REGENERATE_SCHEMA,REGENERATE_V2))
             require(row is not None and row['project_id']=='binari'
                     and (regeneration or row['request_type']=='npc.workflow'
                          and row['schema_version'] in (NPC_SCHEMAS if is_npc_task else REPLACE_SCHEMAS))
@@ -225,7 +246,7 @@ class PrivatePlannerClaim:
             replacement=row['schema_version'] in REPLACE_SCHEMAS
             if regeneration:
                 require(type(payload) is dict and set(payload)=={'schemaVersion','projectId','npcId','motionSelection'}
-                        and payload['schemaVersion']==REGENERATE_SCHEMA and payload['projectId']=='binari'
+                        and payload['schemaVersion']==row['schema_version'] and payload['projectId']=='binari'
                         and payload['npcId']==owner)
                 slots=selection_rows(payload)
                 c={'npcId':owner}
@@ -258,6 +279,9 @@ class PrivatePlannerClaim:
                             and matches(c['chapterId'],r'(?:ch|chapter0)[1-5]'))
                 else:
                     require(owner.startswith('npc.'))
+            selected_poses={'idle',*(v['posePreset'] for v in slots.values())} if row['schema_version'] in SELECTION_V2 else None
+            if gated_pose is not None:
+                require(gated_pose in (selected_poses if selected_poses is not None else {'idle'}))
             delete_predecessor=None
             if key=='preset' and owner.startswith('character.'):
                 delete_predecessor='workflow.task.'+digest([oid,'delete'])
@@ -271,9 +295,12 @@ class PrivatePlannerClaim:
                 require(selection==selected_media and (not selection or slot in slots))
             expected={'npcId':owner}
             if direction is not None:expected['direction']=direction
+            center_key=f'portrait_pixel_{gated_pose or "idle"}_reference'
             pixel_direction=(direction is not None and not media and
-                             row['depends_on_task_id']=='workflow.task.'+digest([oid,'portrait_pixel_idle_reference']))
-            if pixel_direction or (key=='portrait_idle_reference' and row['task_input']==canonical(
+                             row['depends_on_task_id']=='workflow.task.'+digest([oid,center_key]))
+            if (combat_task or selected_poses is not None) and direction is not None:
+                require(pixel_direction)
+            if pixel_direction or (selected_poses is not None and recipe and key==recipe.reference_key) or (key=='portrait_idle_reference' and row['task_input']==canonical(
                     {'npcId':owner,'imageStyle':'pixel-sprite.v1'}).decode()):
                 expected['imageStyle']='pixel-sprite.v1'
 
@@ -294,6 +321,8 @@ class PrivatePlannerClaim:
                     motion_fields={'motion':motion}
                     stem=f'{motion}_{d}'
                 media_binding={**motion_fields,'direction':d}
+                v2_media=(selected_poses is not None or row['schema_version']==REGENERATE_V2)
+                media_pose=motion_fields.get('posePreset')
                 expected.update(media_binding)
                 expected.update(output='native-png') if kind=='animation' else expected.update(input='native-png')
                 if regeneration and kind=='animation':
@@ -303,6 +332,10 @@ class PrivatePlannerClaim:
                         parent_key='portrait_'+d
                         parent_type,parent_worker='npc.portrait-direction','image'
                         parent_input={'npcId':owner,'direction':d}
+                        if v2_media:
+                            parent_key=f'portrait_pixel_{media_pose}_{d}'
+                            parent_type,parent_worker='npc.portrait-pixel','postprocess'
+                            parent_input['posePreset']=media_pose
                     else:
                         parent_key='animation_'+stem
                         parent_type,parent_worker='npc.animation-native-png','animation'
@@ -312,19 +345,24 @@ class PrivatePlannerClaim:
                         WHERE task_id=? AND official_request_id=? AND task_key=? AND task_type=?
                         AND worker_type=? AND status='completed'""",
                         (parent,oid,parent_key,parent_type,parent_worker)).fetchone()
-                    if prior and kind=='animation' and prior['depends_on_task_id']=='workflow.task.'+digest([oid,'portrait_pixel_idle_reference']):
+                    if prior and kind=='animation' and not v2_media and prior['depends_on_task_id']=='workflow.task.'+digest([oid,'portrait_pixel_idle_reference']):
                         parent_input['imageStyle']='pixel-sprite.v1'
                     require(row['depends_on_task_id']==parent and prior is not None
                             and prior['task_input']==canonical(parent_input).decode())
                     if regeneration:
                         require(prior['depends_on_task_id'] is None)
+                    elif v2_media and kind=='frames':
+                        require(prior['depends_on_task_id']=='workflow.task.'+
+                                digest([oid,f'portrait_pixel_{media_pose}_{d}']))
                 if regeneration:
                     media_binding['regeneration']=True
+                if v2_media:
+                    media_binding['portraitPose']=media_pose
             if pixel is not None:
-                d,=pixel
-                expected.update(posePreset='idle',direction=d)
-                pk='portrait_'+d if d else 'portrait_idle_reference'
-                pt='npc.portrait-direction' if d else 'npc.portrait-idle-reference'
+                pose,d=pixel
+                expected.update(posePreset=pose,direction=d)
+                pk=recipe.direction_prefix+d if d else recipe.reference_key
+                pt=recipe.direction_type if d else recipe.reference_type
                 pi={'npcId':owner,'imageStyle':'pixel-sprite.v1',**({'direction':d} if d else {})}
                 pid='workflow.task.'+digest([oid,pk])
                 require(row['depends_on_task_id']==pid and db.execute("""SELECT 1 FROM workflow_tasks
@@ -335,7 +373,7 @@ class PrivatePlannerClaim:
             require(len(raw)<=65536 and raw.decode()==row['payload'] and digest(payload)==row['payload_sha256']
                     and row['task_input']==canonical(expected).decode())
             chain=False
-            if key in ('planning_overview','planning_portrait_art','planning_representative','planning_idle'):
+            if key in ('planning_overview','planning_portrait_art','planning_representative','planning_idle','planning_combat'):
                 expected_new={('planning_overview','npc.plan-overview'),('planning_portrait_art','npc.plan-portrait-art')}
                 stage_rows=db.execute('''SELECT task_id,task_key,task_type,worker_type,task_input,depends_on_task_id
                     FROM workflow_tasks WHERE official_request_id=?
@@ -349,10 +387,12 @@ class PrivatePlannerClaim:
                                 and x['task_input']==canonical({'npcId':owner}).decode()
                                 and x['depends_on_task_id']=='workflow.task.'+digest([oid,upstream]))
                     chain=True
-                if key in ('planning_overview','planning_portrait_art'):require(chain)
+                if key in ('planning_overview','planning_portrait_art','planning_combat'):require(chain)
             parents={
                 'portrait_representative':('planning_representative','npc.plan-representative','document'),
                 'planning_idle':('planning_representative','npc.plan-representative','document'),
+                'planning_combat':('planning_representative','npc.plan-representative','document'),
+                'portrait_combat_reference':('planning_combat','npc.plan-combat','document'),
                 'portrait_idle_reference':('planning_idle','npc.plan-idle','document'),
                 'planning_overview':('preset','npc.preset','document'),
                 'planning_portrait_art':('planning_overview','npc.plan-overview','document'),
@@ -370,15 +410,15 @@ class PrivatePlannerClaim:
                     (rid,oid,k,kind,lane,canonical(inp).decode())).fetchone() is not None)
                 return rid
             if pixel_direction:
-                require(row['depends_on_task_id']==completed('portrait_pixel_idle_reference','npc.portrait-pixel','postprocess',
-                        {'npcId':owner,'posePreset':'idle','direction':None}))
+                require(row['depends_on_task_id']==completed(center_key,'npc.portrait-pixel','postprocess',
+                        {'npcId':owner,'posePreset':gated_pose,'direction':None}))
             elif parent_row:require(row['depends_on_task_id']==completed(*parent_row))
-            if key=='portrait_idle_reference':completed('portrait_representative','npc.portrait-representative','image')
+            if key in ('portrait_idle_reference','portrait_combat_reference'):completed('portrait_representative','npc.portrait-representative','image')
             identity={k:claim[k] for k in IDENTITY}
             if key=='delete':
-                yield identity,c,tuple(slots.values())
+                yield identity,c,tuple(slots.values()),selected_poses is not None
             elif key=='preset':
-                yield identity,c,delete_predecessor
+                yield identity,c,delete_predecessor,selected_poses
             elif media_binding is not None:
                 yield identity,c,media_binding
             elif chain_result:

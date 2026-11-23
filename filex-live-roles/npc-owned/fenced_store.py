@@ -560,7 +560,9 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                  'representative':('planning_representative','portrait.representative','portrait.representative',
                                    (('portrait-art','portrait.art'),)),
                  'idle':('planning_idle','portrait.idle','portrait.idle',
-                         (('portrait.representative','portrait.representative'),('portrait-art','portrait.art')))}
+                         (('portrait.representative','portrait.representative'),('portrait-art','portrait.art'))),
+                 'combat':('planning_combat','portrait.combat','portrait.combat',
+                           (('portrait.representative','portrait.representative'),('portrait-art','portrait.art')))}
         if stage not in targets or (not shared and (stage!='idle' or markdown)):raise ValueError('workflow plan stage')
         task_key,key,role,requirements=targets[stage]
         owner=b['npcId'];oid=b['officialRequestId'];cid=b['categoryId']
@@ -623,10 +625,17 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
         # PDS-only authenticated RPC. Derive the exact write set locally.
         keys={'officialRequestId','taskId','projectId','npcId','payloadSha256',
               'categoryId','sha256'}
-        if mode=='direction':keys.add('direction')
-        pixel_ref=mode=='direction' and isinstance(b,dict) and b.get('referenceStage')=='portrait_pixel_idle_reference'
+        scopes={'representative':('representative','portrait_representative',False),
+                'idle':('idle','portrait_idle_reference',False),'direction':('idle','portrait_',True),
+                'combat':('combat','portrait_combat_reference',False),
+                'combat_direction':('combat','portrait_combat_',True)}
+        if mode not in scopes:raise ValueError('workflow portrait mode')
+        pose,key,directional=scopes[mode]
+        center_pixel='portrait_pixel_'+pose+'_reference'
+        if directional:keys.add('direction')
+        pixel_ref=directional and isinstance(b,dict) and b.get('referenceStage')==center_pixel
+        if mode=='combat_direction' and not pixel_ref:raise ValueError('workflow combat pixel center required')
         if pixel_ref:keys.update({'referenceStage','referenceAssetId'})
-        if mode not in ('representative','idle','direction'):raise ValueError('workflow portrait mode')
         if (type(b) is not dict or set(b)!=keys or b['projectId']!='binari'
             or any(type(b[k]) is not str or not re.fullmatch(r'[a-f0-9]{64}',b[k])
                    for k in ('sha256','payloadSha256'))
@@ -638,10 +647,10 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
         owner=b['npcId'];oid=b['officialRequestId'];task=b['taskId'];cid=b['categoryId']
         preset='workflow.task.'+digest([oid,'preset'])
         direction=b.get('direction')
-        if mode=='direction' and direction not in ('n','ne','e','se','s','sw','w','nw'):
+        if directional and direction not in ('n','ne','e','se','s','sw','w','nw'):
             raise ValueError('workflow portrait direction')
-        key='portrait_'+direction if direction else ('portrait_idle_reference' if mode=='idle' else 'portrait_representative')
-        role='portrait.representative' if mode=='representative' else 'portrait.idle'
+        if directional:key+=direction
+        role='portrait.'+pose
         if (task!='workflow.task.'+digest([oid,key]) or
             cid!='category.preset.'+digest(['npc.standard','3',preset,role])[:32]):
             raise ValueError('workflow portrait target')
@@ -651,9 +660,9 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
         from npc_document import decode
         from ownership_plan import plan
         prefix=owner+'/';meta_path=prefix+'metadata.json'
-        view_key='idle/portrait/'+direction if direction else None
+        view_key=pose+'/portrait/'+direction if direction else None
         view_path=prefix+'pose-views/'+view_key+'.json' if direction else None
-        slot='assets/pose-views/'+view_key+'/image.png' if direction else 'assets/portraits/'+mode+'/portrait.png'
+        slot='assets/pose-views/'+view_key+'/image.png' if direction else 'assets/portraits/'+pose+'/portrait.png'
         with self.lock():
             self.require_no_migration()
             state=self.state(owner);self.require_no_cleanup(state)
@@ -678,18 +687,18 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                     raise Conflict('workflow portrait slot integrity')
 
             if mode!='representative':
-                ref_pos,ref_key=('idle','portrait_idle_reference') if direction else ('representative','portrait_representative')
+                ref_pos,ref_key=(pose,'portrait_'+pose+'_reference') if direction else ('representative','portrait_representative')
                 ref=pairs.get(ref_pos,{})
                 if ref.get('requestId')!='workflow.task.'+digest([oid,ref_key]):
                     raise Conflict('workflow portrait reference not published')
                 checked_asset('assets/portraits/'+ref_pos+'/portrait.png',ref.get('portraitAssetId'))
                 if pixel_ref:
-                    expected_center='workflow.task.'+digest([oid,'portrait_pixel_idle_reference'])
+                    expected_center='workflow.task.'+digest([oid,center_pixel])
                     if (ref.get('pixelProvenance',{}).get('postprocess',{}).get('workflowTaskId')!=expected_center
                         or ref.get('pixelSourceAssetId')!=ref.get('portraitAssetId')
                         or ref.get('pixelAssetId')!=b['referenceAssetId']):
                         raise Conflict('workflow pixel center reference changed')
-                    checked_asset('assets/portraits/idle/pixel.png',b['referenceAssetId'])
+                    checked_asset('assets/portraits/'+pose+'/pixel.png',b['referenceAssetId'])
 
             prev_plan=self.manifests().get(owner)
             if prev_plan!=plan(owner,{k.removeprefix(prefix):v for k,v in docs.items() if k.startswith(prefix)}):
@@ -697,6 +706,8 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
             aid=b['sha256']+'.png';extra={}
             if direction:
                 old=docs.get(view_path)
+                if pixel_ref and docs.get(prefix+f'pose-views/{pose}/pixel/{direction}.json') is not None:
+                    raise Conflict('workflow corrected directional portrait already exists')
                 keys=meta.get('poseViewKeys',[])
                 if (view_key in keys)!=(old is not None):
                     raise Conflict('workflow portrait view index changed')
@@ -707,15 +718,15 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                 elif self.safe(prefix+slot).exists():
                     raise Conflict('workflow portrait unbound target file')
                 width,height=int.from_bytes(raw[16:20],'big'),int.from_bytes(raw[20:24],'big')
-                element={'schemaVersion':'ngs.npc-pose-view.v1','posePreset':'idle','referenceType':'portrait',
+                element={'schemaVersion':'ngs.npc-pose-view.v1','posePreset':pose,'referenceType':'portrait',
                          'direction':direction,'assetId':aid,'requestId':task,'mimeType':'image/png',
                          'bytes':len(raw),'width':width,'height':height,
                          **({'referenceArtifactId':b['referenceAssetId']} if pixel_ref else {})}
                 updated={**meta,'poseViewKeys':sorted(set(keys)|{view_key})}
                 extra[view_path]=element
             else:
-                old=pairs.get(mode)
-                if mode in pairs:
+                old=pairs.get(pose)
+                if pose in pairs:
                     if type(old) is not dict or set(old)!={'portraitAssetId','requestId'}:
                         raise Conflict('workflow portrait legacy pair protected')
                     checked_asset(slot,old['portraitAssetId'])
@@ -729,14 +740,14 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                 if retired and (retired not in index or
                                 (mode=='representative' and meta.get('activePortraitId')!=retired)):
                     raise Conflict('workflow portrait existing slot invalid')
-                protected={pair[k] for pos,pair in pairs.items() if pos!=mode
+                protected={pair[k] for pos,pair in pairs.items() if pos!=pose
                            for k in ('portraitAssetId','pixelAssetId') if k in pair}
-                if mode=='idle':protected.add(meta.get('activePortraitId'))
+                if pose!='representative':protected.add(meta.get('activePortraitId'))
                 inventory=[row for row in inventory if row['assetId']!=retired or retired in protected or retired==aid]
                 if aid not in index:
-                    inventory.append({'assetId':aid,'label':'대표 포트레이트' if mode=='representative' else '아이들 포트레이트',
+                    inventory.append({'assetId':aid,'label':{'representative':'대표','idle':'아이들','combat':'전투'}[pose]+' 포트레이트',
                                       'sourceRef':task})
-                updated={**meta,'portraitSets':{**pairs,mode:{'portraitAssetId':aid,'requestId':task}},'portraits':inventory}
+                updated={**meta,'portraitSets':{**pairs,pose:{'portraitAssetId':aid,'requestId':task}},'portraits':inventory}
                 if mode=='representative':updated['activePortraitId']=aid
             after={**docs,meta_path:updated,**extra}
             new_plan=plan(owner,{k.removeprefix(prefix):v for k,v in after.items() if k.startswith(prefix)})

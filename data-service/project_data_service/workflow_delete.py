@@ -27,6 +27,7 @@ class WorkflowDelete:
     def __init__(self,source,verifier,motion=None):
         require(isinstance(source,FilexCurrentNPC) and (callable(verifier) or isinstance(verifier,PrivatePlannerClaim)),'WORKFLOW_DELETE_AUTHORITY_REQUIRED')
         self.source,self.verifier,self.motion=source,verifier,MotionPresets() if motion is None else motion
+        self.pose_recipes_ready=False
         self._folder_authorized=ContextVar('npc_storage_delete_authorized',default=None)
 
     def capability(self):
@@ -39,8 +40,8 @@ class WorkflowDelete:
     def apply(self,envelope):
         if isinstance(self.verifier,PrivatePlannerClaim):
             require(type(envelope) is dict and set(envelope)=={'claim'},'WORKFLOW_DELETE_ENVELOPE')
-            with self.verifier.authorized(envelope['claim']) as (identity,selection):
-                return self._commit(self._resolve(identity),selection=selection)
+            with self.verifier.authorized(envelope['claim']) as (identity,selection,pose_recipe):
+                return self._commit(self._resolve(identity),selection=selection,pose_recipe=pose_recipe)
         require(type(envelope) is dict and set(envelope)=={'binding','claim'},'WORKFLOW_DELETE_ENVELOPE')
         b=envelope['binding']
         require(type(b) is dict and set(b)==KEYS and type(envelope['claim']) is dict
@@ -86,10 +87,10 @@ class WorkflowDelete:
         @contextmanager
         def authorize(claim):
             try:
-                with self.verifier.authorized(claim) as (identity,selection):
+                with self.verifier.authorized(claim) as (identity,selection,pose_recipe):
                     exact={'operationId':identity['taskId'],
                            'target':{'root':NPC_ROOT,'path':identity['npcId'],'kind':'directory'}}
-                    token=self._folder_authorized.set((exact,identity,selection))
+                    token=self._folder_authorized.set((exact,identity,selection,pose_recipe))
                     try:yield exact
                     finally:self._folder_authorized.reset(token)
             except ClaimDenied as exc:raise StorageClaimDenied() from exc
@@ -97,17 +98,20 @@ class WorkflowDelete:
         def execute(command):
             selected=self._folder_authorized.get()
             if selected is None or command!=selected[0]:raise StorageClaimDenied()
-            return self._commit(self._resolve(selected[1]),target=command['target'],selection=selected[2])
+            return self._commit(self._resolve(selected[1]),target=command['target'],selection=selected[2],pose_recipe=selected[3])
 
         return AuthorizedStorage(authorize,execute,ready)
 
-    def _commit(self,b,*,target=None,selection=()):
+    def _commit(self,b,*,target=None,selection=(),pose_recipe=False):
         bh=digest(b);rid=b['taskId'];owner=b['npcId'];revision=b['expectedRevision']
         with self.source.store.factory() as transport:
             require(isinstance(transport,OwnedNPCTransport),'WORKFLOW_DELETE_FILEX_AUTHORITY_REQUIRED')
             prior=transport.receipt(rid)
             metadata=None
             if prior is None:
+                if pose_recipe:
+                    require(self.pose_recipes_ready and transport.capabilities().get('workflowCombatPortraitWriteV1') is True,
+                            'WORKFLOW_POSE_RECIPES_NOT_READY')
                 snapshot,marker,doc=self.source._read()
                 require(marker['revision']==revision and snapshot['sourceVersion']==b['expectedSourceVersion'],
                         'WORKFLOW_DELETE_SOURCE_CHANGED')

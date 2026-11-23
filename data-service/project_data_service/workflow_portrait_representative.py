@@ -15,12 +15,18 @@ ARTIFACT='workflow.npc-representative-portrait-artifact.v1'
 CAPABILITY='workflowRepresentativePortraitCurrentFilesV1'
 IDLE_PATH='/v1/npcs/ownership/workflow-portrait-idle-reference'
 DIRECTION_PATH='/v1/npcs/ownership/workflow-portrait-direction'
+COMBAT_PATH='/v1/npcs/ownership/workflow-portrait-combat-reference'
+COMBAT_DIRECTION_PATH='/v1/npcs/ownership/workflow-portrait-combat-direction'
 VARIANTS={
     'representative':(PATH,SCHEMA,ARTIFACT,CAPABILITY,'authorized_portrait',None),
     'idle':(IDLE_PATH,'workflow.idle-reference-portrait-write.v1','workflow.npc-idle-reference-portrait-artifact.v1',
             'workflowIdleReferencePortraitWriteV1','authorized_idle_portrait','representative'),
     'direction':(DIRECTION_PATH,'workflow.direction-portrait-write.v1','workflow.npc-direction-portrait-artifact.v1',
                  'workflowDirectionPortraitWriteV1','authorized_direction_portrait','idle'),
+    'combat':(COMBAT_PATH,'workflow.combat-reference-portrait-write.v1','workflow.npc-combat-reference-portrait-artifact.v1',
+              'workflowCombatPortraitWriteV1','authorized_combat_portrait','representative'),
+    'combat_direction':(COMBAT_DIRECTION_PATH,'workflow.combat-direction-portrait-write.v1','workflow.npc-combat-direction-portrait-artifact.v1',
+              'workflowCombatPortraitWriteV1','authorized_combat_direction_portrait','combat'),
 }
 MAX_PNG=8*1024*1024
 MAX_BASE64=4*((MAX_PNG+2)//3)
@@ -34,6 +40,8 @@ class RepresentativePortrait:
         self.source,self.verifier,self.mode=source,verifier,mode
         self.path,self.schema,self.artifact,self.writes,verify,self.reference=VARIANTS[mode]
         self.authorized=getattr(verifier,verify)
+        self.directional=mode in ('direction','combat_direction')
+        self.pose={'representative':'representative','idle':'idle','direction':'idle','combat':'combat','combat_direction':'combat'}[mode]
 
     def _writer(self,tx):
         require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get(self.writes) is True,
@@ -46,7 +54,7 @@ class RepresentativePortrait:
 
     def _current(self,tx,identity,character):
         owner=identity['npcId'];preset='workflow.task.'+digest([identity['officialRequestId'],'preset'])
-        role='portrait.representative' if self.mode=='representative' else 'portrait.idle'
+        role='portrait.'+self.pose
         cid='category.preset.'+digest(['npc.standard','3',preset,role])[:32]
         _,_,doc=self.source._read()
         npc=next((n for n in doc['characters'] if n.get('id')==owner),None)
@@ -55,8 +63,8 @@ class RepresentativePortrait:
                 and npc.get('chapters')==['chapter0'+character['chapterId'][-1]],
                 'WORKFLOW_PORTRAIT_CURRENT_NPC')
         slots=npc.get('portraitSets',{})
-        require(isinstance(slots,dict) and (self.mode=='direction' or self.mode not in slots or
-                (type(slots[self.mode]) is dict and set(slots[self.mode])=={'portraitAssetId','requestId'})),
+        require(isinstance(slots,dict) and (self.directional or self.pose not in slots or
+                (type(slots[self.pose]) is dict and set(slots[self.pose])=={'portraitAssetId','requestId'})),
                 'WORKFLOW_PORTRAIT_INCOMPATIBLE_SLOT')
         generation=tx.get_generation(owner)
         require(generation.get('npcId')==owner and generation.get('state')=='active',
@@ -67,11 +75,11 @@ class RepresentativePortrait:
         result={'basis':{'categoryId':cid},'character':character,'planningContent':rows[0]['content']}
         if self.reference:
             ref=slots.get(self.reference,{})
-            source_key='portrait_representative' if self.reference=='representative' else 'portrait_idle_reference'
+            source_key='portrait_representative' if self.reference=='representative' else 'portrait_'+self.reference+'_reference'
             source_id='workflow.task.'+digest([identity['officialRequestId'],source_key])
             asset=ref.get('portraitAssetId')
-            if identity.get('referenceStage')=='portrait_pixel_idle_reference':
-                t='workflow.task.'+digest([identity['officialRequestId'],'portrait_pixel_idle_reference'])
+            if identity.get('referenceStage'):
+                t='workflow.task.'+digest([identity['officialRequestId'],identity['referenceStage']])
                 require(ref.get('pixelProvenance',{}).get('postprocess',{}).get('workflowTaskId')==t
                         and ref.get('pixelSourceAssetId')==asset,'WORKFLOW_PORTRAIT_PIXEL_REFERENCE_LINEAGE')
                 asset=ref.get('pixelAssetId')
@@ -82,7 +90,7 @@ class RepresentativePortrait:
             require(0<len(raw)<=MAX_PNG and hashlib.sha256(raw).hexdigest()==asset[:-4],
                     'WORKFLOW_PORTRAIT_REFERENCE_BYTES')
             result['reference']={'assetId':asset,'sha256':asset[:-4],'base64':base64.b64encode(raw).decode()}
-        if self.mode=='direction':result['direction']=identity['direction']
+        if self.directional:result['direction']=identity['direction']
         return result
 
     def read(self,envelope):

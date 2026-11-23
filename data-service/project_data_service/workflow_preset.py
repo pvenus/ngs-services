@@ -10,6 +10,7 @@ from .filex_npc_authority import FilexCurrentNPC
 from .filex_npc_files import encode
 from .filex_read import digest, require
 from .pds_owned_transport import OwnedNPCTransport
+from .workflow_pose_recipes import POSE_RECIPES
 
 PATH='/v1/npcs/ownership/workflow-preset'
 IDENTITY=('officialRequestId','taskId','projectId','npcId','payloadSha256')
@@ -81,15 +82,18 @@ class WorkflowPreset:
             a=envelope['artifact']; predecessor=envelope['predecessorReceiptRef']
             require(predecessor is None or type(predecessor) is str and
                     re.fullmatch(r'workflow\.task\.[a-f0-9]{64}',predecessor),'WORKFLOW_PRESET_PREDECESSOR')
-            with self.verify.authorized_preset(envelope['claim']) as (identity,character,legacy_delete):
+            with self.verify.authorized_preset(envelope['claim']) as (identity,character,legacy_delete,selected_poses):
                 if legacy_delete is not None:
                     require(predecessor in (None,legacy_delete),'WORKFLOW_PRESET_PREDECESSOR')
                     predecessor=legacy_delete
                 require(type(a) is dict and a.get('character')==character and a.get('presetRegistrySha256')==REGISTRY_SHA,
                         'WORKFLOW_PRESET_OFFICIAL_ARTIFACT')
+                recipes=(CATEGORIES if selected_poses is None else (*CATEGORIES[:3],*(
+                    ('portrait.'+pose, recipe.category_label, 'portrait.'+pose)
+                    for pose,recipe in POSE_RECIPES.items() if pose in selected_poses)))
                 categories=[{'id':'category.preset.'+digest(['npc.standard','3',identity['taskId'],cid])[:32],
                          'name':title,'content':'',**({'planningRole':role} if role else {})}
-                        for cid,title,role in CATEGORIES]
+                        for cid,title,role in recipes]
                 require(type(a.get('profile')) is dict and a['profile'].get('planningCategories')==categories,
                         'WORKFLOW_PRESET_REGISTRY_CATEGORIES')
                 supplied={**identity,'artifactSha256':digest(a),'predecessorReceiptRef':predecessor}
@@ -102,7 +106,7 @@ class WorkflowPreset:
                     else:
                         snap,marker,_=self.source._read()
                         b={**supplied,'expectedSourceVersion':snap['sourceVersion'],'expectedRevision':marker['revision']}
-                return self._commit(b,a)
+                return self._commit(b,a,pose_recipe=selected_poses is not None)
         require(type(envelope) is dict and set(envelope)=={'binding','artifact','claim'},'WORKFLOW_PRESET_ENVELOPE')
         b=envelope['binding']
         require(type(b) is dict and set(b)==KEYS and type(envelope['claim']) is dict and b['projectId']=='binari'
@@ -118,11 +122,14 @@ class WorkflowPreset:
             raise Denied('WORKFLOW_PRESET_CLAIM_DENIED')
         return self._commit(b,envelope['artifact'])
 
-    def _commit(self,b,artifact):
+    def _commit(self,b,artifact,*,pose_recipe=False):
         char=preset_character(b,artifact);rid=b['taskId'];bh=digest(b);files=None
         with self.source.store.factory() as tx:
             require(isinstance(tx,OwnedNPCTransport),'WORKFLOW_PRESET_FILEX_AUTHORITY_REQUIRED')
             if tx.receipt(rid) is None:
+                if pose_recipe:
+                    require(tx.capabilities().get('workflowCombatPortraitWriteV1') is True,
+                            'WORKFLOW_POSE_RECIPES_NOT_READY')
                 snapshot,marker,old=self.source._read()
                 require(snapshot['sourceVersion']==b['expectedSourceVersion'] and marker['revision']==b['expectedRevision'],
                         'WORKFLOW_PRESET_SOURCE_CHANGED')

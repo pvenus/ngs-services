@@ -78,7 +78,7 @@ class Handler(DomainHandler):
             base=native_media_prefix+kind
             if media_path in (base,base+'/read',base+'/asset'):
                 return native_media(self,kind)
-        for stage in ('overview','portrait-art'):
+        for stage in ('overview','portrait-art','combat'):
             path='/v1/npcs/ownership/workflow-plan-'+stage
             if self.path.split('?',1)[0] in (path,path+'/read'):
                 from .workflow_plan_idle import serve as workflow_plan_current
@@ -87,7 +87,7 @@ class Handler(DomainHandler):
         if self.path.split('?',1)[0] in (idle_plan,idle_plan+'/read'):
             from .workflow_plan_idle import serve as workflow_plan_idle
             return workflow_plan_idle(self)
-        for mode,suffix in (('representative','representative'),('idle','idle-reference'),('direction','direction')):
+        for mode,suffix in (('representative','representative'),('idle','idle-reference'),('direction','direction'),('combat','combat-reference'),('combat_direction','combat-direction')):
             portrait='/v1/npcs/ownership/workflow-portrait-'+suffix
             if self.path.split('?',1)[0] in (portrait,portrait+'/read'):
                 from .workflow_portrait_representative import serve as workflow_portrait
@@ -700,6 +700,14 @@ def serve(storage_root: Path, host: str, port: int):
             from .workflow_portrait_representative import RepresentativePortrait
             if not hasattr(server,'workflow_delete'):raise ValueError('WORKFLOW_PORTRAIT_PLANNER_PIN_REQUIRED')
             setattr(server,'workflow_portrait_'+mode,RepresentativePortrait(app.domains.npcs,planner,mode=mode))
+    if (shared_plan==native_enabled==portrait_enabled=='1'
+        and hasattr(server,'workflow_portrait_idle') and hasattr(server,'workflow_portrait_direction')):
+        from .workflow_plan_idle import IdlePlan
+        from .workflow_portrait_representative import RepresentativePortrait
+        server.workflow_plan_combat=IdlePlan(app.domains.npcs,planner,stage='combat')
+        for mode in ('combat','combat_direction'):
+            setattr(server,'workflow_portrait_'+mode,RepresentativePortrait(app.domains.npcs,planner,mode=mode))
+        server.workflow_delete.pose_recipes_ready=True
     project_folders_root = os.environ.get('PDS_PROJECT_FOLDERS_CANONICAL_ROOT')
     if project_folders_root:
         from .project_folders import configured as configure_project_folders

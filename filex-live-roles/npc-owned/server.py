@@ -114,6 +114,9 @@ class Store:
             return record
 
 def handler(store, token, *, workflow_delete=False, workflow_preset=False, workflow_representative=False, workflow_portrait=False, workflow_idle_plan=False, workflow_idle_portrait=False, workflow_direction_portrait=False, workflow_native_media=False, workflow_shared_plan=False,single_target_delete=None,workflow_npc_folder_delete=False,workflow_npc_planning_update=False,workflow_npc_planning_markdown=False,workflow_npc_planning_add=False):
+    workflow_combat_pose=(workflow_shared_plan is True and workflow_native_media is True
+                          and workflow_portrait is True and workflow_idle_portrait is True
+                          and workflow_direction_portrait is True)
     if len(token) < 32: raise ValueError('dedicated token must be at least 32 characters')
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args): pass # no tokens, paths, or payloads in logs
@@ -160,6 +163,10 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     data=json.loads(raw)
                     if type(data) is not dict or set(data)!=({'binding'} if reading else {'binding','artifact'}):
                         raise ValueError('workflow media envelope')
+                    binding=data['binding']
+                    if type(binding) is dict and ('portraitPose' in binding or
+                            kind=='portrait-pixel' and binding.get('posePreset')=='combat') and not workflow_combat_pose:
+                        return self.reply(404,{'error':'NOT_FOUND'})
                     if asset:
                         if not hasattr(store,'workflow_media_asset'):return self.reply(404,{'error':'NOT_FOUND'})
                         return self.reply(200,store.workflow_media_asset(kind,data['binding'],data['artifact']))
@@ -169,6 +176,8 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     '/v1/workflow/portrait-representative':('representative',workflow_portrait),
                     '/v1/workflow/portrait-idle-reference':('idle',workflow_idle_portrait),
                     '/v1/workflow/portrait-direction':('direction',workflow_direction_portrait),
+                    '/v1/workflow/portrait-combat-reference':('combat',workflow_combat_pose),
+                    '/v1/workflow/portrait-combat-direction':('combat_direction',workflow_combat_pose),
                 }
                 if url.path in portrait_routes:
                     mode,enabled_portrait=portrait_routes[url.path]
@@ -233,8 +242,10 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     fields={'binding','content'} if is_idle else {'binding','content','metadataAfter'}
                     if shared:
                         if (type(data) is not dict or set(data)!={'binding','content','stage'}
-                            or data['stage'] not in ('overview','portrait-art','representative','idle')):
+                            or data['stage'] not in ('overview','portrait-art','representative','idle','combat')):
                             raise ValueError('workflow shared planning envelope')
+                        if data['stage']=='combat' and workflow_combat_pose is not True:
+                            return self.reply(404,{'error':'NOT_FOUND'})
                         return self.reply(200,plan_write(data['stage'],data['binding'],data['content'],markdown=workflow_npc_planning_markdown))
                     if type(data) is not dict or set(data)!=fields:
                         raise ValueError('workflow plan envelope')
@@ -328,7 +339,7 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         q=parse_qs(url.query);return self.reply(200,store.publication_receipts(q['npcId'][0],q['generationId'][0],q['parentRequestId'][0]))
                     if url.path == '/v1/snapshot': return self.reply(200, store.snapshot())
                     if url.path.startswith('/v1/requests/'): return self.reply(200, store.receipt(unquote(url.path[len('/v1/requests/'):])))
-                    if url.path == '/v1/capabilities': return self.reply(200, {**({'singleTargetRecoverableDeleteV1':True} if single_target_delete is not None else {}),**({'workflowExactNpcFolderDeleteV1':True} if workflow_delete is True and workflow_npc_folder_delete is True and hasattr(store,'verify_workflow_folder_recovery') else {}),'conceptRecoverableLifecycleV1':hasattr(store,'lifecycle_commit'),'conceptCategoryMarkdownV1':hasattr(store,'markdown_commit'),'conceptCategoryOverwriteV1':hasattr(store,'markdown_current'),'conceptSingleTargetDeleteV1':hasattr(store,'scope_delete_command'),'releasedFrameCleanupLeaseV1':hasattr(store,'begin_frame_maintenance'),'npcOwnedSlots':hasattr(store,'generation'),'generationFence':hasattr(store,'generation'), **({'workflowExactNpcDeleteV1':True} if workflow_delete is True and hasattr(store,'workflow_delete_character') else {}),**({'workflowAtomicNpcPresetV1':True} if workflow_preset is True and hasattr(store,'workflow_preset') else {}),**({'workflowRepresentativePlanWriteV1':True} if workflow_representative is True and hasattr(store,'workflow_plan_representative') else {}),**({'workflowStaticPortraitPixelV1':True} if workflow_native_media is True and hasattr(store,'workflow_static_pixel_publish') else {}),**({'workflowRegenerateMotionV1':True} if workflow_native_media is True and hasattr(store,'workflow_media_asset') else {}),**({'workflowNativePNGMediaV1':True,'workflowSelectedMotionV1':True} if workflow_native_media is True and hasattr(store,'workflow_media_publish') else {}),**({'workflowIdlePlanWriteV1':True} if workflow_idle_plan is True and hasattr(store,'workflow_plan_idle') else {}),**({'workflowRepresentativePortraitCurrentFilesV1':True} if workflow_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowIdleReferencePortraitWriteV1':True} if workflow_idle_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowDirectionPortraitWriteV1':True} if workflow_direction_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowNpcPlanningAddMarkdownV1':True} if workflow_npc_planning_add is True and hasattr(store,'workflow_npc_planning_add') else {}),**({'workflowNpcPlanningUpdateMarkdownV1':True} if workflow_npc_planning_update is True and hasattr(store,'workflow_npc_planning_update') else {}),**({'workflowCurrentDocumentChainV1':True} if workflow_shared_plan is True and hasattr(store,'workflow_plan_current') else {}),'atomicCAS':not hasattr(store,'batch'), 'lockedBatch':hasattr(store,'batch'), 'namespace':getattr(store,'namespace','canonical-files/binari/npcs/' if hasattr(store,'batch') else PREFIX)})
+                    if url.path == '/v1/capabilities': return self.reply(200, {**({'singleTargetRecoverableDeleteV1':True} if single_target_delete is not None else {}),**({'workflowExactNpcFolderDeleteV1':True} if workflow_delete is True and workflow_npc_folder_delete is True and hasattr(store,'verify_workflow_folder_recovery') else {}),'conceptRecoverableLifecycleV1':hasattr(store,'lifecycle_commit'),'conceptCategoryMarkdownV1':hasattr(store,'markdown_commit'),'conceptCategoryOverwriteV1':hasattr(store,'markdown_current'),'conceptSingleTargetDeleteV1':hasattr(store,'scope_delete_command'),'releasedFrameCleanupLeaseV1':hasattr(store,'begin_frame_maintenance'),'npcOwnedSlots':hasattr(store,'generation'),'generationFence':hasattr(store,'generation'), **({'workflowExactNpcDeleteV1':True} if workflow_delete is True and hasattr(store,'workflow_delete_character') else {}),**({'workflowAtomicNpcPresetV1':True} if workflow_preset is True and hasattr(store,'workflow_preset') else {}),**({'workflowRepresentativePlanWriteV1':True} if workflow_representative is True and hasattr(store,'workflow_plan_representative') else {}),**({'workflowStaticPortraitPixelV1':True} if workflow_native_media is True and hasattr(store,'workflow_static_pixel_publish') else {}),**({'workflowRegenerateMotionV1':True} if workflow_native_media is True and hasattr(store,'workflow_media_asset') else {}),**({'workflowNativePNGMediaV1':True,'workflowSelectedMotionV1':True} if workflow_native_media is True and hasattr(store,'workflow_media_publish') else {}),**({'workflowIdlePlanWriteV1':True} if workflow_idle_plan is True and hasattr(store,'workflow_plan_idle') else {}),**({'workflowRepresentativePortraitCurrentFilesV1':True} if workflow_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowIdleReferencePortraitWriteV1':True} if workflow_idle_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowCombatPortraitWriteV1':True} if workflow_combat_pose is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowDirectionPortraitWriteV1':True} if workflow_direction_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowNpcPlanningAddMarkdownV1':True} if workflow_npc_planning_add is True and hasattr(store,'workflow_npc_planning_add') else {}),**({'workflowNpcPlanningUpdateMarkdownV1':True} if workflow_npc_planning_update is True and hasattr(store,'workflow_npc_planning_update') else {}),**({'workflowCurrentDocumentChainV1':True} if workflow_shared_plan is True and hasattr(store,'workflow_plan_current') else {}),'atomicCAS':not hasattr(store,'batch'), 'lockedBatch':hasattr(store,'batch'), 'namespace':getattr(store,'namespace','canonical-files/binari/npcs/' if hasattr(store,'batch') else PREFIX)})
                     if url.path == '/v1/object': return self.reply(200, store.get(parse_qs(url.query)['key'][0]), True)
                 elif self.command == 'POST':
                     if self.headers.get('Transfer-Encoding'): raise ValueError('content length required')

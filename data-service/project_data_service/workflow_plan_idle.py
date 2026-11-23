@@ -15,9 +15,10 @@ ARTIFACT='workflow.npc-idle-plan-artifact.v1'
 CAPABILITY='workflowIdlePlanWriteV1'
 CURRENT_CAPABILITY='workflowCurrentDocumentChainV1'
 CATEGORIES={'overview':('overview','overview'),'portrait-art':('portrait-art','portrait.art'),
-            'representative':('portrait.representative','portrait.representative'),'idle':('portrait.idle','portrait.idle')}
+            'representative':('portrait.representative','portrait.representative'),'idle':('portrait.idle','portrait.idle'),'combat':('portrait.combat','portrait.combat')}
 FIELDS={'overview':(), 'portrait-art':(('overview','overviewContent'),),
         'representative':(('portrait-art','portraitArtContent'),),
+        'combat':(('representative','representativeContent'),('portrait-art','portraitArtContent')),
         'idle':(('representative','representativeContent'),('portrait-art','portraitArtContent'))}
 BASIS={'categoryId'}
 
@@ -33,7 +34,7 @@ class IdlePlan:
         self.artifact='workflow.npc-'+stage+'-plan-artifact.v1'
 
     def _writer(self,tx,chain=False):
-        flag=CURRENT_CAPABILITY if chain or self.stage!='idle' else CAPABILITY
+        flag='workflowCombatPortraitWriteV1' if self.stage=='combat' else CURRENT_CAPABILITY if chain or self.stage!='idle' else CAPABILITY
         require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get(flag) is True,
                 'WORKFLOW_IDLE_PLAN_WRITER_REQUIRED')
 

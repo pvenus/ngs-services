@@ -27,12 +27,13 @@ class NativeMedia:
         self.source,self.verifier,self.motion=source,verifier,MotionPresets() if motion is None else motion
 
     @staticmethod
-    def _check(tx,kind,selected=False,regeneration=False):
+    def _check(tx,kind,selected=False,regeneration=False,pose_recipe=False):
         require(isinstance(tx,OwnedNPCTransport),'WORKFLOW_MEDIA_WRITER')
         capabilities=tx.capabilities()
         require(capabilities.get('workflowStaticPortraitPixelV1' if kind=='portrait-pixel' else CAPABILITY) is True
                 and (not selected or capabilities.get('workflowSelectedMotionV1') is True)
-                and (not regeneration or capabilities.get('workflowRegenerateMotionV1') is True),'WORKFLOW_MEDIA_WRITER')
+                and (not regeneration or capabilities.get('workflowRegenerateMotionV1') is True)
+                and (not pose_recipe or capabilities.get('workflowCombatPortraitWriteV1') is True),'WORKFLOW_MEDIA_WRITER')
 
     def _selected_source(self,binding):
         preset_id=binding['motion']
@@ -65,7 +66,8 @@ class NativeMedia:
         regeneration=binding.get('regeneration') is True
         reference=self._selected_source(binding) if selected and action!='asset' else None
         with self.source.store.factory() as tx:
-            self._check(tx,kind,selected,regeneration)
+            self._check(tx,kind,selected,regeneration,'portraitPose' in binding or
+                        kind=='portrait-pixel' and binding['posePreset']=='combat')
             if action=='asset':
                 aid=envelope['assetId']
                 require(type(aid) is str and ASSET.fullmatch(aid),'WORKFLOW_MEDIA_ASSET')

@@ -22,7 +22,10 @@ REGEN_RECEIPT='filex.workflow-animation-regeneration-receipt.v1'
 DIRECTIONS=('n','ne','e','se','s','sw','w','nw')
 MOTIONS=('walk','run')
 MOTION_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
-POSES=('idle','combat')
+# Raw task stems are the Filex-side projection of the Planner pose recipes.
+PORTRAIT_RECIPES={'idle':('portrait_','portrait_idle_reference','아이들'),
+                  'combat':('portrait_combat_','portrait_combat_reference','전투')}
+POSES=tuple(PORTRAIT_RECIPES)
 RAW='ngs.animation-native-png-sequence.v1'
 ALPHA='ngs.animation-alpha-output.v1'
 RETENTION='retain-native-sequence-independently'
@@ -66,7 +69,7 @@ def frame_row(idx,aid,raw):
 def scope(kind,b):
     base={'officialRequestId','taskId','projectId','npcId','payloadSha256','motion','direction'}
     selected={'posePreset','assetSetSha256'}
-    require(kind in ('animation','frames') and type(b) is dict and set(b) in (base,base|selected)
+    require(kind in ('animation','frames') and type(b) is dict and set(b) in (base,base|selected,base|selected|{'portraitPose'})
             and b['projectId']=='binari' and txt(re.compile(r'request\.official\.[a-f0-9]{64}'),b['officialRequestId'])
             and txt(re.compile(r'(?:npc|character)\.[A-Za-z0-9][A-Za-z0-9._-]{0,120}'),b['npcId'])
             and txt(SHA,b['payloadSha256']) and b['direction'] in DIRECTIONS,'scope')
@@ -81,11 +84,13 @@ def scope(kind,b):
         pose,assets='idle',None
         stem=f'{motion}_{direction}'
     require(b['taskId']==task(oid,kind+'_'+stem),'task')
-    return oid,owner,motion,direction,pose,assets,stem
+    appearance=b.get('portraitPose')
+    require('portraitPose' not in b or (appearance in PORTRAIT_RECIPES and appearance==pose),'portrait pose')
+    return oid,owner,motion,direction,pose,assets,stem,appearance
 
 
-def source_binding(oid, direction, motion, pose, assets):
-    base=[oid,'portrait_'+direction,motion]
+def source_binding(oid, direction, motion, pose, assets, appearance=None):
+    base=[oid,PORTRAIT_RECIPES[appearance or 'idle'][0]+direction,motion]
     return digest(base if assets is None else [*base,pose,assets])
 
 
@@ -95,7 +100,7 @@ def task(oid,key):
 
 class WorkflowNativeMedia:
     def _workflow_media_current(self,kind,scope_keys):
-        oid,owner,motion,direction,pose,assets,stem=scope_keys
+        oid,owner,motion,direction,pose,assets,stem,appearance=scope_keys
         self.require_no_migration()
         state=self.state(owner);self.require_no_cleanup(state)
         if state['state']!='active':raise Conflict('workflow media owner inactive')
@@ -105,29 +110,49 @@ class WorkflowNativeMedia:
                 'current owner')
         suffix=f'{pose}/{motion}/{direction}'
         if kind=='animation':
-            key=f'idle/portrait/{direction}'
+            input_pose=appearance or 'idle'
+            key=f'{input_pose}/portrait/{direction}'
             view=docs.get(f'{owner}/pose-views/{key}.json',{})
             require(key in meta.get('poseViewKeys',[]) and view.get('schemaVersion')=='ngs.npc-pose-view.v1'
-                    and (view.get('posePreset'),view.get('referenceType'),view.get('direction'))==('idle','portrait',direction)
-                    and view.get('requestId')==task(oid,'portrait_'+direction)
+                    and (view.get('posePreset'),view.get('referenceType'),view.get('direction'))==(input_pose,'portrait',direction)
+                    and view.get('requestId')==task(oid,PORTRAIT_RECIPES[input_pose][0]+direction)
                     and txt(PNG,view.get('assetId')),'current native portrait')
+            if appearance is not None:
+                pixel_key=f'{input_pose}/pixel/{direction}'
+                pixel=docs.get(f'{owner}/pose-views/{pixel_key}.json',{})
+                pid=pixel.get('assetId')
+                require(pixel_key in meta.get('poseViewKeys',[])
+                        and pixel.get('schemaVersion')=='ngs.npc-pose-view.v1'
+                        and pixel.get('requestId')==task(oid,f'portrait_pixel_{input_pose}_{direction}')
+                        and (pixel.get('posePreset'),pixel.get('referenceType'),pixel.get('direction'))==(input_pose,'pixel',direction)
+                        and pixel.get('sourceArtifactId')==view['assetId']
+                        and pixel.get('sourceHash')==view['assetId'][:-4]
+                        and pixel.get('referenceArtifactId')==view.get('referenceArtifactId')
+                        and txt(PNG,pid) and txt(PNG,view.get('referenceArtifactId')),
+                        'native selected portrait pixel lineage')
+                for variant,aid in ((key,view['assetId']),(pixel_key,pid)):
+                    path=self.safe(f'{owner}/assets/pose-views/{variant}/image.png')
+                    require(path.is_file() and 0<path.stat().st_size<=MAX_ASSET
+                            and hashlib.sha256(path.read_bytes()).hexdigest()+'.png'==aid,
+                            'native selected portrait bytes')
             return docs,state,view,suffix
         raw=docs.get(f'{owner}/animation-sequences/{suffix}.json',{})
         require(raw.get('schemaVersion')==RAW and raw.get('requestId')==task(oid,'animation_'+stem)
-                and (assets is None or raw.get('sourceBindingHash')==source_binding(oid,direction,motion,pose,assets))
+                and (assets is None or raw.get('sourceBindingHash')==source_binding(oid,direction,motion,pose,assets,appearance))
                 and all(raw.get(k)==v for k,v in (('npcId',owner),('generationId',state['generationId']),
                 ('posePreset',pose),('presetId',motion),('direction',direction))), 'canonical raw sequence')
         return docs,state,raw,suffix
 
     def _workflow_static_pixel_current(self,b):
         require(type(b) is dict and set(b)=={'officialRequestId','taskId','projectId','npcId','payloadSha256','posePreset','direction'}
-                and b['projectId']=='binari' and b['posePreset']=='idle'
+                and b['projectId']=='binari' and b['posePreset'] in PORTRAIT_RECIPES
                 and b['direction'] in (None,*DIRECTIONS)
                 and txt(re.compile(r'request\.official\.[a-f0-9]{64}'),b['officialRequestId'])
                 and txt(re.compile(r'(?:npc|character)\.[A-Za-z0-9][A-Za-z0-9._-]{0,120}'),b['npcId'])
                 and txt(SHA,b['payloadSha256']),'static pixel scope')
-        oid,owner,d=(b[k] for k in ('officialRequestId','npcId','direction'))
-        require(b['taskId']==task(oid,'portrait_pixel_idle_'+(d or 'reference')),'static pixel identity')
+        oid,owner,d,pose=(b[k] for k in ('officialRequestId','npcId','direction','posePreset'))
+        direction_prefix,reference_task,_=PORTRAIT_RECIPES[pose]
+        require(b['taskId']==task(oid,'portrait_pixel_'+pose+'_'+(d or 'reference')),'static pixel identity')
         self.require_no_migration()
         state=self.state(owner);self.require_no_cleanup(state)
         require(state['state']=='active' and state['npcId']==owner,'static pixel owner')
@@ -135,23 +160,23 @@ class WorkflowNativeMedia:
         require(owner in docs['metadata.json']['characterOrder'] and meta.get('id')==owner
                 and meta.get('creationBasis',{}).get('requestId')==task(oid,'preset'),'static pixel current generation')
         if d:
-            key='idle/portrait/'+d
+            key=f'{pose}/portrait/{d}'
             src=docs.get(prefix+'pose-views/'+key+'.json',{})
             require(key in meta.get('poseViewKeys',[]) and src.get('schemaVersion')=='ngs.npc-pose-view.v1'
-                    and (src.get('posePreset'),src.get('referenceType'),src.get('direction'))==('idle','portrait',d)
-                    and src.get('requestId')==task(oid,'portrait_'+d),'static pixel direction source')
-            center=meta.get('portraitSets',{}).get('idle',{})
+                    and (src.get('posePreset'),src.get('referenceType'),src.get('direction'))==(pose,'portrait',d)
+                    and src.get('requestId')==task(oid,direction_prefix+d),'static pixel direction source')
+            center=meta.get('portraitSets',{}).get(pose,{})
             center_id=center.get('pixelAssetId')
             require(txt(PNG,center_id) and src.get('referenceArtifactId')==center_id
                     and center.get('pixelProvenance',{}).get('postprocess',{}).get('workflowTaskId')==
-                        task(oid,'portrait_pixel_idle_reference'),'static pixel direction center lineage')
-            center_bytes=self.safe(prefix+'assets/portraits/idle/pixel.png').read_bytes()
+                        task(oid,'portrait_pixel_'+pose+'_reference'),'static pixel direction center lineage')
+            center_bytes=self.safe(prefix+f'assets/portraits/{pose}/pixel.png').read_bytes()
             require(hashlib.sha256(center_bytes).hexdigest()+'.png'==center_id,'static pixel center bytes')
             aid=src.get('assetId');slot='assets/pose-views/'+key+'/image.png'
         else:
-            src=meta.get('portraitSets',{}).get('idle',{})
-            require(src.get('requestId')==task(oid,'portrait_idle_reference'),'static pixel idle source')
-            aid=src.get('portraitAssetId');slot='assets/portraits/idle/portrait.png'
+            src=meta.get('portraitSets',{}).get(pose,{})
+            require(src.get('requestId')==task(oid,reference_task),'static pixel center source')
+            aid=src.get('portraitAssetId');slot=f'assets/portraits/{pose}/portrait.png'
         require(txt(PNG,aid),'static pixel source id')
         raw=self.safe(prefix+slot).read_bytes()
         require(0<len(raw)<=MAX_ASSET and hashlib.sha256(raw).hexdigest()+'.png'==aid,'static pixel source bytes')
@@ -172,34 +197,34 @@ class WorkflowNativeMedia:
             require(a['sourceAssetId']==src_id and aid!=src_id,'static pixel source changed')
             sw,sh=struct.unpack('>II',source[16:24])
             require(max(sw,sh)>128,'static pixel output not downscaled')
-            owner=b['npcId'];prefix=owner+'/';d=b['direction'];changes={}
+            owner=b['npcId'];prefix=owner+'/';d=b['direction'];pose=b['posePreset'];changes={}
             if d:
-                key='idle/pixel/'+d
+                key=f'{pose}/pixel/{d}'
                 path='pose-views/'+key+'.json'
                 require(key not in meta.get('poseViewKeys',[]) and prefix+path not in docs,'static pixel target exists')
-                changes[path]={'schemaVersion':'ngs.npc-pose-view.v1','posePreset':'idle','referenceType':'pixel',
+                changes[path]={'schemaVersion':'ngs.npc-pose-view.v1','posePreset':pose,'referenceType':'pixel',
                     'direction':d,'requestId':b['taskId'],'assetId':aid,'sourceArtifactId':src_id,
-                    'sourceHash':src_id[:-4],**({'referenceArtifactId':docs[prefix+'pose-views/idle/portrait/'+d+'.json']['referenceArtifactId']}
-                            if 'referenceArtifactId' in docs[prefix+'pose-views/idle/portrait/'+d+'.json'] else {}),'mimeType':'image/png','bytes':len(raw),'width':w,'height':h}
+                    'sourceHash':src_id[:-4],**({'referenceArtifactId':docs[prefix+f'pose-views/{pose}/portrait/{d}.json']['referenceArtifactId']}
+                            if 'referenceArtifactId' in docs[prefix+f'pose-views/{pose}/portrait/{d}.json'] else {}),'mimeType':'image/png','bytes':len(raw),'width':w,'height':h}
                 changes['metadata.json']={**meta,'poseViewKeys':sorted(set(meta.get('poseViewKeys',[]))|{key})}
                 expected_slots={'assets/pose-views/'+key+'/image.png':(aid,raw),
                                 'assets/pose-views/'+key+'/source.png':(src_id,source)}
             else:
-                pairs=meta['portraitSets'];pair=pairs['idle'];representative=pairs.get('representative',{})
+                pairs=meta['portraitSets'];pair=pairs[pose];representative=pairs.get('representative',{})
                 reference=representative.get('portraitAssetId')
                 require(set(pair)=={'portraitAssetId','requestId'} and txt(PNG,reference)
                         and representative.get('requestId')==task(b['officialRequestId'],'portrait_representative'),
                         'static pixel reference or target')
                 inventory=meta['portraits']
                 if not any(item['assetId']==aid for item in inventory):
-                    inventory=[*inventory,{'assetId':aid,'label':'아이들 픽셀 포트레이트','sourceRef':b['taskId']}]
-                changes['metadata.json']={**meta,'portraits':inventory,'portraitSets':{**pairs,'idle':{**pair,
+                    inventory=[*inventory,{'assetId':aid,'label':PORTRAIT_RECIPES[pose][2]+' 픽셀 포트레이트','sourceRef':b['taskId']}]
+                changes['metadata.json']={**meta,'portraits':inventory,'portraitSets':{**pairs,pose:{**pair,
                     'pixelAssetId':aid,'pixelSourceAssetId':src_id,'referencePortraitAssetId':reference,
                     'pixelProvenance':{'pipeline':{'postprocessCompleted':True,'portraitSha256':src_id[:-4],
                         'referencePortraitSha256':src_id[:-4],'pixelSha256':aid[:-4],'pixelSourceSha256':src_id[:-4],
                         'postprocessInputSha256':src_id[:-4]},'postprocess':{'workflowTaskId':b['taskId']}}}}}
-                expected_slots={'assets/portraits/idle/pixel.png':(aid,raw),
-                                'assets/portraits/idle/pixel-source.png':(src_id,source)}
+                expected_slots={f'assets/portraits/{pose}/pixel.png':(aid,raw),
+                                f'assets/portraits/{pose}/pixel-source.png':(src_id,source)}
             current={k.removeprefix(prefix):v for k,v in docs.items() if k.startswith(prefix)}
             previous=self.manifests().get(owner)
             require(previous==plan(owner,current),'static pixel owner manifest')
@@ -228,7 +253,7 @@ class WorkflowNativeMedia:
         return scope(kind,{k:v for k,v in b.items() if k!='regeneration'})
 
     def _regen_target(self,parsed):
-        oid,owner,motion,direction,pose,assets,stem=parsed
+        oid,owner,motion,direction,pose,assets,stem,appearance=parsed
         self.require_no_migration()
         state=self.state(owner);self.require_no_cleanup(state)
         require(state.get('state')=='active' and state.get('npcId')==owner
@@ -237,11 +262,12 @@ class WorkflowNativeMedia:
         meta=docs.get(prefix+'metadata.json',{})
         require(type(root['characterOrder']) is list and root['characterOrder'].count(owner)==1
                 and meta.get('id')==owner,'regeneration current NPC')
-        key=f'idle/portrait/{direction}'
+        input_pose=appearance or 'idle'
+        key=f'{input_pose}/portrait/{direction}'
         view=docs.get(prefix+'pose-views/'+key+'.json',{})
         aid=view.get('assetId')
         require(key in meta.get('poseViewKeys',[]) and view.get('schemaVersion')=='ngs.npc-pose-view.v1'
-                and (view.get('posePreset'),view.get('referenceType'),view.get('direction'))==('idle','portrait',direction)
+                and (view.get('posePreset'),view.get('referenceType'),view.get('direction'))==(input_pose,'portrait',direction)
                 and txt(PNG,aid),'regeneration current appearance')
         portrait_slot='assets/pose-views/'+key+'/image.png'
         manifest=self.manifests().get(owner)
@@ -275,7 +301,7 @@ class WorkflowNativeMedia:
         return '.workflow-motion-regeneration/'+digest([oid,stem])+'/'
 
     def _regen_read_stage(self,b,parsed,target):
-        oid,owner,motion,direction,pose,assets,stem=parsed
+        oid,owner,motion,direction,pose,assets,stem,appearance=parsed
         _,_,_,_,basis,_=target
         folder=self._regen_stage_path(oid,stem)
         state=self.safe(folder+'raw.json')
@@ -287,7 +313,7 @@ class WorkflowNativeMedia:
         require(type(raw) is dict and raw.get('schemaVersion')==RAW and raw.get('requestId')==task(oid,'animation_'+stem)
                 and all(raw.get(k)==value for k,value in (('npcId',owner),('generationId',basis['generationId']),
                   ('posePreset',pose),('presetId',motion),('direction',direction),
-                  ('sourceBindingHash',source_binding(oid,direction,motion,pose,assets)))),'regeneration raw lineage')
+                  ('sourceBindingHash',source_binding(oid,direction,motion,pose,assets,appearance)))),'regeneration raw lineage')
         rows=raw.get('frames')
         require(type(rows) is list and 2<=raw.get('frameCount',0)<=1000 and len(rows)==raw['frameCount'],
                 'regeneration stored frames')
@@ -333,7 +359,7 @@ class WorkflowNativeMedia:
         with self.lock():
             target=self._regen_target(parsed)
             docs,state,suffix,paths,basis,previous=target
-            oid,owner,_,_,_,_,stem=parsed
+            oid,owner,_,_,_,_,stem,_=parsed
             if kind=='animation':
                 source=artifact['source']
                 require(type(source) is dict and set(source)==REGEN_SOURCE and source==basis,'regeneration source changed')
@@ -411,7 +437,7 @@ class WorkflowNativeMedia:
         if kind=='portrait-pixel':
             with self.lock():
                 _,_,raw,aid=self._workflow_static_pixel_current(b)
-                return {'posePreset':'idle','direction':b['direction'],'source':{
+                return {'posePreset':b['posePreset'],'direction':b['direction'],'source':{
                     'assetId':aid,'sha256':aid[:-4],'bytes':len(raw),'mimeType':'image/png'}}
         parsed=scope(kind,b)
         with self.lock():
@@ -473,7 +499,7 @@ class WorkflowNativeMedia:
         manifest={'schemaVersion':RAW,'requestId':b['taskId'],'npcId':b['npcId'],
                   'generationId':state['generationId'],'posePreset':b.get('posePreset','idle'),'presetId':b['motion'],
                   'direction':b['direction'],'sourceBindingHash':source_binding(b['officialRequestId'],
-                      b['direction'],b['motion'],b.get('posePreset','idle'),b.get('assetSetSha256')),
+                      b['direction'],b['motion'],b.get('posePreset','idle'),b.get('assetSetSha256'),b.get('portraitPose')),
                   'frameCount':len(rows),'fps':fps,'width':w,'height':h,'frames':rows}
         return {'animation-sequences/'+suffix+'.json':manifest},by_id
 

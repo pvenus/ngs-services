@@ -212,9 +212,9 @@ def validate_npcs(document: object, asset_reader=None) -> dict:
         if not isinstance(slots, dict) or set(slots) - {'representative', 'combat', 'idle'}:
             raise ValueError('NPC_PORTRAIT_SLOTS_INVALID')
         for slot, pair in slots.items():
-            # A workflow-created representative or idle original need not have a pixel result.
-            # Combat and legacy paired results retain their full contract.
-            if slot in ('representative','idle') and isinstance(pair,dict) and set(pair)=={'portraitAssetId','requestId'}:
+            # A workflow-owned original may be published before its paired pixel task.
+            # Existing paired results retain their full contract.
+            if slot in ('representative','idle','combat') and isinstance(pair,dict) and set(pair)=={'portraitAssetId','requestId'}:
                 if (not isinstance(pair['portraitAssetId'],str) or not re.fullmatch(r'[a-f0-9]{64}\.png',pair['portraitAssetId'])
                     or pair['portraitAssetId'] not in ids or (slot=='representative' and active!=pair['portraitAssetId'])
                     or not isinstance(pair['requestId'],str) or not re.fullmatch(r'workflow\.task\.[a-f0-9]{64}',pair['requestId'])):

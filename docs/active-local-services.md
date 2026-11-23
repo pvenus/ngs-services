@@ -58,3 +58,22 @@ This does not remove a PDS route, Filex data, a migration script, or a worker.
 In particular, the legacy Workflow service (8060) still uses the execution,
 file, and video-alpha APIs (8032, 8041, and 8050); retain those services and
 their endpoint contracts.
+
+### NPC pose recipes (selected workflow v2)
+
+The existing Shared Planning, Representative/Idle/Direction Portrait, and Native
+Media enablement jointly expose the v2 pose implementation; no additional
+launch environment flag is needed. The scoped Filex NPC writer advertises
+`workflowCombatPortraitWriteV1` only with those gates enabled. Deploy the scoped
+Filex writer and PDS before clients accept v2. First-time v2 replacement checks
+this capability and the current pinned motion sources before deleting the old
+target; a previously confirmed exact delete receipt remains replayable.
+
+For a full v2 request, idle remains the base; each additional pose is derived
+from the registered motion association, not the motion name. For each selected
+motion the same-direction final pixel task must complete; the animation asset
+read then returns its Filex-verified raw source. A v2 animation-only request
+uses the exact existing same-pose raw direction (absence fails, never switches
+to idle or generates a portrait). The independent regeneration stage and atomic
+raw/alpha/pixel replacement remain unchanged. V1 still uses its original
+appearance/dependency routing.
