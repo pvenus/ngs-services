@@ -1,4 +1,4 @@
-# Regenerate a published BGM as an instrumental
+# Separate an instrumental from a published BGM
 
 In the NGS playlist, **분리 요청** submits one formal request for the song on
 that row. There is no prompt dialog. The request does not change the original
@@ -14,12 +14,17 @@ track, delete it, or use a third-party media URL.
   audio worker. The worker claims the exact task, uses PDS to read the published
   source and WAV, and verifies the pinned current digest, bounded size and type.
   Missing, inaccessible or changed sources are not substituted.
-- A local source-separation model provides the accompaniment to ACE-Step
-  Cover. The source WAV and temporary stems are not published again. Keep the
-  generation prompt fixed and versioned in the worker; no extra request
-  message, title prompt, or lyrics should override it. Guidance is to preserve
-  the source melody, harmony, rhythm, instrumentation and form. Instrumental
-  is passed as a model setting, not inferred from a list of negative terms.
+- The audio worker applies the same fixed source-separation recipe on every
+  track. A pinned local Hybrid Demucs checkpoint estimates four stems; the
+  instrumental is reconstructed from drums, bass and other only. It is not an
+  ACE-Step Cover and has no lyrics, request text, or creative prompt. Never
+  reintroduce the original mix into the output as a repair shortcut.
+- Corrections belong in the worker pipeline, not in saved track metadata or
+  hardcoded cue times. Use context-overlapping windows with smooth crossfades,
+  reconcile inconsistent estimates where appropriate, then validate duration
+  and headroom. Keep one result; temporary stems are discarded. Do not
+  normalize or EQ the entire track just to address isolated separation
+  artifacts.
 - Publish one new standard WAV and metadata through PDS and Filex under the new
   request ID. The result metadata preserves the concept linkage and is linked
   back to the exact source in
@@ -30,7 +35,7 @@ track, delete it, or use a third-party media URL.
 ## Verification and rollout
 
 Validate unknown project, pending/missing source, hash mismatch, no separator
-or Cover provider, retry exhaustion, exact audio length and independent
+provider, retry exhaustion, exact audio length and independent
 publication. A successful synthetic integration is not proof that a real
 song's vocals are inaudible or that its arrangement is unchanged. For a real
 acceptance test, compare the source and new take around the former vocal
