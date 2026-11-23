@@ -215,6 +215,21 @@ def validate_npcs(document: object, asset_reader=None) -> dict:
             # A workflow-owned original may be published before its paired pixel task.
             # Existing paired results retain their full contract.
             if slot in ('representative','idle','combat') and isinstance(pair,dict) and set(pair)=={'portraitAssetId','requestId'}:
+                if slot=='combat':
+                    from project_data_service.filex_read import digest
+                    creation=character.get('creationBasis',{})
+                    preset=creation.get('requestId') if isinstance(creation,dict) else None
+                    cid='category.preset.'+digest(['npc.standard','3',preset,'portrait.combat'])[:32]
+                    categories=character.get('planningCategories',[])
+                    rep=slots.get('representative')
+                    if (not isinstance(preset,str) or not re.fullmatch(r'workflow\.task\.[a-f0-9]{64}',preset)
+                        or not isinstance(rep,dict) or not isinstance(categories,list)
+                        or not any(isinstance(row,dict) and row.get('id')==cid and row.get('planningRole')=='portrait.combat'
+                                   and isinstance(row.get('content'),str) and row['content'].strip() for row in categories)
+                        or (rep.get('portraitAssetId')!=pair['portraitAssetId'] and
+                            not any(row['assetId']==pair['portraitAssetId'] and row['sourceRef']==pair['requestId']
+                                    for row in portraits))):
+                        raise ValueError('NPC_PORTRAIT_PAIR_INVALID')
                 if (not isinstance(pair['portraitAssetId'],str) or not re.fullmatch(r'[a-f0-9]{64}\.png',pair['portraitAssetId'])
                     or pair['portraitAssetId'] not in ids or (slot=='representative' and active!=pair['portraitAssetId'])
                     or not isinstance(pair['requestId'],str) or not re.fullmatch(r'workflow\.task\.[a-f0-9]{64}',pair['requestId'])):

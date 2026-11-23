@@ -153,6 +153,14 @@ class Tests(unittest.TestCase):
         plan=self.plan_write(self.plan_claim(pose,rep),pose)
         center=self.task_claim(recipe.reference_key,recipe.reference_type,'image',plan,fields={'imageStyle':'pixel-sprite.v1'})
         original=self.image_write(center,pose,num,reference=reference)
+        if pose=='combat':
+            # Intermediate canonical center is recognized only with its exact
+            # workflow preset role and matching dedicated inventory source.
+            from project_data_service.domain_contracts.legacy_http import validate_npcs
+            authority=self.pds.workflow_portrait_combat.source
+            document=authority.current()['document']
+            document['characters']=[c for c in document['characters'] if c['id']==OWNER]
+            validate_npcs(document,authority.asset_get)
         center_pixel=self.pixel_claim(pose,None,center)
         cp=self.pixel_write(center_pixel,pose,original,num+1)
         direction=self.task_claim(recipe.direction_prefix+'e',recipe.direction_type,'image',center_pixel,
