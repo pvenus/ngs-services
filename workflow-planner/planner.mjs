@@ -172,28 +172,47 @@ export function migrateWorkflowRetryCount(db){
 // A legal worker transition cannot make this exact graph runnable again. In
 // particular, a running claim is never inferred to have failed, and a failed
 // task below the cap is still live even while its retry cooldown is in effect.
-function hasExhaustedRegenerationGraph(run,readTasks){
- let plan;
+function restoreStoredPlan(run){
  try{
-  plan=buildPlan({officialRequestId:run.official_request_id,projectId:run.project_id,
+  const plan=buildPlan({officialRequestId:run.official_request_id,projectId:run.project_id,
    requestType:run.request_type,schemaVersion:run.schema_version,payload:JSON.parse(run.payload),
    payloadSha256:run.payload_sha256,status:'registered',registeredAt:run.registered_at});
-  if(plan.payload!==run.payload)return false;
- }catch{return false;}
+  return plan.payload===run.payload?plan:null;
+ }catch{return null;}
+}
+const exhausted=row=>row?.status==='failed'&&row.retry_count===WORKFLOW_TASK_MAX_RETRIES;
+const exactStoredTask=(row,task)=>row&&row.task_id===task.id&&row.task_key===task.key&&
+ row.task_type===task.type&&row.worker_type===task.workerType&&row.task_input===canonical(task.input)&&
+ row.depends_on_task_id===task.dependsOn;
+
+function hasExhaustedRegenerationGraph(run,readTasks){
+ const plan=restoreStoredPlan(run);
+ if(!plan)return false;
  const rows=readTasks.all(run.official_request_id,plan.tasks.length+1);
  if(rows.length!==plan.tasks.length)return false;
  const byId=new Map(rows.map(row=>[row.task_id,row]));
- const exhausted=row=>row?.status==='failed'&&row.retry_count===WORKFLOW_TASK_MAX_RETRIES;
  if(!rows.some(exhausted))return false;
  return plan.tasks.every(task=>{
   const row=byId.get(task.id);
-  if(!row||row.task_key!==task.key||row.task_type!==task.type||
-     row.worker_type!==task.workerType||row.task_input!==canonical(task.input)||
-     row.depends_on_task_id!==task.dependsOn)return false;
-  return row.status==='completed'||exhausted(row)||
-   (row.status==='pending'&&task.dependsOn!==null&&exhausted(byId.get(task.dependsOn)));
+  return exactStoredTask(row,task)&&(row.status==='completed'||exhausted(row)||
+   (row.status==='pending'&&task.dependsOn!==null&&exhausted(byId.get(task.dependsOn))));
  });
 }
+
+function hasExhaustedAudioSeparation(run,readTasks){
+ const plan=restoreStoredPlan(run);
+ if(!plan||plan.tasks.length!==1)return false;
+ const rows=readTasks.all(run.official_request_id,2);
+ return rows.length===1&&exactStoredTask(rows[0],plan.tasks[0])&&
+  exhausted(rows[0])&&rows[0].result_ref===null;
+}
+
+// Only these families opt in. In particular, failed audio.generate tasks
+// continue to use their existing status behavior.
+const failurePolicies=new Map([
+ [npcAnimationRegenerateType,hasExhaustedRegenerationGraph],
+ [audioSeparateType,hasExhaustedAudioSeparation],
+]);
 
 export class PlannerStore{
  constructor(path){
@@ -265,24 +284,25 @@ export class PlannerStore{
   return this.db.prepare("UPDATE workflow_runs SET reason='RS_COMPLETED',updated_at=? WHERE official_request_id=? AND state='planned' AND reason IS NULL")
    .run(Date.now(),id).changes;
  }
- terminalRegenerationFailures(){
+ terminalFailures(){
   this.db.exec('BEGIN');
   try{
    const candidates=this.db.prepare(`SELECT r.* FROM workflow_runs r
-    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type=?
+    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?)
       AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id
         AND t.status='failed' AND t.retry_count=?)
-    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,WORKFLOW_TASK_MAX_RETRIES);
+    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,WORKFLOW_TASK_MAX_RETRIES);
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
-   const ready=candidates.filter(run=>hasExhaustedRegenerationGraph(run,evidence))
-    .map(({official_request_id})=>({official_request_id}));
+   const ready=candidates.filter(run=>failurePolicies.get(run.request_type)(run,evidence))
+    .map(({official_request_id,request_type})=>({official_request_id,request_type}));
    this.db.exec('COMMIT');return ready;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
- terminalRegenerationFailureAcknowledged(id){
+ terminalFailureAcknowledged(id,requestType){
+  if(!failurePolicies.has(requestType))return 0;
   return this.db.prepare(`UPDATE workflow_runs SET state='failed',reason='WORKFLOW_TASK_RETRIES_EXHAUSTED',updated_at=?
     WHERE official_request_id=? AND request_type=? AND state='planned' AND reason IS NULL`)
-   .run(Date.now(),id,npcAnimationRegenerateType).changes;
+   .run(Date.now(),id,requestType).changes;
  }
  close(){this.db.close();}
 }
@@ -326,11 +346,11 @@ export async function pollOnce(store,rs){
    completed+=store.terminalAcknowledged(id);
   }catch{pollError=true;}
  }
- for(const {official_request_id:id} of store.terminalRegenerationFailures()){
+ for(const {official_request_id:id,request_type:requestType} of store.terminalFailures()){
   try{
    const status='failed',ack=await rs.call('request_update_status',{officialRequestId:id,status});
    ensure(exact(ack,['officialRequestId','status'])&&ack.officialRequestId===id&&ack.status===status,'WORKFLOW_RS_ACK_INVALID');
-   failed+=store.terminalRegenerationFailureAcknowledged(id);
+   failed+=store.terminalFailureAcknowledged(id,requestType);
   }catch{pollError=true;}
  }
  return {staged,invalid,unsupported,acknowledged,conflicts,completed,failed,pending:store.pending().length,pollError};

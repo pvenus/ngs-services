@@ -41,3 +41,50 @@ test('separation rejects changed pin, self-source, unsafe IDs and extra fields',
   assert.throws(()=>buildPlan(retie(patch)),/NGS_AUDIO_SEPARATE_PAYLOAD_INVALID/);
  assert.throws(()=>buildPlan({...row,payload:{...row.payload,sourceSha256:'b'.repeat(64)}}),/WORKFLOW_PAYLOAD_BINDING_CHANGED/);
 });
+
+test('only an exact failed and exhausted separation settles; running or retryable audio stays planned',async t=>{
+ const store=new PlannerStore(':memory:');t.after(()=>store.close());
+ const bgm={schemaVersion:'ngs.audio-generate.v1',projectId:'binari',kind:'bgm',title:'fixture',
+  conceptId:'sound',brief:'fixture brief',text:'',durationSeconds:20};
+ const bgmRow={...row,officialRequestId:row.payload.sourceOfficialRequestId,requestType:'audio.generate',
+  schemaVersion:bgm.schemaVersion,payload:bgm,payloadSha256:sha(canonical(bgm))};
+ for(const request of [row,bgmRow]){store.stage(request);store.acknowledge(request.officialRequestId);}
+ const calls=[];let loseAck=true;
+ const rs={async call(method,args){
+  if(method==='request_workflow_list')return {requests:[],nextCursor:null};
+  assert.equal(method,'request_update_status');
+  assert.deepEqual(args,{officialRequestId:row.officialRequestId,status:'failed'});
+  calls.push(args);
+  if(loseAck){loseAck=false;throw Error('fixture lost failed ACK');}
+  return args;
+ }};
+ const snapshot=id=>store.db.prepare('SELECT state,reason FROM workflow_runs WHERE official_request_id=?').get(id);
+ const update=store.db.prepare('UPDATE workflow_tasks SET status=?,retry_count=?,result_ref=?,task_input=? WHERE task_id=?');
+ const [task]=plan.tasks,correct=canonical(task.input);
+ const set=(status,retries,result=null,input=correct)=>update.run(status,retries,result,input,task.id);
+ store.db.prepare("UPDATE workflow_tasks SET status='failed',retry_count=3 WHERE official_request_id=?").run(bgmRow.officialRequestId);
+ for(const state of [['pending',0],['failed',2],['running',3],['failed',3,'uncertain-result'],
+  ['failed',3,null,canonical({...task.input,sourceSha256:'b'.repeat(64)})]]){
+  set(...state);
+  const ignored=await pollOnce(store,rs);assert.equal(ignored.failed,0);assert.equal(ignored.pollError,false);
+  assert.equal(snapshot(row.officialRequestId).state,'planned');
+ }
+ set('failed',3);
+ // A lookalike graph with an additional task is not eligible either.
+ const taskId='workflow.task.'+sha('extra task');
+ store.db.prepare(`INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,updated_at)
+  VALUES(?,?,'extra','audio.separate','audio','{}',0)`).run(taskId,row.officialRequestId);
+ const ignored=await pollOnce(store,rs);assert.equal(ignored.failed,0);assert.equal(ignored.pollError,false);
+ assert.deepEqual(calls,[]);
+ store.db.prepare('DELETE FROM workflow_tasks WHERE task_id=?').run(taskId);
+ const saved=store.db.prepare('SELECT * FROM workflow_tasks WHERE task_id=?').get(task.id);
+ const missed=await pollOnce(store,rs);
+ assert.equal(missed.failed,0);assert.equal(missed.pollError,true);
+ assert.equal(snapshot(row.officialRequestId).state,'planned');
+ assert.equal((await pollOnce(store,rs)).failed,1);
+ assert.deepEqual({...snapshot(row.officialRequestId)},{state:'failed',reason:'WORKFLOW_TASK_RETRIES_EXHAUSTED'});
+ assert.equal(snapshot(bgmRow.officialRequestId).state,'planned');
+ assert.deepEqual(store.db.prepare('SELECT * FROM workflow_tasks WHERE task_id=?').get(task.id),saved);
+ assert.equal((await pollOnce(store,rs)).failed,0);
+ assert.equal(calls.length,2);
+});

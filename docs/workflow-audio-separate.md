@@ -31,3 +31,8 @@ the task as **음원 분리** and uses the existing status path.
 Enable new submission only after Request Service, Planner, PDS, the
 appropriate Filex writer, and the Audio Worker are deployed and verified as
 one compatible workflow. Do not send the new request to older services.
+
+A definite separation failure becomes a failed official request only when
+its exact task has exhausted all three existing retries. Running claims,
+uncertain publication, and tasks waiting to retry are not settled by the
+Planner. Original BGM requests retain their existing status behavior.
