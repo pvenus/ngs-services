@@ -24,8 +24,9 @@ queue is installed.
 Planner creates one `audio_separate` task with type `audio.separate`,
 worker `audio`, and no predecessor. Its input contains only
 `sourceOfficialRequestId` and `sourceSha256`. The worker reads the input
-through PDS and publishes both derivative outputs through PDS under the new
-official request, without overwriting or deleting the original. OPS displays
+through PDS and publishes one instrumental output through PDS under the new
+official request, without overwriting or deleting the original. See
+[model and rollout details](workflow-audio-separation.md). OPS displays
 the task as **음원 분리** and uses the existing status path.
 
 Enable new submission only after Request Service, Planner, PDS, the

@@ -14,17 +14,16 @@ track, delete it, or use a third-party media URL.
   audio worker. The worker claims the exact task, uses PDS to read the published
   source and WAV, and verifies the pinned current digest, bounded size and type.
   Missing, inaccessible or changed sources are not substituted.
-- The audio worker applies the same fixed source-separation recipe on every
-  track. A pinned local Hybrid Demucs checkpoint estimates four stems; the
-  instrumental is reconstructed from drums, bass and other only. It is not an
-  ACE-Step Cover and has no lyrics, request text, or creative prompt. Never
-  reintroduce the original mix into the output as a repair shortcut.
-- Corrections belong in the worker pipeline, not in saved track metadata or
-  hardcoded cue times. Use context-overlapping windows with smooth crossfades,
-  reconcile inconsistent estimates where appropriate, then validate duration
-  and headroom. Keep one result; temporary stems are discarded. Do not
-  normalize or EQ the entire track just to address isolated separation
-  artifacts.
+- The audio worker applies the selected, pinned **becruily Mel-Band RoFormer
+  Instrumental** checkpoint directly to the published WAV. This is
+  instrumental inference, not music regeneration, and has no lyrics, creative
+  prompt or user-entered request text. The production adapter uses the same
+  CPU model, 11-second windows, 50% overlap and smooth overlap-add as the
+  accepted listening candidate; it does not mix the unseparated original back.
+- Corrections belong in the worker recipe, never in per-song cue timestamps.
+  Validate the exact output duration and sufficient headroom. Publish only
+  the one instrumental; never normalize or EQ an entire track to disguise
+  an isolated separation artifact.
 - Publish one new standard WAV and metadata through PDS and Filex under the new
   request ID. The result metadata preserves the concept linkage and is linked
   back to the exact source in
