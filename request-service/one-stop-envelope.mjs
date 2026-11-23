@@ -11,7 +11,6 @@ export const isSelectionSchema=schema=>selectionSchemas.includes(schema);
 export const isReplaceSchema=schema=>schema===replaceSchemaVersion||schema===selectionReplaceSchemaVersion;
 export const motionPresetIdPattern='^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$';
 export const motionSelectionPoses=Object.freeze(['idle','combat']);
-export const motionSelectionLimit=8;
 const motionPresetId=new RegExp(motionPresetIdPattern);
 const assetSetHash=/^[a-f0-9]{64}$/;
 const selectionFields=['presetId','posePreset','assetSetSha256'];
@@ -35,7 +34,7 @@ export const sha=value=>createHash('sha256').update(value).digest('hex');
 export const motionSelectionSlot=presetId=>sha(presetId).slice(0,16);
 
 export function validateMotionSelection(selection) {
- if(!Array.isArray(selection)||!selection.length||selection.length>motionSelectionLimit)throw invalid();
+ if(!Array.isArray(selection)||!selection.length)throw invalid();
  const ids=new Set(),slots=new Set();
  for(const entry of selection){
   if(!keys(entry,selectionFields)||typeof entry.presetId!=='string'||
@@ -63,9 +62,14 @@ export function validateOneStop(value,projectId){
  if(!keys(c,['npcId','name','slug','role','actId','chapterId'])||
     !['npcId','slug','actId','chapterId'].every(k=>ident(c[k]))||
     !fits(c.name,1,60)||!c.name.trim()||!fits(c.role,1,300)||!c.role.trim())throw invalid();
- if(isReplaceSchema(value.schemaVersion)&&
-  (!/^(?:npc|character)\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(c.npcId)||
-   !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(c.slug)))throw invalid();
+ const replace=isReplaceSchema(value.schemaVersion);
+ if(c.npcId.startsWith('character.')){
+  // Imported, enrolled NPCs keep their canonical legacy owner ID on replacement.
+  if(!replace||c.npcId.length<12||c.npcId.length>90||!/^character\.[a-z0-9]+(?:[-._][a-z0-9]+)*$/.test(c.npcId)||
+     c.slug!==c.npcId.slice('character.'.length)||
+     !['act1','act01'].includes(c.actId)||!/^(?:ch|chapter0)[1-5]$/.test(c.chapterId))throw invalid();
+ }else if(!/^npc\.[A-Za-z0-9][A-Za-z0-9._-]*$/i.test(c.npcId)||
+   (replace&&!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(c.slug)))throw invalid();
  if(selected)validateMotionSelection(value.motionSelection);
  else {
   if(Object.hasOwn(value,'motionPresets')&&(!keys(value.motionPresets,['walk','run'])||

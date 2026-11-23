@@ -247,7 +247,7 @@ test('unknown attached schema refuses the upgrade without altering old table or 
 
 const replacement=(npcId='npc.fixture-replacement',slug='fixture-replacement')=>({
  ...payload,schemaVersion:'ngs.npc-one-stop.replace.v1',
- character:{...payload.character,npcId,slug,name:'Test fixture'},
+ character:{...payload.character,npcId,slug,name:'Test fixture',actId:'act01'},
 });
 test('same-ID replacement is registered and cancellable through the same tools with no legacy action',async t=>{
  const files=folder(t);
@@ -290,10 +290,10 @@ test('both intake directions enforce registered target uniqueness and exact repl
  ])assert.deepEqual((await submit(input('bad',body))).result.structuredContent,bad);
  assert.equal((await submit(input('new-one'))).result.structuredContent.status,'registered');
  assert.deepEqual((await submit(input('replace-id',replacement('npc.fixture','elsewhere')))).result.structuredContent,conflict);
- assert.deepEqual((await submit(input('replace-slug',replacement('character.old','FIXTURE')))).result.structuredContent,conflict);
- assert.equal((await submit(input('replace-first',replacement('character.old','historic')))).result.structuredContent.status,'registered');
+ assert.deepEqual((await submit(input('replace-slug',replacement('character.fixture','fixture')))).result.structuredContent,conflict);
+ assert.equal((await submit(input('replace-first',replacement('character.historic','historic')))).result.structuredContent.status,'registered');
  const other=(npcId,slug)=>({...payload,character:{...payload.character,npcId,slug}});
- assert.deepEqual((await submit(input('new-id',other('character.old','different')))).result.structuredContent,conflict);
+ assert.deepEqual((await submit(input('new-id',other('character.historic','historic')))).result.structuredContent,bad);
  assert.deepEqual((await submit(input('new-slug',other('npc.another','Historic')))).result.structuredContent,conflict);
  assert.deepEqual((await submit(input('new-one',{...payload,schemaVersion:'ngs.npc-one-stop.replace.v1'}))).result.structuredContent,
   {error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
@@ -680,7 +680,6 @@ test('new exact selected-preset schemas register immutable payloads and share ol
   {...selected,motionSelection:[first,{...second,presetId:'ATTACK-FLAT'}]},
   ...[{presetId:'..'},{presetId:'evil/name'},{presetId:'run-2d\n'},{posePreset:'walk'},
    {assetSetSha256:'A'.repeat(64)},{assetSetSha256:'a'.repeat(63)},{hash:'extra'}].map(change=>({...selected,motionSelection:[{...first,...change}]})),
-  {...selected,motionSelection:Array.from({length:9},(_,i)=>({...first,presetId:'m'+i}))},
   {...selected,schemaVersion:'ngs.npc-one-stop.selection.replace.v1',character:{...selected.character,npcId:'wrong'}}]){
    assert.deepEqual(await wire(input('bad-selection',body)),{error:'NGS_ONE_STOP_PAYLOAD_INVALID',status:400});
  }
@@ -733,4 +732,40 @@ test('formal NPC animation regeneration is durable and excludes concurrent same-
  assert.equal((await submit('blocked-by-whole',regen)).result.structuredContent.error,'OFFICIAL_REQUEST_NPC_ALREADY_REGISTERED');
  const legacy=(await submit('existing-import',{...regen,npcId:'character.yeonwoo'})).result.structuredContent;
  assert.match(legacy.officialRequestId,/^request\.official\./u);
+});
+
+test('full replacement retains the exact legacy identity and both selected routes accept larger byte-bounded lists',async t=>{
+ const {directory}=folder(t);
+ const {submit,workflow,rpc}=await listener(t,directory);
+ const motions=Array.from({length:20},(_,i)=>({presetId:'fixture-motion-'+i,
+  posePreset:i%2?'combat':'idle',assetSetSha256:'a'.repeat(64)}));
+ const body={schemaVersion:'ngs.npc-one-stop.selection.replace.v1',projectId:'binari',
+  intent:payload.intent,character:{...payload.character,npcId:'character.seojin',slug:'seojin',actId:'act01'},
+  sourceRefs:payload.sourceRefs,motionSelection:motions};
+ const send=async args=>(await submit(args)).result.structuredContent;
+ for(const character of [
+  {...body.character,slug:'yeonwoo'},{...body.character,npcId:'character.Seojin'},
+  {...body.character,actId:'act02'},{...body.character,chapterId:'chapter06'},
+ ]){
+  assert.deepEqual(await send(input('blocked',{...body,character})),
+   {error:'NGS_ONE_STOP_PAYLOAD_INVALID',status:400});
+ }
+ assert.deepEqual(await send(input('new-legacy',{...body,schemaVersion:'ngs.npc-one-stop.selection.v1'})),
+  {error:'NGS_ONE_STOP_PAYLOAD_INVALID',status:400});
+ const huge=Array.from({length:320},(_,i)=>({...motions[0],presetId:'long-'+String(i).padStart(3,'0')+'x'.repeat(114)}));
+ assert(Buffer.byteLength(canonical({...body,motionSelection:huge}))>64*1024);
+ assert.deepEqual(await send(input('too-big',{...body,motionSelection:huge})),
+  {error:'NGS_ONE_STOP_PAYLOAD_INVALID',status:400});
+ const regen={schemaVersion:'ngs.npc-animation.regenerate.v1',projectId:'binari',npcId:'character.yeonwoo',motionSelection:motions};
+ const regenSend=async (idempotencyKey,body)=>send({sourceId:'local',requestType:'npc.animation.regenerate',idempotencyKey,payload:body});
+ assert.deepEqual(await regenSend('too-big-regen',{...regen,motionSelection:huge}),
+  {error:'NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID',status:400});
+ const receipt=await send(input('legacy-replace',body)),regenReceipt=await regenSend('legacy-animation',regen);
+ assert.equal(receipt.status,'registered');assert.equal(regenReceipt.status,'registered');
+ const rows=(await workflow({})).result.structuredContent.requests;
+ assert.deepEqual(rows.find(r=>r.officialRequestId===receipt.officialRequestId).payload,body);
+ assert.deepEqual(rows.find(r=>r.officialRequestId===regenReceipt.officialRequestId).payload,regen);
+ const schema=(await rpc('tools/list',{})).result.tools.find(x=>x.name==='request_submit').inputSchema.oneOf;
+ assert.equal(schema[0].properties.payload.oneOf[1].properties.motionSelection.maxItems,undefined);
+ assert.equal(schema.find(x=>x.properties.requestType.const==='npc.animation.regenerate').properties.payload.properties.motionSelection.maxItems,undefined);
 });

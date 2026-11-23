@@ -27,20 +27,20 @@ class Tests(unittest.TestCase):
         self.addCleanup(server.server_close);self.addCleanup(t.join);self.addCleanup(server.shutdown)
         return server,'http://127.0.0.1:'+str(server.server_port)
 
-    def setUp(self):
+    def setUp(self, owner='npc.test'):
         t=tempfile.TemporaryDirectory();self.addCleanup(t.cleanup)
         d=Path(t.name).resolve(); root=d/'files';root.mkdir()
-        doc={'projectId':'ProjectBS','characters':[{'id':'npc.test'},{'id':'npc.other'}]}
+        doc={'projectId':'ProjectBS','characters':[{'id':owner},{'id':'npc.other'}]}
         files=encode(doc); files['metadata.json']['_pdsCurrent']={'revision':1,'documentHash':digest(doc)}
         for n,v in files.items():
             p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(encoded(v))
-        for name in ('npc.test','npc.other'):
+        for name in (owner,'npc.other'):
             (root/name/'.owned-assets.json').write_bytes(encoded(owner_plan(name,{'metadata.json':files[name+'/metadata.json']})))
-        (root/'npc.test/nested/empty').mkdir(parents=True)
+        (root/owner/'nested/empty').mkdir(parents=True)
         self.writer=FencedOwnedNPCStore(root); self.original_token='a'*32
-        self.g=self.writer.bootstrap('npc.test',self.writer.snapshot()['sourceVersion'])['generationId']
+        self.g=self.writer.bootstrap(owner,self.writer.snapshot()['sourceVersion'])['generationId']
         self.other=self.writer.bootstrap('npc.other',self.writer.snapshot()['sourceVersion'])['generationId']
-        self.legacy=self.writer.admit('npc.test',self.g,'old.lane')
+        self.legacy=self.writer.admit(owner,self.g,'old.lane')
         self.other_guard=self.writer.admit('npc.other',self.other,'unrelated')
         writer,url=self.start(handler(self.writer,self.original_token,workflow_delete=True));self.writer_url=url
         token=d/'writer-token';token.write_text(self.original_token);token.chmod(0o600)
@@ -48,7 +48,7 @@ class Tests(unittest.TestCase):
              'endpoint':url,'tokenFile':str(token)}
         pds,self.base=self.start(PDSHandler);self.pds=pds;self.running=True
         self.source=FilexCurrentNPC(FilexNPCStore(lambda:OwnedNPCTransport(cfg)))
-        self.b={'officialRequestId':'official.1','taskId':'workflow.delete.1','projectId':'binari','npcId':'npc.test',
+        self.b={'officialRequestId':'official.1','taskId':'workflow.delete.1','projectId':'binari','npcId':owner,
                 'generationId':self.g,'expectedSourceVersion':self.writer.snapshot()['sourceVersion'],
                 'expectedRevision':1,'payloadSha256':'c'*64}
         self.claim={'fixtureClaim':'recognized'}

@@ -81,7 +81,10 @@ class WorkflowPreset:
             a=envelope['artifact']; predecessor=envelope['predecessorReceiptRef']
             require(predecessor is None or type(predecessor) is str and
                     re.fullmatch(r'workflow\.task\.[a-f0-9]{64}',predecessor),'WORKFLOW_PRESET_PREDECESSOR')
-            with self.verify.authorized_preset(envelope['claim']) as (identity,character):
+            with self.verify.authorized_preset(envelope['claim']) as (identity,character,legacy_delete):
+                if legacy_delete is not None:
+                    require(predecessor in (None,legacy_delete),'WORKFLOW_PRESET_PREDECESSOR')
+                    predecessor=legacy_delete
                 require(type(a) is dict and a.get('character')==character and a.get('presetRegistrySha256')==REGISTRY_SHA,
                         'WORKFLOW_PRESET_OFFICIAL_ARTIFACT')
                 categories=[{'id':'category.preset.'+digest(['npc.standard','3',identity['taskId'],cid])[:32],

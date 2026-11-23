@@ -79,6 +79,20 @@ class ProgressTests(unittest.TestCase):
         ]})
         self.assertNotIn(b'PRIVATE',body)
 
+    def test_multi_selection_projection_exceeds_past_256_task_guard(self):
+        with sqlite3.connect(self.db) as db:
+            db.execute("INSERT INTO workflow_runs VALUES (?,?,?)",(UNKNOWN,'planned','PRIVATE NPC REQUEST'))
+            db.executemany('INSERT INTO workflow_tasks VALUES (?,?,?,?,?,?,?,?,?,?)',
+                [(f'private-{i}',UNKNOWN,f'motion_{i}','npc.animation-native-png','animation',
+                  'pending',None,70,'PRIVATE INPUT',None) for i in range(320)])
+        with started(S.server(0,request_progress=self.reader)) as port:
+            status,body=get(port,ROOT+'?requestId='+UNKNOWN)
+        self.assertEqual(status,200)
+        progress=json.loads(body)
+        self.assertEqual(len(progress['tasks']),320)
+        self.assertEqual(progress['tasks'][-1]['key'],'motion_319')
+        self.assertNotIn(b'PRIVATE',body)
+
     def test_invalid_queries_origin_and_non_get_never_read(self):
         def fail(_): self.fail('unexpected planner read')
         with started(S.server(0,request_progress=fail)) as p:

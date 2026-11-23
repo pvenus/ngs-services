@@ -11,19 +11,19 @@ from project_data_service.workflow_delete_claim import ClaimDenied, PrivatePlann
 
 
 class Tests(DeleteFixture):
-    def setUp(self):
-        super().setUp()
+    def setUp(self, owner='npc.test', picks=None):
+        super().setUp(owner)
         root=self.writer.root.parent/'planner';root.mkdir(mode=0o700)
         self.db=root/'workflow.sqlite'
         fd=os.open(self.db,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
         official='request.official.'+'d'*64
         task='workflow.task.'+digest([official,'delete'])
-        schema='ngs.npc-one-stop.replace.v1'
+        schema=('ngs.npc-one-stop.selection.replace.v1' if picks else 'ngs.npc-one-stop.replace.v1')
         payload={'schemaVersion':schema,'projectId':'binari','intent':'exact test deletion',
-                 'character':{'npcId':'npc.test','name':'테스트 인물','slug':'fixture','role':'마을 주민',
+                 'character':{'npcId':owner,'name':'테스트 인물','slug':owner.split('.',1)[1] if owner.startswith('character.') else 'fixture','role':'마을 주민',
                               'actId':'act01','chapterId':'chapter01'},'sourceRefs':['fixture'],
-                 'includeCombat':False}
-        self.c={'officialRequestId':official,'taskId':task,'projectId':'binari','npcId':'npc.test',
+                 **({'motionSelection':picks} if picks else {'includeCombat':False})}
+        self.c={'officialRequestId':official,'taskId':task,'projectId':'binari','npcId':owner,
                 'payloadSha256':digest(payload),'claimStamp':2}
         with sqlite3.connect(self.db) as db:
             db.executescript('''CREATE TABLE workflow_runs(official_request_id,project_id,request_type,schema_version,
@@ -32,7 +32,7 @@ class Tests(DeleteFixture):
               result_ref,updated_at,depends_on_task_id,status);''')
             db.execute("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,1,'planned',1,NULL)",
                        (official,'binari','npc.workflow',schema,encoded(payload).decode(),digest(payload)))
-            inp={'npcId':'npc.test','scope':'exact-npc-folder','preserveRequestHistory':True,'noOldDataReuse':True}
+            inp={'npcId':owner,'scope':'exact-npc-folder','preserveRequestHistory':True,'noOldDataReuse':True}
             db.execute("INSERT INTO workflow_tasks VALUES(?,?,'delete','npc.delete-folder','file',?,NULL,2,NULL,'running')",
                        (task,official,encoded(inp).decode()))
         st=self.db.stat()

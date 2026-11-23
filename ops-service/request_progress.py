@@ -1,5 +1,6 @@
 """Exact owner-local, read-only projection of the dedicated workflow planner."""
 from contextlib import closing
+import json
 import os
 from pathlib import Path
 import re
@@ -12,7 +13,16 @@ TASK_LABEL = re.compile(r'[a-z0-9][a-z0-9._-]{0,99}')
 RUN_STATES = {'awaiting_rs', 'planned', 'failed', 'not_claimable'}
 TASK_STATES = {'pending', 'running', 'completed', 'failed'}
 WORKERS = {'file', 'document', 'image', 'animation', 'postprocess', 'audio'}
-MAX_TASKS = 256
+# Upper bound implied by one accepted canonical payload, not a selection cap.
+# A valid motion record always carries the exact keys, at least one byte of
+# preset ID, the shortest pose ("idle"), and all 64 hash digits. Each adds 16
+# tasks (animation + frames, eight directions). Full plans add at most 25
+# setup tasks; older workflows fit inside the same projection.
+CANONICAL_PAYLOAD_BYTES = 64 * 1024
+MIN_MOTION_RECORD_BYTES = len(json.dumps(
+    {'presetId':'a','posePreset':'idle','assetSetSha256':'a'*64},
+    separators=(',',':')).encode('utf-8'))
+MAX_TASKS = 25 + 16 * (CANONICAL_PAYLOAD_BYTES // MIN_MOTION_RECORD_BYTES)
 
 
 class ProgressUnavailable(Exception):

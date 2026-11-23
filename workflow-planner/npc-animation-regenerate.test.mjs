@@ -113,3 +113,15 @@ test('invalid regeneration row does not prevent later valid intake, and legacy f
  assert.deepEqual(statuses,['planned']);
  assert.equal(store.db.prepare('SELECT state FROM workflow_runs').get().state,'planned');
 });
+
+test('animation-only plan supports more than eight pinned presets without bulk truncation',t=>{
+ const store=new PlannerStore(':memory:');t.after(()=>store.close());
+ const row=fixture.row,payload={...row.payload,motionSelection:Array.from({length:20},(_,i)=>({
+  ...row.payload.motionSelection[i%2],presetId:'preset-'+i}))};
+ const expanded={...row,payload,payloadSha256:sha(canonical(payload))};
+ assert.equal(store.stage(expanded),true);
+ assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM workflow_tasks').get().n,320);
+ store.acknowledge(row.officialRequestId);
+ store.db.exec("UPDATE workflow_tasks SET status='completed'");
+ assert.deepEqual(store.terminalReady(),[{official_request_id:row.officialRequestId}]);
+});

@@ -1,5 +1,5 @@
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
-import {cancelTool,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionLimit,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
+import {cancelTool,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema,conceptCategoryAddIdPattern,conceptCategoryIdPattern,conceptCategoryGroupIdPattern} from './concept-category-envelope.mjs';
 import {npcPlanningUpdateType,npcPlanningUpdateSchema,npcPlanningRoles,npcPlanningUpdateIdPattern,
  npcPlanningRequirementsLimit} from './npc-planning-update-envelope.mjs';
@@ -32,7 +32,7 @@ const npcLegacyPayload={type:'object',properties:{schemaVersion:{enum:legacyOneS
  includeCombat:{type:'boolean'},motionPresets:{type:'object'},combatMotionPresets:{type:'array',items:{type:'string'}}},
  required:['schemaVersion','projectId','intent','character','sourceRefs','includeCombat'],additionalProperties:false};
 const npcSelectionPayload={type:'object',properties:{schemaVersion:{enum:selectionSchemas},...npcCommon,
- motionSelection:{type:'array',minItems:1,maxItems:motionSelectionLimit,items:{type:'object',properties:{
+ motionSelection:{type:'array',minItems:1,items:{type:'object',properties:{
   presetId:{type:'string',pattern:selectedMotionIdPattern},posePreset:{enum:motionSelectionPoses},
   assetSetSha256:{type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64},
  },required:['presetId','posePreset','assetSetSha256'],additionalProperties:false}}},

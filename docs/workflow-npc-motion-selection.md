@@ -10,7 +10,9 @@ selection; the server does not supply a default or a substitute.
 The authorized payload shapes are `ngs.npc-one-stop.selection.v1` and
 `ngs.npc-one-stop.selection.replace.v1`. Their exact top-level fields are
 `schemaVersion`, `projectId`, `intent`, `character`, `sourceRefs` and
-`motionSelection`. Each of the 1–8 selected records is
+`motionSelection`. Select one or more published presets. Both request
+families enforce a 64 KiB canonical payload limit with no fixed preset count.
+Each selected record is
 `{presetId,posePreset,assetSetSha256}`, where pose is `idle` or `combat`.
 The fingerprint is SHA-256 of compact UTF-8 JSON
 `["ngs.motion-assets.v1",presetId,posePreset,[[direction,sha256],...]]`
@@ -38,6 +40,13 @@ write. Existing committed recoverable-delete receipts remain replayable and
 require their original exact binding. The two writers do not share a
 transaction: if the source changes after the delete preflight, the selected
 media stage refuses the changed asset set rather than substituting it.
+
+An existing owned legacy `character.*` NPC can also be replaced. Its
+exact lower-case ID and matching suffix slug are kept, with no alias into
+`npc.*`; new NPC registrations use `npc.*`. The legacy replacement preset
+requires the exact same-run completed delete task, and the NPC-owned writer
+checks the corresponding committed deletion receipt against the old
+generation before creating a fresh empty preset under that same ID.
 
 The NPC writer publishes under `<true-pose>/<exact-preset>/<direction>`
 for raw, alpha and pixel manifests, and checks the exact owner generation,

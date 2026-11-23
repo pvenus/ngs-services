@@ -46,7 +46,7 @@ def motion_slot(preset_id):
 
 def selection_rows(payload):
     rows=payload['motionSelection']
-    require(type(rows) is list and 1<=len(rows)<=8)
+    require(type(rows) is list and bool(rows))
     ids=set()
     slots={}
     for row in rows:
@@ -252,6 +252,21 @@ class PrivatePlannerClaim:
                         and all(matches(c[k],r'[A-Za-z0-9._:-]{1,200}') for k in ('actId','chapterId'))
                         and type(c['name']) is str and 1<=len(c['name'])<=60 and bool(c['name'].strip())
                         and type(c['role']) is str and 1<=len(c['role'])<=300 and bool(c['role'].strip()))
+                if owner.startswith('character.'):
+                    require(replacement and 12<=len(owner)<=90 and matches(owner,r'character\.[a-z0-9]+(?:[-._][a-z0-9]+)*')
+                            and c['slug']==owner.removeprefix('character.') and c['actId'] in ('act1','act01')
+                            and matches(c['chapterId'],r'(?:ch|chapter0)[1-5]'))
+                else:
+                    require(owner.startswith('npc.'))
+            delete_predecessor=None
+            if key=='preset' and owner.startswith('character.'):
+                delete_predecessor='workflow.task.'+digest([oid,'delete'])
+                delete_input=canonical({'npcId':owner,'scope':'exact-npc-folder','preserveRequestHistory':True,
+                                        'noOldDataReuse':True}).decode()
+                require(row['depends_on_task_id']==delete_predecessor and db.execute("""SELECT 1 FROM workflow_tasks
+                    WHERE official_request_id=? AND task_id=? AND task_key='delete' AND task_type='npc.delete-folder'
+                    AND worker_type='file' AND status='completed' AND result_ref=task_id AND depends_on_task_id IS NULL
+                    AND task_input=?""",(oid,delete_predecessor,delete_input)).fetchone() is not None)
             if media:
                 require(selection==selected_media and (not selection or slot in slots))
             expected={'npcId':owner}
@@ -362,6 +377,8 @@ class PrivatePlannerClaim:
             identity={k:claim[k] for k in IDENTITY}
             if key=='delete':
                 yield identity,c,tuple(slots.values())
+            elif key=='preset':
+                yield identity,c,delete_predecessor
             elif media_binding is not None:
                 yield identity,c,media_binding
             elif chain_result:
