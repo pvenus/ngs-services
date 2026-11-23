@@ -51,9 +51,9 @@ ERROR_CODES=frozenset((
 # The fixed Local adapter is standalone and carries the same finite protocol.
 NGS_LOCAL_PHASES = frozenset((
     "validate_candidate", "check_current", "stop_current", "wait_ports", "switch_selector",
-    "start_candidate", "check_candidate", "check_storage", "record_result", "unknown",
+    "start_candidate", "check_candidate", "check_storage", "preflight_audio_schema", "record_result", "unknown",
 ))
-NGS_LOCAL_ROLLBACK_PHASES = frozenset(("rollback_stop", "rollback_restore", "rollback_start", "rollback_check"))
+NGS_LOCAL_ROLLBACK_PHASES = frozenset(("rollback_stop", "rollback_restore", "rollback_audio_schema", "rollback_start", "rollback_check"))
 NGS_LOCAL_ERRORS = frozenset((
     'ARCHIVE_BLOB_DRIFT',
     'ARCHIVE_PATH_INVALID',
@@ -100,6 +100,9 @@ NGS_LOCAL_ERRORS = frozenset((
     'NATIVE_SSD_UNAVAILABLE',
     'NATIVE_STATE_DRIFT',
     'NATIVE_STORAGE_IDENTITY_DRIFT',
+    'NATIVE_AUDIO_SCHEMA_UNPROVEN',
+    'NATIVE_AUDIO_STORAGE_NOT_STOPPED',
+    'NATIVE_AUDIO_SEPARATION_ATTESTATION_INVALID',
     'NGS_LOCAL_CAUSE_NOT_RECORDED',
     'OLD_NATIVE_PORTS_BUSY',
     'OPS_PROVENANCE_INVALID',
