@@ -7,8 +7,9 @@ existing Local/Space catalog replica and refreshes its small list while
 open. The noncombat and combat buttons only replace the editable draft
 selection; the server does not supply a default or a substitute.
 
-The authorized payload shapes are `ngs.npc-one-stop.selection.v1` and
-`ngs.npc-one-stop.selection.replace.v1`. Their exact top-level fields are
+New calls use `ngs.npc-one-stop.selection.v2` and
+`ngs.npc-one-stop.selection.replace.v2`. Previously admitted v1 requests keep
+their original graph and bindings; do not replan or migrate those live requests. Their exact top-level fields are
 `schemaVersion`, `projectId`, `intent`, `character`, `sourceRefs` and
 `motionSelection`. Select one or more published presets. Both request
 families enforce a 64 KiB canonical payload limit with no fixed preset count.
@@ -21,17 +22,42 @@ in order `n,ne,e,se,s,sw,w,nw`. IDs are path-safe and unique ignoring case.
 PDS only accepts an exact running Planner claim. The selected animation
 or frame task key ends with `_motion_<slot>_<direction>`, where slot is
 the first 16 lowercase hex digits of SHA-256 of the exact UTF-8 preset ID.
-An animation depends on the existing exact directional idle portrait for
-both idle and combat. Postprocess depends on the corresponding exact
-animation, not on another direction or preset.
+## Portrait dependency contract
+
+When registering a motion preset, enter its explicit `posePreset` (portrait
+key) in the registered preset record. `idle` and `combat` are the supported
+keys today. The preset name, label, and motion ID do not decide the portrait.
+A 2D conversion inherits the exact source key. The selected hash pins that
+key together with the eight directions, so changing the key is a content
+change, not a label edit.
+
+The Planner registers one recipe per supported key (`motionPoseRegistry` in
+the exact shared envelope). Full v2 starts with the standard idle recipe and
+adds the union of keys selected in the motion presets, once per key:
+pose planning → raw center → corrected pixel center → each directional raw
+portrait → corresponding directional corrected pixel. The common portrait
+art and representative planning are upstream of each pose plan. Multiple
+motions using the same key reuse the same nine portraits; an idle-only
+selection does not generate combat. Adding a new key requires an explicit
+recipe with planning/image/publication support, never a special case keyed
+on a motion ID.
+
+Each v2 animation waits for the completed corrected pixel task of its
+own key and direction, then reads the corresponding **raw directional
+portrait** for the animation model. The corrected result and raw source
+must agree on pose, direction, and lineage. Frame postprocess binds to
+that exact animation and input lineage. Missing or stale required assets,
+mismatched keys/directions, or an unregistered key do not fall back to
+idle. The older v1 graph retains the prior idle source solely for already
+admitted jobs.
 
 Selected scoped animation reads include `posePreset`, `assetSetSha256`,
 `referenceSha256` and `referencePresetHash` in addition to the existing
 motion, direction and portrait ID. Workers verify the exact reference and
 full preset hash on the existing private motion download. Selected scoped
 frame reads include the selected pose and fingerprint and the exact
-canonical raw sequence. Document, image, static-pixel and deletion task
-identities do not change.
+canonical raw sequence. Existing stage identities are preserved for historical graphs; v2 uses
+registered pose branch stage identities and exact private claims.
 
 For selected replacement, both NPC deletion entry points prove all picks
 against one authenticated live motion catalog snapshot immediately before
@@ -62,7 +88,8 @@ the OPS concept-writer image alone does not install it.
 ## Generate or regenerate only selected NPC animations
 
 The NPC Animation tab uses the separate request type
-`npc.animation.regenerate` and schema `ngs.npc-animation.regenerate.v1`.
+`npc.animation.regenerate` and schema `ngs.npc-animation.regenerate.v2`.
+An already admitted v1 request keeps its original source binding.
 Exact fields are `{schemaVersion,projectId,npcId,motionSelection}`; the
 same preset fingerprint contract applies. The request can target an
 existing active owned `npc.*` or `character.*` generation. Request Service
@@ -73,10 +100,10 @@ one another.
 The Planner creates only eight direction animation tasks and their exact
 postprocess tasks per selected preset; it does not delete the NPC, rewrite
 planning, or request new portraits. The animation roots have no same-run
-portrait task: PDS/Filex verify the existing published `idle/portrait`
-direction for both idle and combat motion slots. Missing or changed source
-refs reject the affected lane before generation or publication, with no
-default or replacement image. Postprocess still requires the matching
+portrait task: PDS/Filex verify the existing published raw portrait for
+the exact selected key and direction. Missing or changed source refs
+reject the affected lane before generation or publication, with no default
+or new portrait generation. Postprocess still requires the matching
 completed animation task.
 
 The animation read additionally pins the active generation, exact portrait
@@ -93,10 +120,12 @@ entire request is not an all-directions transaction. Other NPCs, poses,
 presets and source assets remain untouched. A newly selected empty native
 slot is also eligible.
 
-Deploy Request Service, Planner, PDS, the **NPC-owned** Filex writer,
-Animation/Postprocess workers and Local/Space clients for this request
-family together. Keep ordinary selected creation/replacement, older
-static walk/run plans, and 2D motion-preset conversion unchanged.
+Deploy Request Service, Planner, PDS, the **NPC-owned** Filex writer and
+affected workers before clients can submit v2. Check PDS/Writer pose support
+and exact claims with a synthetic fixture before opening replacement intake:
+delete is the first step. Update the Local/Space client(s) only after backend
+readiness. Old requests and recorded v1 task identities remain unchanged.
+The concept-only Filex writer is not a substitute for the NPC-owned writer.
 
 The Planner settles only this regeneration family as failed if the exact
 persisted graph contains a definitive failed task with all three retries
