@@ -455,7 +455,7 @@ const conceptExisting=(operation,categoryId='concept.test-fixture')=>({...legacy
 test('exact concept envelopes reject mismatched families, unsafe placement, legacy extras and malformed text',async t=>{
  const {directory,path}=folder(t),{submit,rpc}=await listener(t,directory);
  const schema=(await rpc('tools/list',{})).result.tools[0].inputSchema;
- assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','motion-preset.convert-2d','npc.animation.regenerate']);
+ assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','audio.separate','motion-preset.convert-2d','npc.animation.regenerate']);
  assert.deepEqual(schema.oneOf[1].properties.payload.required,['schemaVersion','projectId','operation','categoryId','groupId','title','outline','requirements']);
  const expected={error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400};
  for(const bad of [

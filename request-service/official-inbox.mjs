@@ -7,6 +7,7 @@ import {validateOfficialSubmit,workflowScopeSql} from './request-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema} from './concept-category-envelope.mjs';
 import {motion2DRequestType,motion2DSchema} from './motion-preset-convert-2d-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema} from './audio-delete-envelope.mjs';
+import {audioSeparateType} from './audio-separate-envelope.mjs';
 import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas} from './npc-animation-regenerate-envelope.mjs';
 import {audioRequestType,audioSchema} from './audio-generate-envelope.mjs';
 import {initializeOfficialSchema} from './official-inbox-schema.mjs';
@@ -113,6 +114,8 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest}={}){
       if(!audioSource.get(audioId,projectId,audioRequestType,audioSchema))throw Error('OFFICIAL_AUDIO_DELETE_TARGET_NOT_COMPLETED');
       if(activeAudioDelete.get(projectId,audioDeleteType,audioDeleteSchema,audioId))throw Error('OFFICIAL_AUDIO_DELETE_ALREADY_REGISTERED');
      }
+     if(kind===audioSeparateType&&!audioSource.get(JSON.parse(payload).sourceOfficialRequestId,projectId,audioRequestType,audioSchema))
+      throw Error('OFFICIAL_AUDIO_SEPARATE_SOURCE_NOT_COMPLETED');
      const registeredAt=now();
      insert.run(officialRequestId,sourceId,projectId,idempotencyKey,kind,schemaVersion,payload,payloadSha256,'registered',registeredAt);
      evidence={officialRequestId,status:'registered',registeredAt};

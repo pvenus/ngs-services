@@ -9,6 +9,7 @@ import {npcPlanningAddType,npcPlanningAddTaskKey,validateNPCPlanningAdd} from '.
 
 import {audioRequestType,audioTaskKey,validateAudioGenerate} from './audio-generate-envelope.mjs';
 import {audioDeleteType,audioDeleteTaskKey,validateAudioDelete} from './audio-delete-envelope.mjs';
+import {audioSeparateType,audioSeparateTaskKey,validateAudioSeparate} from './audio-separate-envelope.mjs';
 import {createWorkflowTasksSql,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,migrateWorkflowAudioTask} from './audio-task-schema.mjs';
 
 import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
@@ -28,12 +29,13 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,motion2DRequestType,npcAnimationRegenerateType].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
  const payload=(row.requestType===npcAnimationRegenerateType?validateNpcAnimationRegenerate:
   row.requestType===motion2DRequestType?validateMotion2D:
   row.requestType===audioDeleteType?validateAudioDelete:
+  row.requestType===audioSeparateType?validateAudioSeparate:
   row.requestType===audioRequestType?validateAudioGenerate:
   row.requestType===npcPlanningAddType?validateNPCPlanningAdd:
   row.requestType===npcPlanningUpdateType?validateNPCPlanningUpdate:
@@ -68,6 +70,13 @@ function materializePlan(row,payload,pixelPortraits=true){
   const task={id:'workflow.task.'+sha(canonical([row.officialRequestId,audioDeleteTaskKey])),key:audioDeleteTaskKey,
    type:audioDeleteType,workerType:'file',dependsOn:null,input:{officialRequestId,
     target:{type:'directory',path:'canonical-files/binari/audio/'+officialRequestId}}};
+  return {payload,tasks:[task]};
+ }
+ if(row.requestType===audioSeparateType){
+  const {sourceOfficialRequestId,sourceSha256}=row.payload;
+  ensure(sourceOfficialRequestId!==row.officialRequestId,'NGS_AUDIO_SEPARATE_PAYLOAD_INVALID');
+  const task={id:'workflow.task.'+sha(canonical([row.officialRequestId,audioSeparateTaskKey])),key:audioSeparateTaskKey,
+   type:audioSeparateType,workerType:'audio',dependsOn:null,input:{sourceOfficialRequestId,sourceSha256}};
   return {payload,tasks:[task]};
  }
  if(row.requestType===audioRequestType){
@@ -290,7 +299,7 @@ export async function pollOnce(store,rs){
     try{staged+=Number(store.stage(row));}
     catch(e){
      if(e.message==='WORKFLOW_COMBAT_NOT_SUPPORTED'){unsupported++;continue;}
-     if(!['WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
+     if(!['WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_AUDIO_SEPARATE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
      invalid++;
     }
    }

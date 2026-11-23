@@ -53,7 +53,7 @@ async function load(){
 }
 let progressSelection=null,progressTimer=null,progressFetch=null;
 const workerNames={file:'파일',document:'문서',image:'이미지',animation:'애니메이션',postprocess:'후처리',audio:'음원'};
-const taskNames={audio_generate:'BGM 생성',delete:'기존 NPC 폴더 삭제',preset:'프리셋 생성',planning_representative:'대표 기획',
+const taskNames={audio_generate:'BGM 생성',audio_separate:'음원 분리',delete:'기존 NPC 폴더 삭제',preset:'프리셋 생성',planning_representative:'대표 기획',
  portrait_representative:'대표 포트레이트',planning_idle:'아이들 기획',portrait_idle_reference:'아이들 기준 포트레이트',
  motion_2d_image:'2D 기준 이미지 생성',motion_2d_finalize:'2D 프리셋 최종 등록'};
 const directionNames={n:'북',ne:'북동',e:'동',se:'남동',s:'남',sw:'남서',w:'서',nw:'북서'};

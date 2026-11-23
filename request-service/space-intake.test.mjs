@@ -216,3 +216,36 @@ test('2D motion conversion uses verified Space provenance and the same active de
  assert.equal((await call('request_update_status',{officialRequestId,status:'planned'})).status,'planned');
  assert.equal((await call(toolSubmit,{queueId:'site-motion'})).status,'planned');
 });
+
+test('formal Local and verified Space separation require a completed BGM and never reserve or mutate the original',async t=>{
+ const snapshots=new Map();
+ const {call}=await fixture(t,async id=>snapshots.get(id));
+ const local=(requestType,idempotencyKey,payload)=>call('request_submit',{sourceId:'local',requestType,idempotencyKey,payload});
+ const source=await local('audio.generate','source-bgm',generated);
+ const body={schemaVersion:'ngs.audio-separate.v1',projectId:'binari',sourceOfficialRequestId:source.officialRequestId,sourceSha256:'a'.repeat(64)};
+ const deny={error:'OFFICIAL_AUDIO_SEPARATE_SOURCE_NOT_COMPLETED',status:404};
+ assert.deepEqual(await local('audio.separate','pre-completed',body),deny);
+ snapshots.set('site-audio-stems',spaceQueue('site-audio-stems','audio.separate',body));
+ assert.deepEqual(await call(toolSubmit,{queueId:'site-audio-stems'}),deny);
+ assert.deepEqual(await local('audio.separate','invalid',{...body,sourceSha256:'f'.repeat(63)+'\n'}),
+  {error:'NGS_AUDIO_SEPARATE_PAYLOAD_INVALID',status:400});
+ for(const status of ['planned','completed'])
+  assert.equal((await call('request_update_status',{officialRequestId:source.officialRequestId,status})).status,status);
+ const original=(await call('request_list',{status:'completed'})).requests[0];
+ const first=await local('audio.separate','local-stems',body);
+ assert.equal(first.status,'registered');
+ assert.deepEqual(await local('audio.separate','local-stems',body),first);
+ assert.deepEqual(await local('audio.separate','local-stems',{...body,sourceSha256:'b'.repeat(64)}),
+  {error:'OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT',status:409});
+ const second=await local('audio.separate','another-local-stems',body);
+ const third=await call(toolSubmit,{queueId:'site-audio-stems'});
+ assert.equal(second.status,'registered');assert.equal(third.status,'registered');
+ assert.equal(new Set([source,first,second,third].map(r=>r.officialRequestId)).size,4);
+ assert.deepEqual((await call('request_list',{status:'completed'})).requests,[original]);
+ const entries=(await call('request_list',{status:'registered'})).requests;
+ assert(entries.every(r=>r.targetName==='음원 분리'&&r.targetNpcId===source.officialRequestId));
+ const feed=(await call('request_workflow_list',{})).requests;
+ assert(feed.every(r=>r.payloadSha256===feed[0].payloadSha256));
+ assert.deepEqual(feed.find(r=>r.officialRequestId===third.officialRequestId).payload,body);
+ assert.equal(feed.find(r=>r.officialRequestId===third.officialRequestId).sourceKey,'site-audio-stems');
+});

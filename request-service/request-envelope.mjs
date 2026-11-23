@@ -9,6 +9,7 @@ import {npcPlanningAddType,npcPlanningAddSchema,validateNPCPlanningAdd} from './
 import {audioRequestType,audioSchema,validateAudioGenerate} from './audio-generate-envelope.mjs';
 import {motion2DRequestType,motion2DSchema,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {audioDeleteType,audioDeleteSchema,validateAudioDelete} from './audio-delete-envelope.mjs';
+import {audioSeparateType,audioSeparateSchema,validateAudioSeparate} from './audio-separate-envelope.mjs';
 
 import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
@@ -21,6 +22,7 @@ const workflowFamilies=new Map([
  [npcPlanningAddType,{schemas:[npcPlanningAddSchema],validate:validateNPCPlanningAdd}],
  [audioRequestType,{schemas:[audioSchema],validate:validateAudioGenerate}],
  [audioDeleteType,{schemas:[audioDeleteSchema],validate:validateAudioDelete}],
+ [audioSeparateType,{schemas:[audioSeparateSchema],validate:validateAudioSeparate}],
  [motion2DRequestType,{schemas:[motion2DSchema],validate:validateMotion2D}],
 ]);
 // All SQL fragments derive only from these fixed service constants, never
