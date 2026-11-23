@@ -232,6 +232,26 @@ without touching other Filex roles. The native launchctl target executor
 cannot be used for this container.
 
 
+The writer's authenticated capability report is versioned by exact committed
+source, not by relaxed key matching. Legacy builds must answer the exact legacy
+map. A writer declaring `workflowAudioSeparateV1` must answer the exact
+legacy-plus-separation map; its private candidate and applied evidence pins the
+map digest. Live health must match that same evidence, and apply rollback
+checks the precise old capability report. Historical evidence without new
+fields continues to mean the legacy contract. This does not change the
+GitHub source artifact schema, check the live service in CI, or add launch flags.
+
+For a reviewed local upgrade, provision the exact `filex_writer_apply.py`
+as both the supervisor's private helper and the executable
+`targets/filex-writer/run-once`. Install reviewed
+`prepare_filex_writer.py`, `prepare_filex_supervised.py`,
+`filex_writer_active.py`, and the supervisor in the existing checksum-pinned
+bundle. Re-pin the preparer's existing runner and Compose digests only after
+confirming the owner-registered runtime bytes, unchanged concept service
+configuration, and the authenticated live prior. Do not rewrite historical
+candidate/applied receipts or widen the Filex role surface.
+
+
 ### Automatic candidate registration for Mac services
 
 The owner-local coordinator supplies exact authenticated service workflow

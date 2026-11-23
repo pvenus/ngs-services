@@ -83,8 +83,9 @@ class Tests(unittest.TestCase):
         self.backend = Mock(spec=m.IsolatedDocker)
         self.backend.build_and_smoke.side_effect = self.build
 
-    def build(self, context, base):
+    def build(self, context, base, *, capability):
         self.assertEqual(base, PIN)
+        self.assertEqual(capability,m.LEGACY_CAP_DIGEST)
         self.assertEqual({p.name for p in context.iterdir()}, m.CLOSURE)
         self.assertTrue(all(p.stat().st_mode & 0o777 == 0o644 for p in context.iterdir()))
         self.assertEqual((context / "server.py").read_bytes(), b"value = 'committed fixture'\n")
@@ -105,6 +106,25 @@ class Tests(unittest.TestCase):
         self.assertEqual({x.name for x in self.control.iterdir()}, {"filex-writer-prepared"})
         self.assertEqual(list((self.control / "filex-writer-prepared").iterdir()),
                          [self.control / "filex-writer-prepared" / (self.head + ".json")])
+
+    def test_new_source_requires_exact_new_capability_smoke_and_evidence(self):
+        server = self.repo / "filex-writer/server.py"
+        server.write_text("caps={'workflowAudioSeparateV1':True}\n")
+        m.git(self.repo,"add",".")
+        m.git(self.repo,"-c","user.name=fixture","-c","user.email=fixture@example.test",
+              "-c","commit.gpgsign=false","commit","-qm","separation capability")
+        self.head = m.git(self.repo,"rev-parse","HEAD").decode().strip()
+        self.gh = GitHub(self.repo,self.head)
+        self.backend.build_and_smoke.side_effect = None
+        self.backend.build_and_smoke.return_value = IMAGE
+        proof = self.prepare()
+        self.assertEqual(proof["capabilitiesSha256"],m.SEPARATION_CAP_DIGEST)
+        self.assertEqual(self.backend.build_and_smoke.call_args.kwargs,{"capability":m.SEPARATION_CAP_DIGEST})
+        self.assertEqual(self.prepare(),proof)
+        self.assertNotEqual(m.capability_smoke(m.SEPARATION_CAP_DIGEST),m.capability_smoke(m.LEGACY_CAP_DIGEST))
+        self.assertEqual(m.declared_capabilities(b"# workflowAudioSeparateV1"),m.LEGACY_CAP_DIGEST)
+        with self.assertRaisesRegex(m.Refused,"SOURCE_CAPABILITIES_INVALID"):
+            m.declared_capabilities(b"caps={'workflowAudioSeparateV1':1}")
 
     def test_wrong_ci_will_not_build(self):
         self.gh.run["head_repository"]["id"] = 13
@@ -160,7 +180,7 @@ class Tests(unittest.TestCase):
             if args[:3] == ("image", "inspect", IMAGE):
                 return json.dumps([{"Id": IMAGE, "Os": "linux", "Architecture": "arm64"}]).encode()
             if args[0] == "run":
-                self.assertEqual(kw["data"], m.SMOKE)
+                self.assertEqual(kw["data"], m.capability_smoke(m.LEGACY_CAP_DIGEST))
             return b""
         backend.call = run
         self.assertEqual(backend.build_and_smoke(tmp, PIN), IMAGE)

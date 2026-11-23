@@ -3,7 +3,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock
 
-from prepare_filex_writer import closure, git, REPO, SCHEMA
+from filex_writer_apply import SEPARATION_CAP_DIGEST
+from prepare_filex_writer import closure, declared_capabilities, git, REPO, SCHEMA
 from prepare_ngs_release import atomic_write, digest, json_bytes
 
 import filex_writer_active as m
@@ -49,6 +50,9 @@ class FilexPrerequisite(unittest.TestCase):
             'state':'deployed','finishedAt':'2026-11-22T16:00:05Z',
             'observed':{'sha':self.previous,'deployedAt':self.deployed_at}}
         self.runtime = Mock(return_value=True)
+        self.profile = declared_capabilities(self.files['server.py'])
+        if self.profile == SEPARATION_CAP_DIGEST:
+            self.applied['capabilitiesSha256'] = self.prepared['capabilitiesSha256'] = self.profile
 
     def write(self,path,payload):
         atomic_write(path,json_bytes(payload))
@@ -72,6 +76,15 @@ class FilexPrerequisite(unittest.TestCase):
         self.assertFalse(self.run_guard())
         self.runtime.side_effect = OSError('private Docker detail')
         self.assertFalse(self.run_guard())
+
+    def test_mismatched_or_missing_exact_source_capability_proof_fails(self):
+        asserted = SEPARATION_CAP_DIGEST if self.profile != SEPARATION_CAP_DIGEST else None
+        for item in (self.applied,self.prepared):
+            if asserted is None:item.pop('capabilitiesSha256')
+            else:item['capabilitiesSha256'] = asserted
+        self.persist()
+        self.assertFalse(self.run_guard())
+        self.runtime.assert_not_called()
 
     def test_staged_image_does_not_prove_success_or_active_health(self):
         self.write(self.staged_path,self.prepared)

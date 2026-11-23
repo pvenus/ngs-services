@@ -25,6 +25,7 @@ CANDIDATE = "ops.filex-writer-apply-candidate.v1"
 APPLIED = "ops.filex-writer-applied.v1"
 POLICY = "ops.filex-writer-preparation.v1"
 BASE = re.compile(r"python:3\.12-slim@sha256:[a-f0-9]{64}")
+CAP_FIELDS = {"capabilitiesSha256", "priorCapabilitiesSha256"}
 CANDIDATE_KEYS = "schemaVersion target sha artifactSha256 imageId priorImageId composeSha256 startupSha256 runtimeFingerprint"
 PROJECT_PATH = Path("/Volumes/무제/NGS/Filex/files/ngs/copies/canonical-files/binari")
 WRITER_ENV = {
@@ -38,6 +39,29 @@ CAPS = {
     "releasedFrameCleanupLeaseV1": False, "npcOwnedSlots": False, "generationFence": False,
     "atomicCAS": False, "lockedBatch": True, "namespace": "canonical-files/binari/concept/",
 }
+SEPARATION_CAPS = {**CAPS, "workflowAudioSeparateV1": True}
+LEGACY_CAP_DIGEST = digest(json_bytes(CAPS))
+SEPARATION_CAP_DIGEST = digest(json_bytes(SEPARATION_CAPS))
+
+
+def capabilities_digest(value):
+    """Recognize only the two full known maps, with exact JSON boolean types."""
+    if type(value) is dict:
+        payload = json_bytes(value)
+        if payload == json_bytes(CAPS):return LEGACY_CAP_DIGEST
+        if payload == json_bytes(SEPARATION_CAPS):return SEPARATION_CAP_DIGEST
+    return None
+
+
+def capability_markers(record, fields=CAP_FIELDS):
+    return type(record) is dict and all(key not in record or record[key] == SEPARATION_CAP_DIGEST for key in fields)
+
+
+def observed_shape(record, mandatory, allowed=CAP_FIELDS):
+    return (type(record) is dict and set(mandatory.split()) <= set(record) <= set(mandatory.split()) | allowed
+            and capability_markers(record, allowed))
+
+
 # Statically scoped live probe. The token never leaves the existing container.
 PROBE = b"""
 import json, os
@@ -245,7 +269,8 @@ class DockerHost:
         need(matches(CONTAINER_ID, container), "TARGET_HEALTH_HTTP")
         output = self.call("exec", "-i", container, "/usr/local/bin/python", "-B", "-",
                            data=PROBE, timeout=8, code="TARGET_HEALTH_HTTP")
-        need(json_load(output) == CAPS, "TARGET_HEALTH_HTTP")
+        capability = capabilities_digest(json_load(output))
+        need(capability is not None, "TARGET_HEALTH_HTTP")
         connection = http.client.HTTPConnection("127.0.0.1", 8095, timeout=2)
         try:
             connection.request("GET", "/v1/capabilities")
@@ -254,6 +279,7 @@ class DockerHost:
                  "TARGET_HEALTH_HTTP")
         finally:
             connection.close()
+        return capability
 
     def compose(self, active):
         cmd = ["compose", "--project-name", PROJECT, "--project-directory", str(self.files),
@@ -275,7 +301,7 @@ class DockerHost:
                   code="TARGET_START_FAILED")
 
 
-def check_current(host, home, control, active, expected, fingerprint=None, old_id=None):
+def check_current(host, home, control, active, expected, fingerprint=None, old_id=None, *, capability=None):
     row = host.current()
     observed = runtime_fingerprint(row)
     need(row.get("Image") == expected and row.get("Id") != old_id
@@ -285,12 +311,14 @@ def check_current(host, home, control, active, expected, fingerprint=None, old_i
     expected_files = config + ("," + str(selector_file(control)) if active else "")
     need(labels.get("com.docker.compose.project.config_files") == expected_files,
          "TARGET_SELECTOR_CHANGED")
-    host.healthy(row)
+    live_capability = host.healthy(row)
+    need(live_capability in (LEGACY_CAP_DIGEST, SEPARATION_CAP_DIGEST)
+         and (capability is None or live_capability==capability), "TARGET_HEALTH_HTTP")
     # Avoid accepting health from a vanished/replaced container.
     again = host.current()
     need(again.get("Id") == row["Id"] and again.get("Image") == expected
          and again.get("State", {}).get("Running") is True, "TARGET_HEALTH_HTTP")
-    return row, observed
+    return row, observed, live_capability
 
 
 def filex_prior(home, control, *, host=None):
@@ -302,18 +330,21 @@ def filex_prior(home, control, *, host=None):
     active, _ = selector(control)
     pinned = host.selected_image(active is not None)
     need(active is None or pinned == active, "TARGET_SELECTOR_CHANGED")
-    _, fingerprint = check_current(host, home, control, active is not None, pinned)
+    _, fingerprint, capability = check_current(host, home, control, active is not None, pinned)
     return {"priorImageId": pinned, "composeSha256": base, "startupSha256": startup,
-            "runtimeFingerprint": fingerprint}
+            "runtimeFingerprint": fingerprint,
+            **({"priorCapabilitiesSha256": capability} if capability == SEPARATION_CAP_DIGEST else {})}
 
 
 def verify_active_candidate(home, control, applied, *, host=None):
     """PDS dependency proof: validate registered selection and exact live runtime."""
-    need(shape(applied, CANDIDATE_KEYS + " deployedAt")
+    need(observed_shape(applied, CANDIDATE_KEYS + " deployedAt")
          and applied["schemaVersion"] == APPLIED and applied["target"] == TARGET,
          "TARGET_CANDIDATE_MISMATCH")
     expected = {"priorImageId": applied["imageId"], "composeSha256": applied["composeSha256"],
                 "startupSha256": applied["startupSha256"], "runtimeFingerprint": applied["runtimeFingerprint"]}
+    if "capabilitiesSha256" in applied:
+        expected["priorCapabilitiesSha256"] = applied["capabilitiesSha256"]
     current = filex_prior(home, control, host=host)
     active, _ = selector(Path(control))
     need(expected == current and active == applied["imageId"], "TARGET_CANDIDATE_MISMATCH")
@@ -328,7 +359,7 @@ def verified_candidate(directory, control, sha, artifact):
     private_file(bound, 0o600)
     need(bound.read_bytes() == raw, "TARGET_CANDIDATE_MISMATCH")
     c = json_load(raw)
-    need(shape(c, CANDIDATE_KEYS) and c["schemaVersion"] == CANDIDATE and c["target"] == TARGET
+    need(observed_shape(c, CANDIDATE_KEYS) and c["schemaVersion"] == CANDIDATE and c["target"] == TARGET
          and c["sha"] == sha and c["artifactSha256"] == artifact and c["imageId"] != c["priorImageId"]
          and all(matches(IMAGE, c[k]) for k in ("imageId", "priorImageId"))
          and all(matches(DIGEST, c[k]) for k in ("composeSha256", "startupSha256", "runtimeFingerprint")),
@@ -347,7 +378,9 @@ def verified_candidate(directory, control, sha, artifact):
     need(proof.get("schemaVersion") == "ops.filex-writer-candidate.v1"
          and proof.get("target") == "filex-concept-writer" and proof.get("state") == "image-verified"
          and proof.get("imageId") == c["imageId"] and proof.get("source", {}).get("headSha") == sha
-         and proof.get("provenance", {}).get("artifactSha256") == artifact,
+         and proof.get("provenance", {}).get("artifactSha256") == artifact
+         and capability_markers(proof, {"capabilitiesSha256"})
+         and proof.get("capabilitiesSha256") == c.get("capabilitiesSha256"),
          "TARGET_CANDIDATE_MISMATCH")
     return c
 
@@ -370,11 +403,11 @@ def diagnostic(error):
     return code if type(code) is str and code in CODES else "TARGET_APPLY_REFUSED"
 
 
-def bounded_health(host, home, control, active, expected, fingerprint, old_id=None):
+def bounded_health(host, home, control, active, expected, fingerprint, old_id=None, *, capability):
     end = time.monotonic() + 20
     while True:
         try:
-            check_current(host, home, control, active, expected, fingerprint, old_id)
+            check_current(host, home, control, active, expected, fingerprint, old_id, capability=capability)
             return
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, http.client.HTTPException) as error:
             if time.monotonic() >= end:
@@ -416,11 +449,15 @@ def apply_target(sha, artifact, home, control, *, host=None):
         candidate = verified_candidate(directory, control, sha, artifact)
         host = host if host is not None else DockerHost(home, control)
         prior, image = candidate["priorImageId"], candidate["imageId"]
-        expected_pins = {k: candidate[k] for k in ("priorImageId", "composeSha256", "startupSha256", "runtimeFingerprint")}
+        expected_pins = {k: candidate[k] for k in ("priorImageId", "composeSha256", "startupSha256", "runtimeFingerprint",
+                                                   "priorCapabilitiesSha256") if k in candidate}
+        prior_cap = candidate.get("priorCapabilitiesSha256", LEGACY_CAP_DIGEST)
+        next_cap = candidate.get("capabilitiesSha256", LEGACY_CAP_DIGEST)
         need(filex_prior(home, control, host=host) == expected_pins and host.image(image) == image,
              "TARGET_CANDIDATE_MISMATCH")
         active, old = selector(control)
-        row, _ = check_current(host, home, control, active is not None, prior, candidate["runtimeFingerprint"])
+        row, _, _ = check_current(host, home, control, active is not None, prior,
+                                  candidate["runtimeFingerprint"], capability=prior_cap)
         before_id = row["Id"]
         fingerprint = candidate["runtimeFingerprint"]
         armed = directory / "in-progress.json"
@@ -441,7 +478,7 @@ def apply_target(sha, artifact, home, control, *, host=None):
             phase = "start"
             host.recreate(True)
             phase = "health"
-            bounded_health(host, home, control, True, image, fingerprint, before_id)
+            bounded_health(host, home, control, True, image, fingerprint, before_id, capability=next_cap)
             need(runtime_pins(home, control) == (candidate["composeSha256"], candidate["startupSha256"])
                  and selector(control) == (image, new), "TARGET_SELECTOR_CHANGED")
         except Exception as error:
@@ -451,10 +488,10 @@ def apply_target(sha, artifact, home, control, *, host=None):
                 need(runtime_pins(home, control) == (candidate["composeSha256"], candidate["startupSha256"])
                      and host.selected_image(active is not None) == prior, "TARGET_SELECTOR_CHANGED")
                 try:
-                    check_current(host, home, control, active is not None, prior, fingerprint)
+                    check_current(host, home, control, active is not None, prior, fingerprint, capability=prior_cap)
                 except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, http.client.HTTPException):
                     host.recreate(active is not None)
-                bounded_health(host, home, control, active is not None, prior, fingerprint)
+                bounded_health(host, home, control, active is not None, prior, fingerprint, capability=prior_cap)
                 armed.unlink()
                 rollback = "restored"
             except Exception:

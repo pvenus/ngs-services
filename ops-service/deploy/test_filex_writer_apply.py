@@ -26,6 +26,7 @@ class Host:
         self.candidate_healthy = True
         self.candidate_risky = False
         self.base_image = OLD
+        self.profiles = {OLD:m.LEGACY_CAP_DIGEST, NEW:m.LEGACY_CAP_DIGEST}
 
     def model(self, image, iid, active):
         base = str(m.filex_code(self.home) / "compose.yaml")
@@ -56,6 +57,7 @@ class Host:
     def healthy(self, row):
         if row["Image"] == NEW and not self.candidate_healthy:
             raise m.ApplyFailure("health", "TARGET_HEALTH_HTTP")
+        return self.profiles[row["Image"]]
 
     def recreate(self, active):
         image = self.selected_image(active)
@@ -127,6 +129,39 @@ class TestApply(unittest.TestCase):
         self.assertEqual(self.runtime.read_bytes(), register)
         self.assertFalse((self.directory / "in-progress.json").exists())
         self.assertEqual(m.selector(self.control), (NEW, m.override_bytes(NEW)))
+
+    def test_exact_new_capability_image_and_active_evidence(self):
+        self.prepared["capabilitiesSha256"] = m.SEPARATION_CAP_DIGEST
+        self.candidate["capabilitiesSha256"] = m.SEPARATION_CAP_DIGEST
+        self.host.profiles[NEW] = m.SEPARATION_CAP_DIGEST
+        self.write_candidate()
+        self.apply()
+        proof = m.json_load((self.directory/"applied"/(SHA+".json")).read_bytes())
+        self.assertEqual(proof["capabilitiesSha256"],m.SEPARATION_CAP_DIGEST)
+        self.assertTrue(m.verify_active_candidate(self.home,self.control,proof,host=self.host))
+        self.host.profiles[NEW] = m.LEGACY_CAP_DIGEST
+        with self.assertRaisesRegex(ValueError,"TARGET_CANDIDATE_MISMATCH"):
+            m.verify_active_candidate(self.home,self.control,proof,host=self.host)
+
+    def test_new_image_with_old_capabilities_rolls_back_to_exact_prior(self):
+        self.prepared["capabilitiesSha256"] = m.SEPARATION_CAP_DIGEST
+        self.candidate["capabilitiesSha256"] = m.SEPARATION_CAP_DIGEST
+        self.host.profiles[OLD] = m.SEPARATION_CAP_DIGEST
+        self.candidate["priorCapabilitiesSha256"] = m.SEPARATION_CAP_DIGEST
+        self.write_candidate()
+        with patch.object(m.time,"monotonic",side_effect=[0,21,22,43]):
+            with self.assertRaises(m.ApplyFailure) as caught:self.apply()
+        self.assertEqual((caught.exception.phase,caught.exception.rollback),("health","restored"))
+        self.assertEqual(self.host.calls,[(True,NEW),(False,OLD)])
+        self.assertEqual(m.filex_prior(self.home,self.control,host=self.host)["priorCapabilitiesSha256"],
+                         m.SEPARATION_CAP_DIGEST)
+
+    def test_maps_are_exact_not_allowlisted_subsets(self):
+        self.assertEqual(m.capabilities_digest(m.CAPS),m.LEGACY_CAP_DIGEST)
+        self.assertEqual(m.capabilities_digest(m.SEPARATION_CAPS),m.SEPARATION_CAP_DIGEST)
+        for drift in ({"workflowAudioSeparateV1":False},{"workflowAudioSeparateV1":1},
+                      {"workflowAudioSeparateV1":True,"unknown":True},{"workflowAudioDeleteV1":False}):
+            self.assertIsNone(m.capabilities_digest({**m.CAPS,**drift}))
 
     def test_after_effect_command_failure_restores_legacy_selector_and_writer(self):
         self.host.fail_after = True

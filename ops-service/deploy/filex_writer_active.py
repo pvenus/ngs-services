@@ -4,7 +4,8 @@ from pathlib import Path
 import re
 import subprocess
 
-from prepare_filex_writer import BASE, CLOSURE, IMAGE_ID, REPO, SCHEMA, closure
+from filex_writer_apply import LEGACY_CAP_DIGEST, observed_shape
+from prepare_filex_writer import BASE, CLOSURE, IMAGE_ID, REPO, SCHEMA, closure, declared_capabilities
 from prepare_ngs_local_once import read_private
 from prepare_ngs_release import DIGEST, REF, SHA, digest, json_load, matches, need, private_directory, shape
 
@@ -32,7 +33,7 @@ def receipt(value, expected):
 
 
 def applied(value, expected, deployed_at):
-    need(shape(value, 'schemaVersion target sha artifactSha256 imageId priorImageId composeSha256 startupSha256 runtimeFingerprint deployedAt')
+    need(observed_shape(value, 'schemaVersion target sha artifactSha256 imageId priorImageId composeSha256 startupSha256 runtimeFingerprint deployedAt')
          and value['schemaVersion'] == APPLIED and value['target'] == TARGET and value['sha'] == expected
          and value['deployedAt'] == deployed_at and matches(IMAGE_ID, value['imageId'])
          and matches(IMAGE_ID,value['priorImageId'])
@@ -42,11 +43,11 @@ def applied(value, expected, deployed_at):
 
 
 def prepared(value, proof):
-    need(shape(value, 'schemaVersion target state source provenance base imageId smoke preparedAt')
+    need(observed_shape(value, 'schemaVersion target state source provenance base imageId smoke preparedAt', {'capabilitiesSha256'})
          and value['schemaVersion'] == EVIDENCE and value['target'] in ('filex-concept-writer', TARGET)
          and value['state'] == 'image-verified'
          and value['smoke'] == 'isolated-authenticated-capabilities' and matches(BASE, value['base'])
-         and value['imageId'] == proof['imageId'] and stamp(value['preparedAt']) <= stamp(proof['deployedAt']), FAIL)
+         and value['imageId'] == proof['imageId'] and value.get('capabilitiesSha256') == proof.get('capabilitiesSha256') and stamp(value['preparedAt']) <= stamp(proof['deployedAt']), FAIL)
     p = value['provenance']
     need(shape(p, 'artifactId artifactSha256') and matches(NUMBER,p['artifactId'])
          and p['artifactSha256'] == proof['artifactSha256'], FAIL)
@@ -82,7 +83,8 @@ def _verify(home, control, repo, head, runtime, host):
     # If only documentation or other targets changed, the already running
     # writer closure can still satisfy it without a pointless restart.
     _, required = closure(repo,head)
-    need(verified_files == {name:digest(body) for name,body in required.items()}, FAIL)
+    need(verified_files == {name:digest(body) for name,body in required.items()}
+         and declared_capabilities(required['server.py']) == proof.get('capabilitiesSha256',LEGACY_CAP_DIGEST), FAIL)
     need(runtime(home,control,proof,host=host) is True, FAIL)
     need(all(read_private(path,64*1024,mode=0o600)==before for path,before in snapshots.items()), FAIL)
     return True

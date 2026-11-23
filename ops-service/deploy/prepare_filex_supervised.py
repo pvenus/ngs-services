@@ -4,6 +4,7 @@ import os
 import re
 
 from prepare_filex_writer import BASE, CLOSURE, IMAGE_ID, REPO, SCHEMA, TARGET as BUILD_TARGET, prepare
+from filex_writer_apply import observed_shape
 from prepare_ngs_local_once import lock, read_optional, read_private, runner_digest
 from prepare_ngs_release import (
     DIGEST, NUMBER, REF, SHA, atomic_write, json_bytes, json_load, matches,
@@ -38,7 +39,7 @@ def config(control):
 
 
 def expected_prior(prior, policy):
-    need(shape(prior,PRIOR_FIELDS) and matches(IMAGE_ID,prior['priorImageId'])
+    need(observed_shape(prior,PRIOR_FIELDS,{'priorCapabilitiesSha256'}) and matches(IMAGE_ID,prior['priorImageId'])
          and all(matches(DIGEST,prior[k]) for k in ('composeSha256','startupSha256','runtimeFingerprint'))
          and prior['composeSha256']==policy['composeSha256'] and prior['startupSha256']==policy['startupSha256'],
          'FILEX_PRIOR_RUNTIME_UNVERIFIED')
@@ -46,7 +47,7 @@ def expected_prior(prior, policy):
 
 
 def image_evidence(value, head, policy):
-    need(shape(value,'schemaVersion target state source provenance base imageId smoke preparedAt')
+    need(observed_shape(value,'schemaVersion target state source provenance base imageId smoke preparedAt',{'capabilitiesSha256'})
          and value['schemaVersion']==STATE and value['target']==BUILD_TARGET and value['state']=='image-verified'
          and value['base']==policy['base'] and matches(IMAGE_ID,value['imageId'])
          and value['smoke']=='isolated-authenticated-capabilities'
@@ -81,7 +82,8 @@ def prepare_filex_candidate(github, repo, home, control, head, *, assert_current
     image, archive = image_evidence(proof,head,policy)
     assert_current(head)
     need(docker.verify_image(image) is True, 'FILEX_IMAGE_ID_INVALID')
-    candidate = dict(schemaVersion=CANDIDATE,target=TARGET,sha=head,artifactSha256=archive,imageId=image,**prior)
+    next_capability = ({"capabilitiesSha256": proof["capabilitiesSha256"]} if "capabilitiesSha256" in proof else {})
+    candidate = dict(schemaVersion=CANDIDATE,target=TARGET,sha=head,artifactSha256=archive,imageId=image,**prior,**next_capability)
     bound = control/'filex-writer-prepared'/(head+'.apply.json')
     ready = dict(schemaVersion=READY,target=TARGET,sha=head,artifactSha256=archive,runnerSha256=runner,manualOnly=True)
     with lock(control/'cycle.lock',create=True):

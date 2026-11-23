@@ -1,4 +1,5 @@
 """Separate candidate-only approval evidence; never touches Filex Compose or runtime."""
+import ast
 from datetime import UTC, datetime
 import fcntl
 import io
@@ -17,6 +18,8 @@ from prepare_ngs_release import (
     REF, SHA, Refused, atomic_write, digest, json_bytes, json_load, matches, need,
     number, private_directory, private_file,
 )
+
+from filex_writer_apply import CAPS, LEGACY_CAP_DIGEST, SEPARATION_CAPS, SEPARATION_CAP_DIGEST, capability_markers
 
 REPO = "pvenus/ngs-services"
 WORKFLOW = ".github/workflows/prepare-filex-writer.yml"
@@ -160,6 +163,17 @@ def acquire(github, repo):
     return proof, {"artifactId": aid, "artifactSha256": digest(raw)}
 
 
+def declared_capabilities(server):
+    """Read the exact new capability declaration in the verified immutable source."""
+    matches = [(k,v) for node in ast.walk(ast.parse(server)) if isinstance(node, ast.Dict)
+               for k,v in zip(node.keys,node.values)
+               if isinstance(k,ast.Constant) and k.value=="workflowAudioSeparateV1"]
+    if not matches:return LEGACY_CAP_DIGEST
+    need(len(matches)==1 and isinstance(matches[0][1],ast.Constant) and matches[0][1].value is True,
+         "FILEX_SOURCE_CAPABILITIES_INVALID")
+    return SEPARATION_CAP_DIGEST
+
+
 # No external dependency/source mounts; scratch volumes exist only in this invocation.
 SMOKE = b"""
 import json, os, secrets, subprocess, time
@@ -186,14 +200,7 @@ try:
             raise SystemExit(2)
         try:
             status, caps = get({'Authorization': 'Bearer ' + token})
-            assert status == 200 and caps == {
-                'workflowAudioResultV1': True, 'workflowAudioDeleteV1': True,
-                'conceptRecoverableLifecycleV1': True, 'conceptCategoryMarkdownV1': True,
-                'conceptCategoryOverwriteV1': True, 'conceptSingleTargetDeleteV1': True,
-                'releasedFrameCleanupLeaseV1': False, 'npcOwnedSlots': False,
-                'generationFence': False, 'atomicCAS': False, 'lockedBatch': True,
-                'namespace': 'canonical-files/binari/concept/',
-            }
+            assert status == 200 and json.dumps(caps,sort_keys=True) == json.dumps(EXPECTED_CAPS,sort_keys=True)
             assert get({})[0] == 401
             break
         except URLError:
@@ -205,6 +212,12 @@ finally:
         child.kill()
     child.wait(timeout=2)
 """
+
+
+def capability_smoke(profile):
+    need(profile in (LEGACY_CAP_DIGEST, SEPARATION_CAP_DIGEST), "FILEX_SOURCE_CAPABILITIES_INVALID")
+    expected = SEPARATION_CAPS if profile == SEPARATION_CAP_DIGEST else CAPS
+    return ("EXPECTED_CAPS = " + repr(expected) + "\n").encode() + SMOKE
 
 
 class IsolatedDocker:
@@ -239,7 +252,7 @@ class IsolatedDocker:
              "FILEX_IMAGE_ID_INVALID")
         return True
 
-    def build_and_smoke(self, context, base):
+    def build_and_smoke(self, context, base, *, capability=LEGACY_CAP_DIGEST):
         need(matches(BASE, base), "FILEX_BASE_NOT_PINNED")
         inspected = json_load(self.call("image", "inspect", base))
         pinned = "python@" + base.split("@")[1]
@@ -260,7 +273,7 @@ class IsolatedDocker:
                       *sum((("--tmpfs", f"/{path}:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=0700,size=16m")
                             for path in ("canonical", "audio", "tmp")), ()),
                       "-i", "--entrypoint=/usr/local/bin/python", image, "-B", "-",
-                      data=SMOKE, timeout=25)
+                      data=capability_smoke(capability), timeout=25)
         except (OSError, ValueError, subprocess.SubprocessError):
             if cid.is_file():
                 fixture_id = cid.read_text().strip()
@@ -299,16 +312,20 @@ def stage(github, repo, control, base, docker):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         proof, evidence = acquire(github, repo)
         head = proof["headSha"]
+        tree, sources = closure(repo, head)
+        need(tree == proof["rootTree"] and {k: digest(v) for k, v in sources.items()} == proof["files"],
+             "FILEX_GIT_PROOF_MISMATCH")
+        profile = declared_capabilities(sources["server.py"])
+        mark = {"capabilitiesSha256": profile} if profile == SEPARATION_CAP_DIGEST else {}
         record_file = root / (head + ".json")
         if os.path.lexists(record_file):
             private_file(record_file, 0o600)
             saved = json_load(record_file.read_bytes())
             need(saved.get("source") == proof and saved.get("provenance") == evidence and saved.get("base") == base
-                 and matches(IMAGE_ID, saved.get("imageId")), "FILEX_EXISTING_CANDIDATE_MISMATCH")
+                 and matches(IMAGE_ID, saved.get("imageId"))
+                 and capability_markers(saved, {"capabilitiesSha256"})
+                 and saved.get("capabilitiesSha256") == mark.get("capabilitiesSha256"), "FILEX_EXISTING_CANDIDATE_MISMATCH")
             return saved
-        tree, sources = closure(repo, head)
-        need(tree == proof["rootTree"] and {k: digest(v) for k, v in sources.items()} == proof["files"],
-             "FILEX_GIT_PROOF_MISMATCH")
         with tempfile.TemporaryDirectory(prefix=".filex-source-", dir=root) as temp:
             context = Path(temp) / "context"
             context.mkdir(mode=0o700)
@@ -317,13 +334,13 @@ def stage(github, repo, control, base, docker):
                 p = context / name
                 p.write_bytes(data)
                 p.chmod(0o644)
-            image = backend.build_and_smoke(context, base)
+            image = backend.build_and_smoke(context, base, capability=profile)
         need(matches(IMAGE_ID, image), "FILEX_IMAGE_ID_INVALID")
         need(current_main(github) == head, "FILEX_MAIN_ADVANCED")
         record = {"schemaVersion": "ops.filex-writer-candidate.v1", "target": TARGET,
                   "state": "image-verified", "source": proof, "provenance": evidence,
                   "base": base, "imageId": image, "smoke": "isolated-authenticated-capabilities",
-                  "preparedAt": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")}
+                  "preparedAt": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"), **mark}
         atomic_write(record_file, json_bytes(record))
         return record
     finally:
