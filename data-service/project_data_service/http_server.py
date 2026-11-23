@@ -67,6 +67,9 @@ class Handler(DomainHandler):
         from .workflow_motion_2d import ROUTES as motion_2d_routes,serve as motion_2d
         if media_path in motion_2d_routes:return motion_2d(self)
 
+        from .workflow_audio_separate import PATH as separate_path,serve as audio_separate
+        if media_path in (separate_path,separate_path+'/read',separate_path+'/asset'):return audio_separate(self)
+
         from .workflow_audio import PATH as audio_workflow_path,serve as audio_workflow
         if media_path in (audio_workflow_path,audio_workflow_path+'/read'):return audio_workflow(self)
 
@@ -630,6 +633,8 @@ def serve(storage_root: Path, host: str, port: int):
         from .workflow_audio import WorkflowAudio
         if not hasattr(server,'workflow_delete'):raise ValueError('WORKFLOW_BGM_PLANNER_PIN_REQUIRED')
         server.workflow_audio=WorkflowAudio(app.concept,planner)
+        from .workflow_audio_separate import WorkflowAudioSeparate
+        server.workflow_audio_separate=WorkflowAudioSeparate(app.concept,planner)
     planning_add=os.environ.get('PDS_WORKFLOW_NPC_PLANNING_ADD','0')
     if planning_add not in ('0','1'):raise ValueError('NPC_PLANNING_ADD_OPT_IN')
     if planning_add=='1':

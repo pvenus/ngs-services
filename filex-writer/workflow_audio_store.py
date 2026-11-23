@@ -10,6 +10,8 @@ PREFIX='canonical-files/binari/audio/'
 MAX_WAV=24*1024*1024
 MAX_SOURCE=256*1024
 DIRECT='direct'
+SEPARATE_PATH='/v1/workflow/audio-separate'
+SEPARATION_KEYS={'sourceOfficialRequestId','sourceSha256'}
 MAX_BODY=((MAX_WAV+2)//3)*4+16384
 CID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 SHA=re.compile(r'[a-f0-9]{64}')
@@ -43,16 +45,20 @@ def bytes_of(path,maximum):
             raise Conflict('audio file changed')
         return raw
 
-def wav_artifact(artifact,duration):
+def wav_artifact(artifact,duration,*,tolerance=0.101):
     require(type(artifact) is dict and set(artifact) in ({'mimeType','sha256','bytes','base64'},{'mimeType','sha256','bytes','base64','bpm'})
             and (artifact.get('bpm') is None or type(artifact['bpm']) is int and 30<=artifact['bpm']<=300)
             and artifact['mimeType']=='audio/wav' and match(artifact['sha256'],SHA)
             and type(artifact['bytes']) is int and 44<=artifact['bytes']<=MAX_WAV
             and type(artifact['base64']) is str and len(artifact['base64'])==((artifact['bytes']+2)//3)*4)
+    try:raw=base64.b64decode(artifact['base64'],validate=True)
+    except (ValueError,TypeError) as exc:raise Rejected('audio workflow base64 invalid') from exc
+    require(len(raw)==artifact['bytes'] and sha(raw)==artifact['sha256'])
+    return raw,wav_info(raw,duration,tolerance=tolerance)
+
+def wav_info(raw,duration,*,tolerance=0.101):
     try:
-        raw=base64.b64decode(artifact['base64'],validate=True)
-        require(len(raw)==artifact['bytes'] and sha(raw)==artifact['sha256']
-                and raw[:4]==b'RIFF' and raw[8:12]==b'WAVE' and int.from_bytes(raw[4:8],'little')==len(raw)-8)
+        require(raw[:4]==b'RIFF' and raw[8:12]==b'WAVE' and int.from_bytes(raw[4:8],'little')==len(raw)-8)
         offset=12;seen=[];data_size=None
         while offset<len(raw):
             require(offset+8<=len(raw))
@@ -74,10 +80,10 @@ def wav_artifact(artifact,duration):
             require(compression=='NONE' and channels in (1,2) and width==2 and 8000<=hz<=96000 and frames>0
                     and len(pcm.readframes(frames))==data_size==frames*channels*width)
         seconds=frames/hz
-        require(10<=seconds<=120 if duration is None else abs(seconds-duration)<=0.101)
+        require(10<=seconds<=120 if duration is None else abs(seconds-duration)<=tolerance)
     except (ValueError,TypeError,wave.Error,struct.error,EOFError) as exc:
         raise Rejected('audio workflow WAV invalid') from exc
-    return raw,{'sha256':artifact['sha256'],'bytes':len(raw),'mimeType':'audio/wav',
+    return {'sha256':sha(raw),'bytes':len(raw),'mimeType':'audio/wav',
                 'sampleRate':hz,'channels':channels,'bitsPerSample':16,'frames':frames,'durationSeconds':seconds}
 
 class AudioResult:
@@ -150,15 +156,105 @@ class AudioResult:
             self.check_root()
             return self.concept_locked(value['conceptId'])
 
+    def read_published_result(self,path,oid,*,original_only=False):
+        if path.is_symlink() or not path.is_dir() or {p.name for p in path.iterdir()}!={'metadata.json','audio.wav'}:
+            raise Conflict('audio result target shape')
+        persisted=bytes_of(path/'metadata.json',32768)
+        meta=json.loads(persisted)
+        raw=bytes_of(path/'audio.wav',MAX_WAV)
+        require(type(meta) is dict and persisted==encoded(meta)
+                and meta.get('schemaVersion')=='workflow.audio-result.v1' and meta.get('officialRequestId')==oid
+                and meta.get('projectId')=='binari' and meta.get('kind')=='bgm' and match(meta.get('payloadSha256'),SHA)
+                and match(meta.get('conceptId'),CID) and type(meta.get('title')) is str and bool(meta['title'].strip())
+                and len(meta['title'])<=120 and '\n' not in meta['title'] and '\r' not in meta['title']
+                and type(meta.get('source')) is dict and set(meta['source'])=={'conceptId','sectionSha256'}
+                and meta['source']['conceptId']==meta['conceptId'] and match(meta['source']['sectionSha256'],SHA))
+        separated='separation' in meta
+        require(not original_only or not separated)
+        key='audio_separate' if separated else 'audio_generate'
+        require(meta.get('taskId')=='workflow.task.'+digest([oid,key]))
+        if separated:
+            proof=meta['separation']
+            require(type(proof) is dict and set(proof)==SEPARATION_KEYS and match(proof['sourceOfficialRequestId'],OFFICIAL)
+                    and proof['sourceOfficialRequestId']!=oid and match(proof['sourceSha256'],SHA)
+                    and meta.get('bpm') is None and meta.get('bpmBasis')=='unavailable')
+        # Check the object and decoded WAV properties against the actual inode.
+        duration=meta.get('durationSeconds')
+        require(duration is None or type(duration) in (int,float) and 0<duration<=120)
+        require(meta.get('audio')=={'path':'audio.wav',**wav_info(raw,duration,tolerance=0.25 if separated else 0.101)})
+        if separated:require(meta['separation']['sourceSha256']!=meta['audio']['sha256'])
+        return meta,raw
+
     def verify_removable_result(self,path,oid):
         if path.is_symlink() or not path.is_dir() or {p.name for p in path.iterdir()}!={'metadata.json','audio.wav'}:
             raise Conflict('audio delete target shape')
         meta=json.loads(bytes_of(path/'metadata.json',32768))
+        if 'separation' in meta:
+            return self.read_published_result(path,oid)[0]
         raw=bytes_of(path/'audio.wav',MAX_WAV)
         require(meta.get('schemaVersion')=='workflow.audio-result.v1' and meta.get('officialRequestId')==oid
                 and meta.get('projectId')=='binari' and meta.get('taskId')=='workflow.task.'+digest([oid,'audio_generate'])
                 and (meta['audio']['path'],meta['audio']['bytes'],meta['audio']['sha256'])==('audio.wav',len(raw),sha(raw)))
         return meta
+
+    @staticmethod
+    def separation_binding(b):
+        identity={'officialRequestId','taskId','projectId','payloadSha256','sourcePayloadSha256'}
+        require(type(b) is dict and set(b)==identity|SEPARATION_KEYS and b['projectId']=='binari'
+                and match(b['officialRequestId'],OFFICIAL) and match(b['payloadSha256'],SHA)
+                and match(b['sourcePayloadSha256'],SHA)
+                and match(b['sourceOfficialRequestId'],OFFICIAL) and b['sourceOfficialRequestId']!=b['officialRequestId']
+                and match(b['sourceSha256'],SHA)
+                and b['taskId']=='workflow.task.'+digest([b['officialRequestId'],'audio_separate']))
+        return {k:b[k] for k in SEPARATION_KEYS}
+
+    def separation_source_locked(self,proof,payload_sha):
+        oid=proof['sourceOfficialRequestId']
+        path=self.root/oid
+        require(not path.is_symlink() and path.is_dir())
+        try:meta,raw=self.read_published_result(path,oid,original_only=True)
+        except (FileNotFoundError,Conflict,ValueError,TypeError,KeyError) as exc:
+            raise Rejected('audio separation source unavailable') from exc
+        require(meta['audio']['sha256']==proof['sourceSha256'] and meta['payloadSha256']==payload_sha)
+        return meta,raw
+
+    def separation_read(self,value,*,asset=False):
+        require(type(value) is dict and set(value)=={'binding'})
+        proof=self.separation_binding(value['binding'])
+        with self.store.lock():
+            self.check_root()
+            meta,raw=self.separation_source_locked(proof,value['binding']['sourcePayloadSha256'])
+            if asset:return raw
+            return {**proof,'mimeType':meta['audio']['mimeType'],'bytes':len(raw)}
+
+    def separation_publish(self,value):
+        require(type(value) is dict and set(value)=={'binding','artifact'})
+        b=value['binding'];proof=self.separation_binding(b);a=value['artifact']
+        require(type(a) is dict and set(a)=={'mimeType','sha256','bytes','base64'}
+                and a['sha256']!=proof['sourceSha256'])
+        dst=self.root/b['officialRequestId']
+        with self.store.lock():
+            self.check_root()
+            if dst.exists() or dst.is_symlink():
+                try:
+                    prior,prior_raw=self.read_published_result(dst,b['officialRequestId'])
+                    require(prior.get('separation')==proof and prior['taskId']==b['taskId']
+                            and prior['payloadSha256']==b['payloadSha256'])
+                    raw,_=wav_artifact(a,prior['audio']['durationSeconds'],tolerance=0.25)
+                except Rejected as exc:
+                    raise Conflict('audio derived result identity reused') from exc
+                if raw!=prior_raw:raise Conflict('audio derived result identity reused')
+                return self.existing(dst,prior,raw)
+            source,_=self.separation_source_locked(proof,value['binding']['sourcePayloadSha256'])
+            seconds=source['audio']['durationSeconds']
+            raw,info=wav_artifact(a,seconds,tolerance=0.25)
+            title_suffix=' (반주)'
+            title=source['title'][:120-len(title_suffix)].rstrip()+title_suffix
+            meta={'schemaVersion':'workflow.audio-result.v1','kind':'bgm','title':title,'conceptId':source['conceptId'],
+                  'durationSeconds':seconds,'source':source['source'],'separation':proof,'bpm':None,
+                  'bpmBasis':'unavailable','audio':{'path':'audio.wav',**info},
+                  **{k:b[k] for k in ('officialRequestId','taskId','projectId','payloadSha256')}}
+            return self.publish_locked(dst,meta,raw)
 
     def remove_result(self,command):
         from single_target_delete import SingleTargetDelete,validate_target
@@ -219,16 +315,19 @@ class AudioResult:
             if not direct:
                 current=self.concept_locked(b['conceptId'])
                 require(current['sectionSha256']==s['sectionSha256'])
-            meta['generatedAt']=time.time_ns()//1_000_000
-            stage=Path(tempfile.mkdtemp(prefix='.audio-stage-',dir=self.root))
-            try:
-                for name,data in (('audio.wav',raw),('metadata.json',encoded(meta))):
-                    with (stage/name).open('xb') as f:
-                        f.write(data);f.flush();os.fsync(f.fileno())
-                fsync_dir(stage)
-                # Same lock is the only writer authority for this mounted root.
-                if path.exists() or path.is_symlink():raise Conflict('audio result concurrently occupied')
-                os.rename(stage,path);fsync_dir(self.root)
-            finally:
-                if stage.exists():shutil.rmtree(stage)
-            return self.existing(path,meta,raw)
+            return self.publish_locked(path,meta,raw)
+
+    def publish_locked(self,path,meta,raw):
+        meta['generatedAt']=time.time_ns()//1_000_000
+        stage=Path(tempfile.mkdtemp(prefix='.audio-stage-',dir=self.root))
+        try:
+            for name,data in (('audio.wav',raw),('metadata.json',encoded(meta))):
+                with (stage/name).open('xb') as f:
+                    f.write(data);f.flush();os.fsync(f.fileno())
+            fsync_dir(stage)
+            # Same lock is the only writer authority for this mounted root.
+            if path.exists() or path.is_symlink():raise Conflict('audio result concurrently occupied')
+            os.rename(stage,path);fsync_dir(self.root)
+        finally:
+            if stage.exists():shutil.rmtree(stage)
+        return self.existing(path,meta,raw)

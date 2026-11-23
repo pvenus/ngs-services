@@ -129,23 +129,35 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                 return self.reply(401, {'error':'UNAUTHORIZED'})
             try:
                 url = urlsplit(self.path)
-                if url.path in ('/v1/workflow/audio','/v1/workflow/audio/read'):
-                    from workflow_audio_store import AudioResult,Rejected,MAX_BODY
+                if url.path in ('/v1/workflow/audio','/v1/workflow/audio/read',
+                                '/v1/workflow/audio-separate','/v1/workflow/audio-separate/read',
+                                '/v1/workflow/audio-separate/asset'):
+                    from workflow_audio_store import AudioResult,Rejected,MAX_BODY,SEPARATE_PATH
                     if not isinstance(workflow_audio,AudioResult) or workflow_audio.store is not store:
                         return self.reply(404,{'error':'NOT_FOUND'})
                     if (self.command!='POST' or url.query or self.headers.get('Origin') is not None or
                         self.headers.get('Transfer-Encoding') is not None or self.headers.get('Content-Type')!='application/json'):
                         raise ValueError('workflow audio transport')
                     n=self.headers.get('Content-Length','')
-                    reading=url.path.endswith('/read')
-                    if not n.isdecimal() or not 0<int(n)<=(4096 if reading else MAX_BODY):raise ValueError('workflow audio body')
+                    reading=url.path.endswith('/read');asset=url.path.endswith('/asset')
+                    if not n.isdecimal() or not 0<int(n)<=(4096 if reading or asset else MAX_BODY):
+                        raise ValueError('workflow audio body')
                     self.connection.settimeout(15)
                     raw=self.rfile.read(int(n))
                     if len(raw)!=int(n):raise ValueError('workflow audio incomplete')
                     try:
-                        result=(workflow_audio.read if reading else workflow_audio.publish)(json.loads(raw))
+                        value=json.loads(raw)
+                        if url.path.startswith(SEPARATE_PATH):
+                            result=(workflow_audio.separation_read(value,asset=asset) if reading or asset
+                                    else workflow_audio.separation_publish(value))
+                        else:result=(workflow_audio.read if reading else workflow_audio.publish)(value)
                     except Rejected:
                         return self.reply(422,{'error':'WORKFLOW_AUDIO_REJECTED_BEFORE_WRITE'})
+                    if asset:
+                        self.send_response(200);self.send_header('Content-Type','audio/wav')
+                        self.send_header('Content-Length',str(len(result)));self.send_header('Cache-Control','no-store')
+                        self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(result)
+                        return
                     return self.reply(200,result)
                 if url.path=='/v1/storage/delete-target':
                     from single_target_delete import SingleTargetDelete
@@ -361,7 +373,7 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         q=parse_qs(url.query);return self.reply(200,store.publication_receipts(q['npcId'][0],q['generationId'][0],q['parentRequestId'][0]))
                     if url.path == '/v1/snapshot': return self.reply(200, store.snapshot())
                     if url.path.startswith('/v1/requests/'): return self.reply(200, store.receipt(unquote(url.path[len('/v1/requests/'):])))
-                    if url.path == '/v1/capabilities': return self.reply(200, {**({'workflowAudioDeleteV1':True} if workflow_audio_delete is True and workflow_audio is not None and workflow_audio.store is store else {}),**({'workflowAudioResultV1':True} if workflow_audio is not None and workflow_audio.store is store else {}),**({'singleTargetRecoverableDeleteV1':True} if single_target_delete is not None else {}),**({'workflowExactNpcFolderDeleteV1':True} if workflow_delete is True and workflow_npc_folder_delete is True and hasattr(store,'verify_workflow_folder_recovery') else {}),'conceptRecoverableLifecycleV1':hasattr(store,'lifecycle_commit'),'conceptCategoryMarkdownV1':hasattr(store,'markdown_commit'),'conceptCategoryOverwriteV1':hasattr(store,'markdown_current'),'conceptSingleTargetDeleteV1':hasattr(store,'scope_delete_command'),'releasedFrameCleanupLeaseV1':hasattr(store,'begin_frame_maintenance'),'npcOwnedSlots':hasattr(store,'generation'),'generationFence':hasattr(store,'generation'), **({'workflowExactNpcDeleteV1':True} if workflow_delete is True and hasattr(store,'workflow_delete_character') else {}),**({'workflowAtomicNpcPresetV1':True} if workflow_preset is True and hasattr(store,'workflow_preset') else {}),**({'workflowRepresentativePlanWriteV1':True} if workflow_representative is True and hasattr(store,'workflow_plan_representative') else {}),**({'workflowStaticPortraitPixelV1':True} if workflow_native_media is True and hasattr(store,'workflow_static_pixel_publish') else {}),**({'workflowNativePNGMediaV1':True,'workflowSelectedMotionV1':True} if workflow_native_media is True and hasattr(store,'workflow_media_publish') else {}),**({'workflowIdlePlanWriteV1':True} if workflow_idle_plan is True and hasattr(store,'workflow_plan_idle') else {}),**({'workflowRepresentativePortraitCurrentFilesV1':True} if workflow_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowIdleReferencePortraitWriteV1':True} if workflow_idle_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowCombatPortraitWriteV1':True} if workflow_combat_pose is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowDirectionPortraitWriteV1':True} if workflow_direction_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowNpcPlanningAddMarkdownV1':True} if workflow_npc_planning_add is True and hasattr(store,'workflow_npc_planning_add') else {}),**({'workflowNpcPlanningUpdateMarkdownV1':True} if workflow_npc_planning_update is True and hasattr(store,'workflow_npc_planning_update') else {}),**({'workflowCurrentDocumentChainV1':True} if workflow_shared_plan is True and hasattr(store,'workflow_plan_current') else {}),'atomicCAS':not hasattr(store,'batch'), 'lockedBatch':hasattr(store,'batch'), 'namespace':getattr(store,'namespace','canonical-files/binari/npcs/' if hasattr(store,'batch') else PREFIX)})
+                    if url.path == '/v1/capabilities': return self.reply(200, {**({'workflowAudioDeleteV1':True} if workflow_audio_delete is True and workflow_audio is not None and workflow_audio.store is store else {}),**({'workflowAudioResultV1':True,'workflowAudioSeparateV1':True} if workflow_audio is not None and workflow_audio.store is store else {}),**({'singleTargetRecoverableDeleteV1':True} if single_target_delete is not None else {}),**({'workflowExactNpcFolderDeleteV1':True} if workflow_delete is True and workflow_npc_folder_delete is True and hasattr(store,'verify_workflow_folder_recovery') else {}),'conceptRecoverableLifecycleV1':hasattr(store,'lifecycle_commit'),'conceptCategoryMarkdownV1':hasattr(store,'markdown_commit'),'conceptCategoryOverwriteV1':hasattr(store,'markdown_current'),'conceptSingleTargetDeleteV1':hasattr(store,'scope_delete_command'),'releasedFrameCleanupLeaseV1':hasattr(store,'begin_frame_maintenance'),'npcOwnedSlots':hasattr(store,'generation'),'generationFence':hasattr(store,'generation'), **({'workflowExactNpcDeleteV1':True} if workflow_delete is True and hasattr(store,'workflow_delete_character') else {}),**({'workflowAtomicNpcPresetV1':True} if workflow_preset is True and hasattr(store,'workflow_preset') else {}),**({'workflowRepresentativePlanWriteV1':True} if workflow_representative is True and hasattr(store,'workflow_plan_representative') else {}),**({'workflowStaticPortraitPixelV1':True} if workflow_native_media is True and hasattr(store,'workflow_static_pixel_publish') else {}),**({'workflowNativePNGMediaV1':True,'workflowSelectedMotionV1':True} if workflow_native_media is True and hasattr(store,'workflow_media_publish') else {}),**({'workflowIdlePlanWriteV1':True} if workflow_idle_plan is True and hasattr(store,'workflow_plan_idle') else {}),**({'workflowRepresentativePortraitCurrentFilesV1':True} if workflow_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowIdleReferencePortraitWriteV1':True} if workflow_idle_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowCombatPortraitWriteV1':True} if workflow_combat_pose is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowDirectionPortraitWriteV1':True} if workflow_direction_portrait is True and hasattr(store,'workflow_portrait_representative') else {}),**({'workflowNpcPlanningAddMarkdownV1':True} if workflow_npc_planning_add is True and hasattr(store,'workflow_npc_planning_add') else {}),**({'workflowNpcPlanningUpdateMarkdownV1':True} if workflow_npc_planning_update is True and hasattr(store,'workflow_npc_planning_update') else {}),**({'workflowCurrentDocumentChainV1':True} if workflow_shared_plan is True and hasattr(store,'workflow_plan_current') else {}),'atomicCAS':not hasattr(store,'batch'), 'lockedBatch':hasattr(store,'batch'), 'namespace':getattr(store,'namespace','canonical-files/binari/npcs/' if hasattr(store,'batch') else PREFIX)})
                     if url.path == '/v1/object': return self.reply(200, store.get(parse_qs(url.query)['key'][0]), True)
                 elif self.command == 'POST':
                     if self.headers.get('Transfer-Encoding'): raise ValueError('content length required')

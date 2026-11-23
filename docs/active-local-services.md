@@ -77,3 +77,15 @@ uses the exact existing same-pose raw direction (absence fails, never switches
 to idle or generates a portrait). The independent regeneration stage and atomic
 raw/alpha/pixel replacement remain unchanged. V1 still uses its original
 appearance/dependency routing.
+
+### Instrumental copy of a published song
+
+The existing local BGM workflow enables `/v1/audio/ownership/workflow-separate`
+when the scoped concept/audio Filex writer advertises `workflowAudioSeparateV1`.
+The PDS `/read` and binary `/asset` endpoints require the same current
+`audio_separate` claim and pin the original published song's exact request,
+project, and WAV digest. The Filex writer revalidates that source before the
+first write under its existing audio lock. It publishes one derived WAV and
+`workflow.audio-result.v1` metadata under the **new** official request ID with
+a separate source lineage marker. The original and temporary model stems are
+never written by this route. Replays accept only the same confirmed result.

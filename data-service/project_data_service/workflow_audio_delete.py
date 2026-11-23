@@ -7,6 +7,7 @@ from .filex_read import canonical,digest
 from .single_target_delete import AuthorizedStorage,ClaimDenied,PATH
 from .workflow_delete_claim import PrivatePlannerClaim,ClaimDenied as PlannerDenied
 from .workflow_audio import OFFICIAL,TASK,SHA,match
+from .workflow_audio_separate import published_song
 
 ROOT='canonical-files/binari/audio'
 SCHEMA='ngs.audio-delete.v1'
@@ -46,13 +47,7 @@ def storage_provider(concept,planner):
                         and row['stamp']==c['claimStamp'] and type(row['registered_at']) is int and 0<=row['registered_at']<=row['stamp']
                         and row['payload_sha256']==digest(payload)==c['payloadSha256'] and row['payload']==canonical(payload).decode()
                         and row['task_input']==canonical(expected).decode())
-                source_row=db.execute("""SELECT 1 FROM workflow_tasks t JOIN workflow_runs r USING(official_request_id)
-                    WHERE t.official_request_id=? AND t.task_id=? AND r.project_id='binari'
-                    AND r.request_type='audio.generate' AND r.schema_version='ngs.audio-generate.v1' AND r.state='planned'
-                    AND t.task_key='audio_generate' AND t.task_type='audio.generate' AND t.worker_type='audio'
-                    AND t.status='completed' AND t.result_ref=?""",
-                    (source,'workflow.task.'+digest([source,'audio_generate']),ROOT+'/'+source+'/metadata.json')).fetchone()
-                require(source_row is not None)
+                require(published_song(db,source) or published_song(db,source,derived=True))
                 yield {'operationId':tid,'target':{'root':ROOT,'path':source,'kind':'directory'}}
         except PlannerDenied as exc:raise ClaimDenied() from exc
 
