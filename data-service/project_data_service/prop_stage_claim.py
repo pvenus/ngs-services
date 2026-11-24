@@ -11,6 +11,8 @@ P='binari'
 GENERATE='prop.generate'
 REGENERATE='prop.regenerate'
 APPEND='prop.animation.generate'
+CANDLE_CHROMA_PROFILE='candle-chroma-headroom-v1'
+CANDLE_CHROMA_PROP='candle-brass-petal-unlit-clean'
 FAMILIES={GENERATE:'ngs.prop-generate.v1',REGENERATE:'ngs.prop-regenerate.v1',APPEND:'ngs.prop-animation-generate.v1'}
 DESIGN='prop_design';BASE='prop_base';MOTION='prop_motion';DETAIL='prop_detail';PIXEL='prop_pixel'
 MOTION_DETAIL='prop_animation_detail';MOTION_PIXEL='prop_animation_pixel';PUBLISH='prop_pack_publish'
@@ -36,12 +38,15 @@ def text(v,maximum):
 def payload_valid(p,kind):
     required={'schemaVersion','projectId','propId'}
     if kind in (REGENERATE,APPEND):required.add('source')
-    if kind==APPEND:required.update(('motionId','prompt'))
+    if kind==APPEND:
+        required.update(('motionId','prompt'))
+        if 'renderProfile' in p:required.add('renderProfile')
     else:required.update(('intent','designContextSha256'))
     if kind!=APPEND and 'motion' in p:required.add('motion')
     need(keys(p,required) and p['schemaVersion']==FAMILIES[kind] and p['projectId']==P and prop_id(p['propId']))
     if 'source' in p:pin({'propId':p['propId'],**p['source']});need(keys(p['source'],('revision','sha256')) and p['source']['revision']<SAFE_INT-1)
     if kind==APPEND:
+        if 'renderProfile' in p:need(p['renderProfile']==CANDLE_CHROMA_PROFILE and p['propId']==CANDLE_CHROMA_PROP)
         need(prop_id(p['motionId']) and text(p['prompt'],2000) and not re.search(r'\bembedding:',p['prompt'],re.I))
     else:need(text(p['intent'],4000) and match(p['designContextSha256'],HASH) and p.get('motion','still') in ('still','subtle'))
 

@@ -200,13 +200,17 @@ class RealPropAuthority:
 
     def details(self,run,p,rows,key):
         kind=run['request_type'];prior=self.current_source(p,kind)
+        # The Planner authenticated the full payload hash. Runtime prep and the
+        # geometry lane consume the same optional policy without altering the DAG,
+        # its stored task inputs, or the immutable Filex manifest schema.
+        profile={'renderProfile':p['renderProfile']} if kind==APPEND and 'renderProfile' in p else {}
         def get(k):return self.stored(run,rows,k)
         if key==DESIGN:return None
         if key==BASE:
             return {'design':get(DESIGN),'context':self.context(p,kind)}
         if key==MOTION:
             if kind==APPEND:
-                return {'package':p['source'],'media':prior['media']['detail'],'motionPrompt':p['prompt']}
+                return {'package':p['source'],'media':prior['media']['detail'],'motionPrompt':p['prompt'],**profile}
             return {'source':_source(get(BASE)),'media':get(BASE)['artifact'],'motionPrompt':get(DESIGN)['artifact']['motionPrompt']}
         if key in (DETAIL,PIXEL):
             src=get(BASE if key==DETAIL else DETAIL);media=src['artifact']
@@ -218,7 +222,8 @@ class RealPropAuthority:
         else:
             g=get(DETAIL if key==MOTION_DETAIL else PIXEL);media=g['artifact'];geometry={**_source(g),'media':media}
         return {'source':_source(src),'canvas':canvas_of(media),
-                'manifest' if key==MOTION_DETAIL else 'media':src['artifact'],'geometry':geometry}
+                'manifest' if key==MOTION_DETAIL else 'media':src['artifact'],'geometry':geometry,
+                **(profile if key==MOTION_DETAIL else {})}
 
     def read_stage(self,claim,design_only):
         with self.planner.selected(claim,(DESIGN,) if design_only else tuple(k for k in STAGES if k!=DESIGN)) as (run,p,rows,key):

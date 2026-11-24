@@ -251,3 +251,35 @@ test('append advertised/submitted/fed only with renderer capability; initial sti
  for(const invalid of [['append-animation'],['still','subtle'],['still','append-animation','still']])
   assert.equal(await propPackageReady(pds(invalid)),false);
 });
+
+test('only the exact candle append profile is admitted, fully hash-bound, and keeps the same DAG',async t=>{
+ const temp=root(t);let ready=false;
+ const rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true,propAnimationEnabled:true,
+  propAnimationReadiness:async()=>ready});
+ const {candleChromaPropId,candleChromaProfile}=await import('../request-service/prop-generate-envelope.mjs');
+ const type='prop.animation.generate';
+ const legacy={...animPayload,propId:candleChromaPropId};
+ const compatibility={...legacy,renderProfile:candleChromaProfile};
+ const submit=(key,payload)=>rs.call('request_submit',{sourceId:'local',requestType:type,payload,idempotencyKey:key});
+ await assert.rejects(submit('not-ready',compatibility),/PROP_GENERATE_MOTION_UNAVAILABLE/);
+ ready=true;
+ for(const value of [{...compatibility,propId:p.propId},{...compatibility,renderProfile:'other'},
+  {...compatibility,renderProfile:null},{...legacy,greenKey:true}])
+  await assert.rejects(submit('inexact',value),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+ const accepted=await submit('exact',compatibility);
+ const feed=(await rs.call('request_workflow_list',{})).requests[0];
+ assert.equal(feed.officialRequestId,accepted.officialRequestId);
+ assert.deepEqual(feed.payload,compatibility);
+ assert.equal(feed.payloadSha256,sha(canonical(compatibility)));
+ assert.notEqual(feed.payloadSha256,sha(canonical(legacy)));
+ const old={...feed,payload:legacy,payloadSha256:sha(canonical(legacy))};
+ assert.deepEqual(buildPlan(old).tasks,buildPlan(feed).tasks);
+ const check=new PlannerStore(':memory:',{propGenerateEnabled:true,propMutationsEnabled:true,
+  propAnimationEnabled:true,readPropPublication:async()=>null});
+ t.after(()=>check.close());
+ assert.equal((await pollOnce(check,rs)).acknowledged,1);
+ const stored=check.db.prepare('SELECT payload,payload_sha256 FROM workflow_runs').get();
+ assert.equal(stored.payload,canonical(compatibility));
+ assert.equal(stored.payload_sha256,feed.payloadSha256);
+ await assert.rejects(submit('exact',legacy),/OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT/);
+});

@@ -175,3 +175,20 @@ the real snapshot and both HTTP servers.
 Use normal GitHub release evidence and ordinary OPS targets, never a
 separate deployment script. Fixtures verify readiness denials, real
 claim-bound paths, CAS and readback with no model invocation.
+
+#### Candle chroma/headroom append profile
+
+The existing `prop.animation.generate` request can optionally name
+`renderProfile: "candle-chroma-headroom-v1"` for the exact prop
+`candle-brass-petal-unlit-clean`. No other prop, profile or raw renderer
+configuration is accepted. The field changes the request hash, not the task
+graph, task input, geometry/source pin, Filex manifest or publication API.
+Without the field the existing append behavior and wire shapes are unchanged.
+
+The scoped PDS claim reads expose the profile only to the raw motion and
+animated-detail steps. The exact unmodified detail PNG already supplies the
+upstream transparency and fixed-object silhouette; animated detail reads it
+through its existing geometry asset route. Finish and publish through the
+normal append flow, preserving the static PNGs and all prior animations.
+Enable append only with the reviewed matching Animation and Postprocess
+workers; this is not a separate request lane or a direct Filex write.

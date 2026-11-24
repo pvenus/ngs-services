@@ -23,6 +23,7 @@ export const propGeneratePayloadSchema={type:'object',properties:{
 
 export const propRegenerateType='prop.regenerate',propRegenerateSchema='ngs.prop-regenerate.v1';
 export const propAnimationType='prop.animation.generate',propAnimationSchema='ngs.prop-animation-generate.v1';
+export const candleChromaProfile='candle-chroma-headroom-v1',candleChromaPropId='candle-brass-petal-unlit-clean';
 export const propMutationUnavailable='PROP_MUTATION_RUNTIME_UNAVAILABLE';
 export const propTypes=Object.freeze([propGenerateType,propRegenerateType,propAnimationType]);
 const sourcePin=v=>exactProp(v,['revision','sha256'])&&Number.isSafeInteger(v.revision)&&
@@ -42,8 +43,10 @@ export function validatePropRegenerate(v,project){
  return stable(v);
 }
 export function validatePropAnimation(v,project){
- validateMutation(v,project,animationFields,propAnimationSchema);
- if(!slug(v.motionId)||!clean(v.prompt,2000)||/\bembedding:/iu.test(v.prompt))throw Error(propGenerateInvalid);
+ const hasProfile=Object.hasOwn(v??{},'renderProfile');
+ validateMutation(v,project,hasProfile?[...animationFields,'renderProfile']:animationFields,propAnimationSchema);
+ if(!slug(v.motionId)||!clean(v.prompt,2000)||/\bembedding:/iu.test(v.prompt)||
+   hasProfile&&(v.renderProfile!==candleChromaProfile||v.propId!==candleChromaPropId))throw Error(propGenerateInvalid);
  return stable(v);
 }
 const sourceSchema={type:'object',properties:{revision:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER-1},
@@ -52,5 +55,6 @@ export const propRegeneratePayloadSchema={type:'object',properties:{...propGener
  schemaVersion:{const:propRegenerateSchema},source:sourceSchema},required:regenerateFields,additionalProperties:false};
 export const propAnimationPayloadSchema={type:'object',properties:{schemaVersion:{const:propAnimationSchema},projectId:{const:'binari'},
  propId:propGeneratePayloadSchema.properties.propId,source:sourceSchema,motionId:propGeneratePayloadSchema.properties.propId,
- prompt:{type:'string',minLength:1,maxLength:2000}},required:animationFields,additionalProperties:false};
+ prompt:{type:'string',minLength:1,maxLength:2000},renderProfile:{const:candleChromaProfile}},required:animationFields,
+ additionalProperties:false,if:{required:['renderProfile']},then:{properties:{propId:{const:candleChromaPropId}}}};
 export const propValidator=Object.freeze({[propGenerateType]:validatePropGenerate,[propRegenerateType]:validatePropRegenerate,[propAnimationType]:validatePropAnimation});

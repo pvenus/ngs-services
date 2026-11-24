@@ -60,10 +60,10 @@ class FixtureAuthority:
         p=packet['pin'] if operation=='asset' else packet
         if p['propId']!=PROP:raise Denied()
 
-def make(id_char,operation='create',prior=None,color=20):
+def make(id_char,operation='create',prior=None,color=20,*,prop_id=PROP):
     oid='request.official.'+id_char*64
     request_sha=digest(['formal',oid])
-    scope={'officialRequestId':oid,'projectId':'binari','propId':PROP,'requestSha256':request_sha}
+    scope={'officialRequestId':oid,'projectId':'binari','propId':prop_id,'requestSha256':request_sha}
     m={'schemaVersion':'ngs.prop-package.v1',**scope,'revision':1,
        'designContextSha256':'f'*64,'title':'등롱','parentSha256':None,
        'interaction':{'pixelOpen':None,'detailTrigger':None},'animations':[]}
