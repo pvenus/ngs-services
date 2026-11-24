@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import plistlib
 import re
+import stat
 
 from filex_writer_apply import IMAGE, PROJECT, PROJECT_PATH
 from mac_target_apply import TARGETS, validate_and_rewrite
@@ -130,6 +131,75 @@ def backend_selector(prior, release, home, pds_path, pds_raw, registry_raw):
     env = result.setdefault('EnvironmentVariables', {})
     env[KEY] = str(pds_path)
     return plistlib.dumps(result)
+
+
+def prove_backend_predecessor(home, control, selector, applied):
+    """Allow a separately OPS-deployed, release-only selector advance, not drift.
+
+    The immutable paired receipt stays untouched. For a newer selector, require
+    the exact independent OPS deployment record, preserved scope-binding bytes,
+    and a lossless round-trip through the two fixed release paths. This is only
+    predecessor evidence; capture still proves the loaded selector, actual writer
+    identity and mounts, and PDS's live scope fingerprint separately.
+    """
+    from prepare_ngs_release import DIGEST, SHA, private_directory, private_file
+    code='FILEX_PDS_PREDECESSOR_UNPROVED'
+    def read_proof(path, limit):
+        # Same proof reader on the candidate preparer and the minimal apply
+        # runner, which intentionally lacks the NGS preparation module.
+        private_file(path,0o600)
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as stream:
+            a=os.fstat(stream.fileno())
+            b=path.lstat()
+            need(stat.S_ISREG(a.st_mode) and stat.S_IMODE(a.st_mode)==0o600 and
+                 a.st_uid==os.getuid() and a.st_nlink==1 and 0<a.st_size<=limit and
+                 (a.st_dev,a.st_ino)==(b.st_dev,b.st_ino),code)
+            raw=stream.read(limit+1)
+            c=os.fstat(stream.fileno())
+            need(len(raw)==a.st_size and (a.st_mtime_ns,a.st_ctime_ns)==(c.st_mtime_ns,c.st_ctime_ns),code)
+            return raw
+    old=applied.get('sha')
+    expected=applied.get('backendSelectorSha256')
+    need(matches(SHA,old) and matches(DIGEST,expected),code)
+    if digest(selector)==expected:
+        return
+    raw=read_proof(control/'targets'/'backend-stack'/'last-result.json',8192)
+    recorded=json_load(raw)
+    need(shape(recorded,'schemaVersion target attemptedSha state finishedAt observed')
+         and recorded['schemaVersion']=='ops.deploy-target-result.v1'
+         and recorded['target']=='backend-stack' and recorded['state']=='deployed'
+         and shape(recorded['observed'],'sha deployedAt'),code)
+    new=recorded['observed']['sha']
+    stamp=r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
+    need(matches(SHA,new) and new!=old and recorded['attemptedSha']==new
+         and all(type(v) is str and re.fullmatch(stamp,v) is not None
+                 for v in (recorded['observed']['deployedAt'],recorded['finishedAt']))
+         and type(applied.get('deployedAt')) is str,code)
+    try:
+        paired_at=datetime.fromisoformat(applied['deployedAt'])
+        adopted_at=datetime.fromisoformat(recorded['observed']['deployedAt'])
+        finish=datetime.fromisoformat(recorded['finishedAt'])
+        need(paired_at.tzinfo is not None and paired_at<adopted_at<=finish,code)
+    except (ValueError,TypeError):
+        need(False,code)
+    target=TARGETS['backend-stack']
+    base=home/'Workspaces'
+    releases=base/target.workspace/'code/releases'
+    old_release=releases/(target.release_prefix+old)
+    new_release=releases/(target.release_prefix+new)
+    private_directory(old_release)
+    private_directory(new_release)
+    value=plistlib.loads(selector)
+    args=value.get('ProgramArguments') if type(value) is dict else None
+    env=value.get('EnvironmentVariables') if type(value) is dict else None
+    pds=control/'filex-writer-prepared'/(old+'.pds-scopes.json')
+    need(type(args) is list and args==['/opt/homebrew/bin/python3.12',str(new_release/target.entry),
+         '--storage-root',str(base/'PDS/data')] and type(env) is dict and env.get(KEY)==str(pds)
+         and matches(DIGEST,applied.get('pdsSha256'))
+         and digest(read_proof(pds,65536))==applied['pdsSha256'],code)
+    paired=validate_and_rewrite(selector,old_release,target,base)
+    need(digest(paired)==expected and validate_and_rewrite(paired,new_release,target,base)==selector,code)
 
 
 def loaded_backend_selector(report, original, path):
@@ -309,9 +379,9 @@ class ManagedHost:
             private_file(old_registry_path,0o600)
             previous_registry=old_registry_path.read_bytes()
             current=self.overlay.read_bytes()
+            prove_backend_predecessor(self.home,self.control,prior,previous)
             need(previous['registrySha256']==digest(previous_registry)
                  and previous['writerOverlaySha256']==digest(current)
-                 and previous['backendSelectorSha256']==digest(prior)
                  and current==managed_overlay(previous['imageId'],previous_registry)
                  and self._running(rows[NAME]) and rows[NAME]['Image']==previous['imageId']
                  and all(not self._running(rows[k]) for k in LEGACY), 'FILEX_ACTIVE_WRITER')

@@ -1,10 +1,14 @@
 import copy
 import json
+from pathlib import Path
+import plistlib
+from tempfile import TemporaryDirectory
 import unittest
 
 from filex_unified_runtime import (NAME, PROJECT, VOLUMES, CutoverFailure, compose,
-                                   cutover, guard_mounts, registry, render_pds, loaded_backend_selector)
-from prepare_ngs_release import Refused
+                                   cutover, guard_mounts, registry, render_pds, loaded_backend_selector,
+                                   prove_backend_predecessor)
+from prepare_ngs_release import Refused, digest, json_bytes
 
 IMAGE = 'sha256:' + 'f'*64
 REGISTRY = json.dumps({'schemaVersion':'ngs.filex-writer-scopes.v1','scopes':[
@@ -94,6 +98,58 @@ class UnifiedFilex(unittest.TestCase):
         self.assertTrue(loaded_backend_selector(raw+cwd,original,path))
         self.assertFalse(loaded_backend_selector(raw,original,path))
         self.assertFalse(loaded_backend_selector(raw+cwd+cwd,original,path))
+
+    def test_only_exact_independently_deployed_backend_release_can_advance_filex_predecessor(self):
+        with TemporaryDirectory() as directory:
+            home=Path(directory).resolve()
+            control=home/'control'
+            witness=control/'targets'/'backend-stack'/'last-result.json'
+            witness.parent.mkdir(parents=True,mode=0o700)
+            def private(path,value):
+                path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+                path.write_bytes(value);path.chmod(0o600)
+            old,new='1'*40,'2'*40
+            root=home/'Workspaces/BackendServices/code/releases'
+            def entry(sha):
+                release=root/('ngs-services-github-'+sha)
+                release.mkdir(parents=True,mode=0o700)
+                path=release/'runtime'/'stack.py'
+                private(path,b'# fixture')
+                return str(path)
+            old_entry,new_entry=entry(old),entry(new)
+            pds=control/'filex-writer-prepared'/(old+'.pds-scopes.json')
+            healthy=b'bound scope fixture';private(pds,healthy)
+            def selector(path):
+                return {'Label':'com.projectbs.backend-stack','ProgramArguments':['/opt/homebrew/bin/python3.12',path,
+                    '--storage-root',str(home/'Workspaces/PDS/data')],
+                    'EnvironmentVariables':{'PDS_FILEX_WRITER_CONFIG':str(pds),'UNCHANGED':'value'}}
+            paired=plistlib.dumps(selector(old_entry));current=selector(new_entry)
+            applied={'sha':old,'backendSelectorSha256':digest(paired),'pdsSha256':digest(healthy),
+                     'deployedAt':'2026-11-24T16:45:08.485540+00:00'}
+            receipt={'schemaVersion':'ops.deploy-target-result.v1','target':'backend-stack','state':'deployed',
+                     'attemptedSha':new,'finishedAt':'2026-11-24T17:29:10Z',
+                     'observed':{'sha':new,'deployedAt':'2026-11-24T17:29:10Z'}}
+            prove_backend_predecessor(home,control,paired,applied)  # exact old case requires no independent receipt
+            private(witness,json_bytes(receipt))
+            prove_backend_predecessor(home,control,plistlib.dumps(current),applied)
+            for change in (
+              lambda v:v['EnvironmentVariables'].update(UNCHANGED='drift'),
+              lambda v:v['EnvironmentVariables'].update(PDS_FILEX_WRITER_CONFIG='/not/scoped.json'),
+              lambda v:v['ProgramArguments'].__setitem__(0,'/not/pinned/python'),
+              lambda v:v['ProgramArguments'].__setitem__(1,'/not/deployed/runtime/stack.py'),
+              lambda v:v['ProgramArguments'].__setitem__(3,'/not/storage'),
+            ):
+                edited=copy.deepcopy(current);change(edited)
+                with self.assertRaises(Refused):
+                    prove_backend_predecessor(home,control,plistlib.dumps(edited),applied)
+            for changed in ({'state':'failed'},{'attemptedSha':'3'*40},{'observed':{
+                             'sha':new,'deployedAt':'2026-11-24T15:00:00Z'}}):
+                private(witness,json_bytes({**receipt,**changed}))
+                with self.assertRaises(Refused):
+                    prove_backend_predecessor(home,control,plistlib.dumps(current),applied)
+            private(witness,json_bytes(receipt));private(pds,b'independent scope drift')
+            with self.assertRaises(Refused):
+                prove_backend_predecessor(home,control,plistlib.dumps(current),applied)
 
     def test_scope_path_ambiguity_rejected(self):
         r=json.loads(REGISTRY)

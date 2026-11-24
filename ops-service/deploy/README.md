@@ -368,3 +368,14 @@ and the unchanged last managed OPS observation. It never rewrites the
 observation or a past receipt. Only normal OPS deployment writes a new
 successful result. An altered predecessor, unknown history, different role or
 candidate SHA uses the normal guard and is refused on mismatch.
+
+### Unified Filex after an independent Backend Stack deployment
+
+The paired cutover receipt remains immutable. A release-only Backend Stack
+selector advance is recognized only when the exact full source release has a
+successful independent OPS result, the currently selected scope binding still
+matches the paired receipt, and reversing the canonical release path reproduces
+the original selector digest byte-for-byte. Capture still checks the loaded
+launchd selector, writer image/mount/authentication and live PDS binding. An
+arbitrary plist edit or replayed/failed receipt is not adoption evidence. No
+repair operation rewrites deployment history.
