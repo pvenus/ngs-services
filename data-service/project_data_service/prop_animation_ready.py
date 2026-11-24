@@ -8,7 +8,8 @@ from pathlib import Path
 READY_FILE=Path.home()/'Workspaces/Workers/runtime/prop-animation/prop-animation-ready.json'
 MAX_AGE_MS=120_000
 SCHEMA='workflow.prop-animation-renderer-ready.v1'
-PROVIDER='wan-ti2v-q8_0'
+# Never accept the old 5B worker marker on an A14B-only release.
+PROVIDER='wan-i2v-a14b-q4_k_m'
 
 def renderer_ready(path=READY_FILE,*,now=None,schema=SCHEMA):
     try:

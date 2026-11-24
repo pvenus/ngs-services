@@ -7,7 +7,12 @@ filesystem path, background-removal policy, worker option, or second source is a
 The canonical scope registry adds only `cinematics`, with its own mount/routing and the existing
 media binding. The owner-controlled canonical directory must be provisioned before OPS applies
 the new writer/PDS pair; Docker does not create host paths. A deployment lacking that scope or a fresh,
-private cinematic animation worker proof does not advertise intake. This does not disable props.
+private cinematic animation worker proof does not advertise cinematic intake. Both formal I2V
+lanes (props and cinematics) require their respective, independent runtime marker for
+`wan-i2v-a14b-q4_k_m`; neither can reopen on a 5B marker. Install compatible A14B weights,
+verify the same-model resident and smoke-test it in staging before deploying this strict PDS
+gate with the new worker. This change is not needed on the existing live 5B release; do not
+deploy it ahead of the coordinated cutover. Existing NPC Animate is unaffected.
 
 `cinematic.generate` accepts `ngs.cinematic-generate.v1` with `projectId`, `sourceSha256`, and
 `motionPrompt`. Local or owner-verified Space intake checks the source and canonicalizes the request.
