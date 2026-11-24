@@ -16,7 +16,7 @@ fixture=Path(__file__).with_name('prop-design-local-fixture.py')
 with redirect_stdout(io.StringIO()):
     scope=runpy.run_path(str(fixture))
 root=Path(sys.argv[1])
-sys.path.insert(0,str(fixture.parents[1]/'filex-live-roles/media-artifacts'))
+sys.path.insert(0,str(fixture.parents[1]/'filex-writer'))
 from media_store import MediaStore
 from server import handler
 media=root/'filex-media';media.mkdir(mode=0o700)

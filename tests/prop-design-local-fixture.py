@@ -14,7 +14,7 @@ from project_data_service.workflow_delete_claim import PrivatePlannerClaim
 root=Path(sys.argv[1]).resolve()
 db=root/'planner.sqlite'
 claim=json.loads(sys.stdin.read())
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'filex-live-roles/npc-owned'))
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'filex-writer'))
 from concept_store import ConceptStore
 
 storage=root/'filex-concept'

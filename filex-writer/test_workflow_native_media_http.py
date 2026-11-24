@@ -288,7 +288,7 @@ print(s.server_port,flush=True)
 s.serve_forever()
 """
         proc=subprocess.Popen([sys.executable,'-B','-c',script,str(path),str(token)],
-                cwd=Path(__file__).resolve().parents[1]/'filex-live-roles/motion-presets',
+                cwd=Path(__file__).resolve().parents[1]/'filex-writer',
                 stdout=subprocess.PIPE,text=True)
         def clean():
             proc.terminate()

@@ -474,72 +474,10 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
     return Handler
 
 if __name__ == '__main__':
-    # Store modules import server. Preserve one Conflict class in script mode.
+    # Domain modules import server; preserve one Store / Conflict type.
     import sys
-    sys.modules['server'] = sys.modules[__name__]
-    token = Path(os.environ['WRITER_TOKEN_FILE']).read_text().strip()
-    store_class = Store
-    if os.environ.get('WRITER_SCOPE') == 'media-artifacts':
-        from media_store import MediaStore
-        store_class = MediaStore
-    elif os.environ.get('WRITER_SCOPE') == 'npc-owned':
-        from fenced_store import FencedOwnedNPCStore
-        store_class = FencedOwnedNPCStore
-    elif os.environ.get('WRITER_SCOPE') == 'npc':
-        from npc_store import NPCStore
-        store_class = NPCStore
-    elif os.environ.get('WRITER_SCOPE') == 'concept':
-        from concept_store import ConceptStore
-        store_class = ConceptStore
-    elif os.environ.get('WRITER_SCOPE') == 'motion-presets':
-        from motion_store import MotionStore
-        store_class = MotionStore
-    enabled=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_DELETE','0')
-    preset_enabled=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_PRESET','0')
-    representative=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_PLAN_REPRESENTATIVE','0')
-    portrait=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_PORTRAIT_REPRESENTATIVE','0')
-    idle_plan=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_PLAN_IDLE','0')
-    native_media=os.environ.get('WRITER_WORKFLOW_NATIVE_MEDIA','0')
-    idle_portrait=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_PORTRAIT_IDLE_REFERENCE','0')
-    direction_portrait=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_PORTRAIT_DIRECTION','0')
-    shared_plan=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_PLAN_SHARED','0')
-    npc_folder_delete=os.environ.get('WRITER_WORKFLOW_EXACT_NPC_FOLDER_DELETE','0')
-    if npc_folder_delete=='1' and enabled!='1':raise ValueError('WORKFLOW_NPC_FOLDER_DELETE_SCOPE')
-    flags=(enabled,npc_folder_delete,preset_enabled,representative,portrait,idle_plan,idle_portrait,direction_portrait,native_media,shared_plan)
-    if any(v not in ('0','1') for v in flags) or (
-       '1' in flags and os.environ.get('WRITER_SCOPE')!='npc-owned'):
-        raise ValueError('WORKFLOW_NPC_WRITER_SCOPE')
-    planning_update=os.environ.get('WRITER_WORKFLOW_NPC_PLANNING_UPDATE','0')
-    if planning_update not in ('0','1'):raise ValueError('NPC_PLANNING_UPDATE_OPT_IN')
-    planning_add=os.environ.get('WRITER_WORKFLOW_NPC_PLANNING_ADD','0')
-    if planning_add not in ('0','1') or planning_add=='1' and os.environ.get('WRITER_SCOPE')!='npc-owned':
-        raise ValueError('NPC_PLANNING_ADD_OPT_IN')
-    native_planning=os.environ.get('WRITER_WORKFLOW_INITIAL_NPC_PLANNING_MARKDOWN','0')
-    if native_planning not in ('0','1') or native_planning=='1' and shared_plan!='1':
-        raise ValueError('WORKFLOW_INITIAL_NPC_PLANNING_MARKDOWN_OPT_IN')
-    store=store_class(os.environ['WRITER_ROOT'])
-    bgm=os.environ.get('WRITER_WORKFLOW_BGM','0')
-    if bgm not in ('0','1') or bgm=='1' and os.environ.get('WRITER_SCOPE')!='concept':
-        raise ValueError('WORKFLOW_BGM_WRITER_SCOPE')
-    audio=None
-    if bgm=='1':
-        from workflow_audio_store import AudioResult
-        # One fixed, independently mounted child. Never mount the project root RW.
-        audio=AudioResult(store,'/audio')
-    audio_delete=os.environ.get('WRITER_WORKFLOW_AUDIO_DELETE','0')
-    if audio_delete not in ('0','1') or audio_delete=='1' and audio is None:
-        raise ValueError('WORKFLOW_AUDIO_DELETE_SCOPE')
-    props_flag=os.environ.get('WRITER_WORKFLOW_PROP_PACKAGES','0')
-    if props_flag not in ('0','1') or props_flag=='1' and os.environ.get('WRITER_SCOPE')!='concept':
-        raise ValueError('WORKFLOW_PROP_WRITER_SCOPE')
-    props=None
-    if props_flag=='1':
-        from prop_package_store import PropPackageStore
-        # Linux mountinfo distinguishes same-device bind mounts (ismount does not).
-        mounts=Path('/proc/self/mountinfo').read_text(encoding='utf-8')
-        matches=[line.split(' - ',1)[0].split() for line in mounts.splitlines()]
-        bound=[row for row in matches if len(row)>5 and row[4]=='/props' and 'rw' in row[5].split(',')]
-        if len(bound)!=1:raise ValueError('WORKFLOW_PROP_MOUNT_REQUIRED')
-        props=PropPackageStore('/props')
-    server = ThreadingHTTPServer((os.environ.get('WRITER_BIND', '127.0.0.1'), int(os.environ.get('WRITER_PORT', '8093'))), handler(store, token, workflow_delete=enabled=='1',workflow_preset=preset_enabled=='1',workflow_representative=representative=='1',workflow_portrait=portrait=='1',workflow_idle_plan=idle_plan=='1', workflow_idle_portrait=idle_portrait=='1', workflow_direction_portrait=direction_portrait=='1',workflow_native_media=native_media=='1', workflow_shared_plan=shared_plan=='1',workflow_npc_folder_delete=npc_folder_delete=='1',workflow_npc_planning_update=planning_update=='1',workflow_npc_planning_markdown=native_planning=='1',workflow_npc_planning_add=planning_add=='1',workflow_audio=audio,workflow_audio_delete=audio_delete=='1',workflow_props=props))
-    server.serve_forever()
+    sys.modules['server']=sys.modules[__name__]
+    from scope_registry import bind_scopes,load_registry,unified_handler,writable_mounts
+    # No former one-role entry point or arbitrary root/token selector exists.
+    scopes=bind_scopes(load_registry(),Path('/canonical'),Path('/run/secrets'),verify_mounts=writable_mounts())
+    ThreadingHTTPServer(('0.0.0.0',8093),unified_handler(scopes)).serve_forever()

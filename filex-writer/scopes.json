@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "ngs.filex-writer-scopes.v1",
+  "scopes": [
+    {"id": "npc", "folder": "npcs", "credential": "npc", "profile": "npc"},
+    {"id": "concept", "folder": "concept", "credential": "concept", "profile": "concept"},
+    {"id": "motion", "folder": "motion-presets", "credential": "motion", "profile": "motion"},
+    {"id": "media", "folder": "media-artifacts", "credential": "media", "profile": "media"},
+    {"id": "audio", "folder": "audio", "credential": "concept", "profile": "audio"},
+    {"id": "props", "folder": "props", "credential": "concept", "profile": "props"}
+  ]
+}

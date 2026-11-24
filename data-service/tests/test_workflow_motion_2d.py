@@ -57,7 +57,7 @@ print(s.server_port,flush=True)
 s.serve_forever()
 '''
         proc=subprocess.Popen([sys.executable,'-B','-c',script,str(outlines),str(token)],
-                  cwd=ROOT/'filex-live-roles/motion-presets',stdout=subprocess.PIPE,text=True)
+                  cwd=ROOT/'filex-writer',stdout=subprocess.PIPE,text=True)
         def close():
             proc.terminate()
             proc.wait(timeout=5)
