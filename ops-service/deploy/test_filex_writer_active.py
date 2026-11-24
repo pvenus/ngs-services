@@ -3,7 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock
 
-from filex_writer_apply import SEPARATION_CAP_DIGEST
+from filex_writer_apply import LEGACY_CAP_DIGEST, SEPARATION_CAP_DIGEST
 from prepare_filex_writer import closure, declared_capabilities, git, REPO, SCHEMA
 from prepare_ngs_release import atomic_write, digest, json_bytes
 
@@ -51,7 +51,7 @@ class FilexPrerequisite(unittest.TestCase):
             'observed':{'sha':self.previous,'deployedAt':self.deployed_at}}
         self.runtime = Mock(return_value=True)
         self.profile = declared_capabilities(self.files['server.py'])
-        if self.profile == SEPARATION_CAP_DIGEST:
+        if self.profile != LEGACY_CAP_DIGEST:
             self.applied['capabilitiesSha256'] = self.prepared['capabilitiesSha256'] = self.profile
 
     def write(self,path,payload):

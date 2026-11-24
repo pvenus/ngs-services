@@ -4,8 +4,8 @@ from pathlib import Path
 import re
 import subprocess
 
-from filex_writer_apply import LEGACY_CAP_DIGEST, observed_shape
-from prepare_filex_writer import BASE, CLOSURE, IMAGE_ID, REPO, SCHEMA, closure, declared_capabilities
+from filex_writer_apply import LEGACY_CAP_DIGEST, PROP_CAP_DIGEST, observed_shape
+from prepare_filex_writer import BASE, CLOSURE, PROP_CLOSURE, IMAGE_ID, REPO, SCHEMA, closure, declared_capabilities
 from prepare_ngs_local_once import read_private
 from prepare_ngs_release import DIGEST, REF, SHA, digest, json_load, matches, need, private_directory, shape
 
@@ -56,7 +56,7 @@ def prepared(value, proof):
          and s['schemaVersion'] == SCHEMA and s['repository'] == REPO and s['ref'] == REF
          and s['headSha'] == proof['sha'] and matches(SHA,s['rootTree'])
          and all(matches(NUMBER,s[k]) for k in ('runId','runAttempt'))
-         and type(s['files']) is dict and set(s['files']) == CLOSURE
+         and type(s['files']) is dict and set(s['files']) == (PROP_CLOSURE if proof.get('capabilitiesSha256') == PROP_CAP_DIGEST else CLOSURE)
          and all(matches(DIGEST,v) for v in s['files'].values()), FAIL)
     return s['files']
 
