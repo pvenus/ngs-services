@@ -24,7 +24,7 @@ def pin(v):
          1<=v['revision']<=MAX_REVISION and match(v['sha256'],r'[a-f0-9]{64}'))
     return v
 
-def bound_prop_writer(factory):
+def bound_prop_writer(factory,*,namespace='canonical-files/binari/concept/'):
     routes={WRITER,WRITER+'/head',WRITER+'/read',WRITER+'/asset'}
     def call(path,body):
         need(path in routes)
@@ -35,7 +35,7 @@ def bound_prop_writer(factory):
     def ready():
         with factory() as transport:
             c=transport.capabilities()
-            return c.get('namespace')=='canonical-files/binari/concept/' and c.get('workflowPropPackageV1') is True
+            return c.get('namespace')==namespace and c.get('workflowPropPackageV1') is True
     call.ready=ready
     return call
 

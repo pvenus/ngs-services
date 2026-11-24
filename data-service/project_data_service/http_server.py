@@ -496,6 +496,8 @@ class Handler(DomainHandler):
                         "schemaVersion": self.server.app.store.schema_version()}
                 source=getattr(getattr(self.server,'direct_portrait_pairs',None),'representative_first_source',None)
                 if source is not None:health['oneStopRepresentativePortraitSourceSha256']=source
+                binding=getattr(self.server,'filex_writer_binding_sha256',None)
+                if binding is not None:health['filexWriterScopesSha256']=binding
                 return self.respond(200,health)
             if path == "/api/storage/status" and self.command in ("GET", "HEAD"):
                 return self.respond(200, self.server.app.storage.status())
@@ -606,10 +608,13 @@ class Handler(DomainHandler):
 
 
 def serve(storage_root: Path, host: str, port: int):
+    import os
+    from .filex_writer_binding import CONFIG_ENV, fingerprint
+    writer_binding_sha256=fingerprint() if os.environ.get(CONFIG_ENV) else None
     app = ProjectDataService(storage_root)
     server = ThreadingHTTPServer((host, port), Handler)
     server.app = app
-    import os
+    server.filex_writer_binding_sha256=writer_binding_sha256
     claim_keys=('PDS_WORKFLOW_DELETE_PLANNER_DB','PDS_WORKFLOW_DELETE_PLANNER_DEV','PDS_WORKFLOW_DELETE_PLANNER_INODE')
     if any(key in os.environ for key in claim_keys):
         from .workflow_delete import WorkflowDelete,PrivatePlannerClaim
@@ -641,9 +646,10 @@ def serve(storage_root: Path, host: str, port: int):
     if bgm=='1':
         from .workflow_audio import WorkflowAudio
         if not hasattr(server,'workflow_delete'):raise ValueError('WORKFLOW_BGM_PLANNER_PIN_REQUIRED')
-        server.workflow_audio=WorkflowAudio(app.concept,planner)
+        from .filex_writer_binding import writer
+        server.workflow_audio=WorkflowAudio(app.concept,planner,writer_factory=lambda:writer('audio'))
         from .workflow_audio_separate import WorkflowAudioSeparate
-        server.workflow_audio_separate=WorkflowAudioSeparate(app.concept,planner)
+        server.workflow_audio_separate=WorkflowAudioSeparate(app.concept,planner,writer_factory=lambda:writer('audio'))
     planning_add=os.environ.get('PDS_WORKFLOW_NPC_PLANNING_ADD','0')
     if planning_add not in ('0','1'):raise ValueError('NPC_PLANNING_ADD_OPT_IN')
     if planning_add=='1':
@@ -674,7 +680,8 @@ def serve(storage_root: Path, host: str, port: int):
         if audio_delete=='1':
             from .workflow_audio_delete import ROOT,storage_provider
             if not hasattr(server,'workflow_delete'):raise ValueError('WORKFLOW_AUDIO_DELETE_PLANNER_PIN_REQUIRED')
-            roots[ROOT]=storage_provider(app.concept,planner)
+            from .filex_writer_binding import writer
+            roots[ROOT]=storage_provider(app.concept,planner,writer_factory=lambda:writer('audio'))
         server.single_target_delete=SingleTargetDelete(roots)
     representative_enabled=os.environ.get('PDS_WORKFLOW_PLAN_REPRESENTATIVE','0')
     if representative_enabled not in ('0','1'):raise ValueError('WORKFLOW_REPRESENTATIVE_OPT_IN')

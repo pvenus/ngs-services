@@ -6,6 +6,7 @@ import sqlite3
 from .concept_filex import FilexConcept
 from .database import DataError
 from .filex_cas_transport import AudioPrewriteRejected
+from .filex_writer_binding import AUDIO_NAMESPACE
 from .filex_read import canonical, digest
 from .workflow_audio import MAX_BODY, MAX_WAV, OFFICIAL, PREFIX, REJECTION, SHA, TASK, Rejected, match, need
 from .workflow_delete_claim import ClaimDenied, PrivatePlannerClaim
@@ -33,18 +34,19 @@ def published_song(db,oid, *, derived=False):
 
 
 class WorkflowAudioSeparate:
-    def __init__(self,concept,verifier):
+    def __init__(self,concept,verifier,*,writer_factory=None):
         need(isinstance(concept,FilexConcept) and isinstance(verifier,PrivatePlannerClaim))
         self.concept,self.verifier=concept,verifier
+        self.writer_factory=writer_factory or concept.factory
+        self.writer_namespace=AUDIO_NAMESPACE if writer_factory is not None else 'canonical-files/binari/concept/'
 
-    @staticmethod
-    def writer(tx):
+    def writer(self,tx):
         caps=tx.capabilities()
-        if caps.get('namespace')!='canonical-files/binari/concept/' or caps.get('workflowAudioSeparateV1') is not True:
+        if caps.get('namespace')!=self.writer_namespace or caps.get('workflowAudioSeparateV1') is not True:
             raise ValueError('WORKFLOW_AUDIO_SEPARATE_WRITER_UNAVAILABLE')
 
     def capability(self):
-        with self.verifier.snapshot(),self.concept.factory() as tx:
+        with self.verifier.snapshot(),self.writer_factory() as tx:
             self.writer(tx)
         return {'enabled':True,'schemaVersion':SCHEMA}
 
@@ -87,7 +89,7 @@ class WorkflowAudioSeparate:
                  and type(a['base64']) is str and len(a['base64'])==((a['bytes']+2)//3)*4)
         # Same authenticated Planner read transaction as ordinary audio publication,
         # fencing state changes for the short scoped Filex transaction, not model work.
-        with self.selected(body['claim']) as b,self.concept.factory() as tx:
+        with self.selected(body['claim']) as b,self.writer_factory() as tx:
             self.writer(tx)
             if action=='asset':
                 return tx.audio_separate_asset(WRITER_PATH+'/asset',b,maximum=MAX_WAV)

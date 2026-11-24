@@ -6,17 +6,19 @@ from .filex_read import canonical,digest,private_read,require
 SCOPE=('requestId','attemptId','fencingToken','capability','projectId','targetId','expectedRevision','requestHash')
 MAX_BODY=46*1024*1024
 class Transport:
- def __init__(self,endpoint,token_file):
+ def __init__(self,endpoint,token_file,writer_scope=None):
   u=urllib.parse.urlsplit(endpoint)
   require(u.scheme in ('http','https')and u.hostname and not u.username and not u.password and u.path in ('','/')and not u.query and not u.fragment,'MEDIA_ENDPOINT')
   require(u.scheme=='https'or u.hostname in ('127.0.0.1','localhost','::1'),'MEDIA_TLS_REQUIRED')
+  self.writer_scope=writer_scope
   self.endpoint=endpoint.rstrip('/');self.token=private_read(token_file).decode().strip();require(len(self.token)>=32,'MEDIA_TOKEN')
   class NoRedirect(urllib.request.HTTPRedirectHandler):
    def redirect_request(self,*args,**kwargs):raise ValueError('MEDIA_REDIRECT_DENIED')
   self.op=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
  def __call__(self,method,path,body=None):
   try:
-   req=urllib.request.Request(self.endpoint+path,data=None if body is None else canonical(body),method=method,headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
+   from .filex_writer_binding import scoped_path
+   req=urllib.request.Request(self.endpoint+(scoped_path(self.writer_scope,path) if self.writer_scope else path),data=None if body is None else canonical(body),method=method,headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
    with self.op.open(req,timeout=60)as r:
     require(r.status==200,'MEDIA_REMOTE_STATUS');raw=r.read(MAX_BODY+1)
    require(len(raw)<=MAX_BODY,'MEDIA_RESPONSE_LIMIT');return json.loads(raw)
@@ -29,8 +31,16 @@ class MediaArtifacts:
   self.authority,self.writer,self.token=authority,writer,ingress_token
  @classmethod
  def configured(cls,path):
-  c=json.loads(private_read(path));require(set(c)=={'schemaVersion','enabled','ingressTokenFile','authorityEndpoint','authorityTokenFile','writerEndpoint','writerTokenFile'}and c['schemaVersion']=='pds.media-artifacts.v1'and c['enabled']is True,'MEDIA_CONFIG')
-  return cls(Transport(c['authorityEndpoint'],c['authorityTokenFile']),Transport(c['writerEndpoint'],c['writerTokenFile']),private_read(c['ingressTokenFile']).decode().strip())
+  c=json.loads(private_read(path))
+  base={'schemaVersion','enabled','ingressTokenFile','authorityEndpoint','authorityTokenFile'}
+  require(c['enabled'] is True and ((c['schemaVersion']=='pds.media-artifacts.v2' and set(c)==base) or
+   (c['schemaVersion']=='pds.media-artifacts.v1' and set(c)==base|{'writerEndpoint','writerTokenFile'})),'MEDIA_CONFIG')
+  # The v1 fields are accepted only as ignored deployment metadata during
+  # cutover. No request or fallback can reach the old Filex writer address.
+  from .filex_writer_binding import scope_config
+  out=scope_config('media')
+  return cls(Transport(c['authorityEndpoint'],c['authorityTokenFile']),
+   Transport(out['endpoint'],out['tokenFile'],writer_scope='media'),private_read(c['ingressTokenFile']).decode().strip())
  def authenticated(self,value):return hmac.compare_digest(value or '', 'Bearer '+self.token)
  def receipt_path(self,request,attempt):
   require(all(isinstance(x,str)and re.fullmatch('[A-Za-z0-9][A-Za-z0-9._:-]{0,199}',x)for x in (request,attempt)),'MEDIA_IDS')

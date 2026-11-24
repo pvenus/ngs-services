@@ -235,7 +235,8 @@ def configure_static(server,host,planner,concept,stage_root):
     from .concept_filex import FilexConcept
     from .workflow_prop_package import WorkflowPropPackage,bound_prop_writer
     need(host=='127.0.0.1' and isinstance(concept,FilexConcept))
-    writer=bound_prop_writer(concept.factory)
+    from .filex_writer_binding import writer as connect_writer,PROP_NAMESPACE
+    writer=bound_prop_writer(lambda:connect_writer('props'),namespace=PROP_NAMESPACE)
     authority=RealPropAuthority(PropClaimAuthority(planner),PropStageStore(stage_root),PropDesignContext(concept),writer)
     server.workflow_prop_stage=authority
     server.workflow_prop_package=WorkflowPropPackage(authority,writer)

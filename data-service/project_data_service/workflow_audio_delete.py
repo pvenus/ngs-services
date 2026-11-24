@@ -4,6 +4,7 @@ import json
 
 from .concept_filex import FilexConcept
 from .filex_read import canonical,digest
+from .filex_writer_binding import AUDIO_NAMESPACE
 from .single_target_delete import AuthorizedStorage,ClaimDenied,PATH
 from .workflow_delete_claim import PrivatePlannerClaim,ClaimDenied as PlannerDenied
 from .workflow_audio import OFFICIAL,TASK,SHA,match
@@ -17,14 +18,17 @@ KEY='audio_delete'
 def require(ok):
     if not ok:raise ClaimDenied()
 
-def storage_provider(concept,planner):
+def storage_provider(concept,planner,*,writer_factory=None):
     if not isinstance(concept,FilexConcept) or not isinstance(planner,PrivatePlannerClaim):
         raise ValueError('WORKFLOW_AUDIO_DELETE_AUTHORITY_REQUIRED')
 
+    factory=writer_factory or concept.factory
+    namespace=AUDIO_NAMESPACE if writer_factory is not None else 'canonical-files/binari/concept/'
+
     def ready():
-        with planner.snapshot(),concept.factory() as tx:
+        with planner.snapshot(),factory() as tx:
             cap=tx.capabilities()
-            return cap.get('namespace')=='canonical-files/binari/concept/' and cap.get('workflowAudioDeleteV1') is True
+            return cap.get('namespace')==namespace and cap.get('workflowAudioDeleteV1') is True
 
     @contextmanager
     def authorize(c):
@@ -52,6 +56,6 @@ def storage_provider(concept,planner):
         except PlannerDenied as exc:raise ClaimDenied() from exc
 
     def execute(command):
-        with concept.factory() as tx:return tx.call('POST',PATH,command)
+        with factory() as tx:return tx.call('POST',PATH,command)
 
     return AuthorizedStorage(authorize,execute,ready)

@@ -50,16 +50,21 @@ def payload(value):
          value['text']=='' and type(duration) in (int,float) and 10<=duration<=30)
     return value
 
+from .filex_writer_binding import AUDIO_NAMESPACE
+LEGACY_NAMESPACE='canonical-files/binari/concept/'
+
 class WorkflowAudio:
-    def __init__(self,concept,verifier):
+    def __init__(self,concept,verifier,*,writer_factory=None):
         if not isinstance(concept,FilexConcept) or not isinstance(verifier,PrivatePlannerClaim):
             raise ValueError('WORKFLOW_AUDIO_AUTHORITY_REQUIRED')
         self.concept,self.verifier=concept,verifier
+        self.writer_factory=writer_factory or concept.factory
+        self.writer_namespace=AUDIO_NAMESPACE if writer_factory is not None else LEGACY_NAMESPACE
 
     def capability(self):
-        with self.verifier.snapshot(),self.concept.factory() as t:
+        with self.verifier.snapshot(),self.writer_factory() as t:
             c=t.capabilities()
-            if c.get('namespace')!='canonical-files/binari/concept/' or c.get('workflowAudioResultV1') is not True:
+            if c.get('namespace')!=self.writer_namespace or c.get('workflowAudioResultV1') is not True:
                 raise ValueError('WORKFLOW_AUDIO_WRITER_UNAVAILABLE')
         return {'enabled':True,'schemaVersion':SCHEMA}
 
@@ -94,7 +99,7 @@ class WorkflowAudio:
             if reading:
                 if direct_sha is not None:
                     return {'conceptId':DIRECT,'sectionSha256':direct_sha,'title':'직접 입력','content':concept_text}
-                t=stack.enter_context(self.concept.factory())
+                t=stack.enter_context(self.writer_factory())
                 output=t.call('POST',WRITER_PATH+'/read',{'conceptId':binding['conceptId']})
                 if (type(output) is not dict or set(output)!={'conceptId','sectionSha256','title','content'}
                     or output['conceptId']!=binding['conceptId'] or not match(output['sectionSha256'],SHA)
@@ -111,7 +116,7 @@ class WorkflowAudio:
                  and type(a['base64']) is str and len(a['base64'])==((a['bytes']+2)//3)*4)
             if direct_sha is not None:
                 binding['directConceptSha256']=direct_sha
-            t=stack.enter_context(self.concept.factory())
+            t=stack.enter_context(self.writer_factory())
             started.append(True)
             result=t.call('POST',WRITER_PATH,{'binding':binding,'source':s,'artifact':a})
             if result!={'ok':True,'resultRef':PREFIX+binding['officialRequestId']+'/metadata.json'}:

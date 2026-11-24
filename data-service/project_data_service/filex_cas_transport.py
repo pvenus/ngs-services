@@ -3,6 +3,7 @@ import base64,hashlib,json,urllib.parse,urllib.request,urllib.error
 from http.client import HTTPException
 from pathlib import Path
 from .filex_read import private_read,canonical,require
+from .filex_writer_binding import scoped_path
 CONFIG=Path.home()/'Library/Application Support/NPCGen/pds-filex-cas.json'
 class AudioPrewriteRejected(ValueError):pass
 
@@ -11,6 +12,7 @@ class FilexCASTransport:
   try:c=config if config is not None else json.loads(private_read(CONFIG))
   except FileNotFoundError:raise ValueError('KNOWLEDGE_ATOMIC_CAS_TRANSPORT_REQUIRED')from None
   require(c.get('schemaVersion')=='pds-filex-cas.v1'and c.get('projectId')=='binari'and c.get('enabled')is True,'FILEX_CAS_CONFIG_INVALID')
+  self.writer_scope=c.get('writerScope')
   self.endpoint=c['endpoint'].rstrip('/');u=urllib.parse.urlsplit(self.endpoint)
   require(u.scheme in ('http','https')and bool(u.hostname)and not u.username and not u.password and not u.path and not u.query and not u.fragment,'FILEX_CAS_ENDPOINT_INVALID')
   require(u.hostname in ('127.0.0.1','localhost','::1')or u.scheme=='https','FILEX_CAS_TLS_REQUIRED')
@@ -20,10 +22,11 @@ class FilexCASTransport:
   self.op=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
  def __enter__(self):return self
  def __exit__(self,*args):self.token=None
+ def request_url(self,path):return self.endpoint+(scoped_path(self.writer_scope,path) if self.writer_scope else path)
  def call(self,method,path,body=None,missing=False,*,timeout=60):
   headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}
   try:
-   with self.op.open(urllib.request.Request(self.endpoint+path,data=canonical(body)if body is not None else None,method=method,headers=headers),timeout=timeout)as r:
+   with self.op.open(urllib.request.Request(self.request_url(path),data=canonical(body)if body is not None else None,method=method,headers=headers),timeout=timeout)as r:
     require(r.status==200,'FILEX_CAS_HTTP_ERROR');asset_read=method=='GET'and path.startswith('/v1/asset?')
     limit=24*1024*1024 if method=='POST' and path=='/v1/workflow/props/asset' else 16*1024*1024
     raw=r.read()if asset_read else r.read(limit+1)
@@ -40,7 +43,7 @@ class FilexCASTransport:
  def audio_separate_asset(self,path,binding,*,maximum):
   require(path=='/v1/workflow/audio-separate/asset','FILEX_AUDIO_ASSET_ROUTE')
   headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}
-  req=urllib.request.Request(self.endpoint+path,data=canonical({'binding':binding}),method='POST',headers=headers)
+  req=urllib.request.Request(self.request_url(path),data=canonical({'binding':binding}),method='POST',headers=headers)
   try:
    with self.op.open(req,timeout=15) as r:
     length=r.headers.get_all('Content-Length')

@@ -214,6 +214,10 @@ class FilexCurrentNPC:
             require(not activated, "NPC_FILEX_CONFIG_ROOT_MISMATCH_AFTER_CUTOVER")
             return None  # Independent test/storage instances must never acquire live authority.
         from .npc_ownership import make_transport
+        from .filex_writer_binding import scope_config
+        def factory():
+            connection=scope_config('npc')
+            return make_transport({**connection,'scope':'npc','ownershipMode':config.get('ownershipMode')})
         replacement_reader = None
         if config.get('externalInventoryConfigFile'):
             provider = json.loads(private_read(Path(config['externalInventoryConfigFile'])))
@@ -222,8 +226,8 @@ class FilexCurrentNPC:
                 replacement_reader = client(provider['hostEvidenceSocket'], replacement=True)
         if external_inventory is None and config.get('externalInventoryConfigFile'):
             from .npc_external_provider import configured as inventory_configured
-            external_inventory = inventory_configured(config['externalInventoryConfigFile'], lambda: make_transport(config), host_reader=external_host_reader)
-        return cls(FilexNPCStore(lambda: make_transport(config)), external_inventory=external_inventory, replacement_reader=replacement_reader)
+            external_inventory = inventory_configured(config['externalInventoryConfigFile'], factory, host_reader=external_host_reader)
+        return cls(FilexNPCStore(factory), external_inventory=external_inventory, replacement_reader=replacement_reader)
 
 
 def migration_files(envelope):

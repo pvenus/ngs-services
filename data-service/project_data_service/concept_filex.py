@@ -2,19 +2,12 @@
 The migration utility must provision and verify the initial source before cutover.
 """
 import copy,json
-from pathlib import Path
-from .filex_cas_transport import FilexCASTransport
-from .filex_read import private_read
+from .filex_writer_binding import writer
 from .concept import validate,ROOT
 from .request_primitives import canonical,digest
 from .database import utc_now
 PREFIX='canonical-files/binari/concept/'
-CONFIG=Path.home()/'Library/Application Support/NPCGen/pds-filex-concept-cas.json'
-
-def factory():
- try:config=json.loads(private_read(CONFIG))
- except FileNotFoundError:raise ValueError('CONCEPT_FILEX_NOT_CONFIGURED')from None
- return FilexCASTransport(config)
+def factory():return writer('concept')
 
 def split(envelope):
  document=validate(copy.deepcopy(envelope['document']))

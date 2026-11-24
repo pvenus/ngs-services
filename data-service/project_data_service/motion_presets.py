@@ -1,18 +1,13 @@
 """PDS mediated Filex motion references. No local path fallback or model prompt override."""
 import base64,copy,hashlib,json,re,urllib.parse
-from pathlib import Path
-from .filex_read import require,private_read,digest
-from .filex_cas_transport import FilexCASTransport
+from .filex_read import require,digest
+from .filex_writer_binding import writer
 PREFIX='canonical-files/binari/motion-presets/'
-CONFIG=Path.home()/'Library/Application Support/NPCGen/pds-filex-motion-presets-cas.json'
 ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
 DIRECTION_ORDER=('n','ne','e','se','s','sw','w','nw')
 DIRECTIONS=set(DIRECTION_ORDER)
 WORKFLOW_CAS_TIMEOUT=1.5
-def factory():
- try:c=json.loads(private_read(CONFIG))
- except FileNotFoundError:raise ValueError('MOTION_PRESETS_FILEX_NOT_CONFIGURED')from None
- return FilexCASTransport(c)
+def factory():return writer('motion')
 def validate(p):
  require(isinstance(p,dict)and set(p)-{'variant'}=={'schemaVersion','presetId','posePreset','label','policy','directions'},'MOTION_PRESET_SCHEMA')
  if 'variant'in p:

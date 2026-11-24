@@ -17,7 +17,9 @@ import tempfile
 import zlib
 
 from .filex_read import canonical, digest, private_read
-from .motion_presets import CONFIG, ID, MotionPresets
+from .motion_presets import ID, MotionPresets
+from .filex_cas_transport import FilexCASTransport
+from .filex_writer_binding import scope_config
 from .workflow_delete_claim import ClaimDenied, PrivatePlannerClaim
 
 PATH = '/v1/motion-presets/workflow-convert-2d'
@@ -543,18 +545,16 @@ def configured(verifier,storage_root,host,mode,*,config_path=None,executable=Non
         raise ValueError('MOTION_2D_OPT_IN')
     if mode=='0':
         return None
-    config_path=CONFIG if config_path is None else config_path
     executable=FFPROBE if executable is None else Path(executable)
     try:
         require(host=='127.0.0.1' and isinstance(verifier,PrivatePlannerClaim))
-        config=json.loads(private_read(config_path))
-        require(config.get('projectId')=='binari' and config.get('schemaVersion')=='pds-filex-cas.v1'
-                and config.get('enabled') is True and config.get('endpoint')=='http://127.0.0.1:8096'
-                and Path(config['tokenFile']).is_absolute())
+        config=scope_config('motion',source=config_path)
+        with FilexCASTransport(config):pass  # Verify private credential without contacting Filex on startup.
+        motion=MotionPresets(lambda:FilexCASTransport(scope_config('motion',source=config_path)))
         st=executable.resolve(strict=True).lstat()
         require(stat.S_ISREG(st.st_mode) and st.st_uid in (0,os.getuid()) and st.st_nlink==1
                 and not st.st_mode&0o022)
-        return WorkflowMotion2D(MotionPresets(),verifier,storage_root.resolve()/'workflow-motion-convert-2d',
+        return WorkflowMotion2D(motion,verifier,storage_root.resolve()/'workflow-motion-convert-2d',
                                 FFProbe(executable))
     except (OSError,ValueError,KeyError,TypeError,AttributeError):
         if mode=='1':raise ValueError('MOTION_2D_EXISTING_PORTS_UNAVAILABLE') from None

@@ -107,7 +107,7 @@ class OwnedNPCTransport(NPCTransport):
   import json,urllib.request
   from .filex_read import canonical
   envelope={'metadata':metadata,'guard':self._guard()}
-  req=urllib.request.Request(self.endpoint+'/v1/portrait-assets/register',data=data,method='POST',headers={'Authorization':'Bearer '+self.token,'Content-Type':'image/png','X-Portrait-Metadata':base64.b64encode(canonical(envelope)).decode()})
+  req=urllib.request.Request(self.request_url('/v1/portrait-assets/register'),data=data,method='POST',headers={'Authorization':'Bearer '+self.token,'Content-Type':'image/png','X-Portrait-Metadata':base64.b64encode(canonical(envelope)).decode()})
   try:
    with self.op.open(req,timeout=60)as response:
     require(response.status==200,'PORTRAIT_REGISTER_HTTP');raw=response.read(32769)
