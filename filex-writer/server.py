@@ -368,6 +368,27 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         aid=url.path.removeprefix('/v1/portrait-assets/')
                         return self.reply(200,store.portrait_asset(aid))
                     return self.reply(404,{'error':'NOT_FOUND'})
+                if hasattr(store,'cinematic_publish'):
+                    from media_store import CINEMATIC_ROUTE,CINEMATIC_BODY
+                    routes={CINEMATIC_ROUTE:store.cinematic_publish,
+                            CINEMATIC_ROUTE+'/asset':store.cinematic_source,
+                            CINEMATIC_ROUTE+'/source-status':lambda v:store.cinematic_source(v,status=True),
+                            CINEMATIC_ROUTE+'/result':store.cinematic_result}
+                    action=routes.get(url.path)
+                    if self.command!='POST' or action is None:return self.reply(404,{'error':'NOT_FOUND'})
+                    n=self.headers.get('Content-Length','')
+                    if (url.query or self.headers.get('Origin') is not None or self.headers.get('Transfer-Encoding') is not None or
+                        self.headers.get('Content-Type')!='application/json' or not n.isascii() or not n.isdecimal() or
+                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path==CINEMATIC_ROUTE else 4096)):
+                        raise ValueError('cinematic transport')
+                    def distinct(values):
+                        out=dict(values)
+                        if len(out)!=len(values):raise ValueError('duplicate cinematic key')
+                        return out
+                    self.connection.settimeout(20)
+                    body=self.rfile.read(int(n))
+                    if len(body)!=int(n):raise ValueError('cinematic body incomplete')
+                    return self.reply(200,action(json.loads(body.decode('utf-8'),object_pairs_hook=distinct)))
                 if hasattr(store,'media_publish'):
                     if url.query: raise ValueError('media query')
                     parts=url.path.strip('/').split('/')

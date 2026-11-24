@@ -16,8 +16,11 @@ import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,validateNpcAnim
 import {propGenerateType,propGenerateSchema,validatePropGenerate,propRegenerateType,propRegenerateSchema,validatePropRegenerate,propAnimationType,propAnimationSchema,validatePropAnimation} from './prop-generate-envelope.mjs';
 import {propImageType,propImageSchema,validatePropImage} from './prop-image-envelope.mjs';
 
+import {cinematicType,cinematicSchema,validateCinematic} from './cinematic-envelope.mjs';
+
 const fields=['sourceId','requestType','idempotencyKey','payload'];
 const workflowFamilies=new Map([
+ [cinematicType,{schemas:[cinematicSchema],validate:validateCinematic}],
  [propRegenerateType,{schemas:[propRegenerateSchema],validate:validatePropRegenerate}],
  [propAnimationType,{schemas:[propAnimationSchema],validate:validatePropAnimation}],
  [propGenerateType,{schemas:[propGenerateSchema],validate:validatePropGenerate}],

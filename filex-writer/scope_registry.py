@@ -15,8 +15,8 @@ SCHEMA='ngs.filex-writer-scopes.v1'
 REGISTRY=Path(__file__).with_name('scopes.json')
 IDENT=r'[a-z][a-z0-9-]{0,39}'
 CREDENTIALS=frozenset(('npc','concept','motion','media'))
-PROFILES=frozenset(('npc','concept','motion','media','audio','props'))
-PROFILE_CREDENTIAL=MappingProxyType({'npc':'npc','concept':'concept','motion':'motion','media':'media','audio':'concept','props':'concept'})
+PROFILES=frozenset(('npc','concept','motion','media','audio','props','cinematics'))
+PROFILE_CREDENTIAL=MappingProxyType({'npc':'npc','concept':'concept','motion':'motion','media':'media','audio':'concept','props':'concept','cinematics':'media'})
 RECEIPT_TOKEN=r'(?:[A-Za-z0-9_.:-]|%[a-fA-F0-9]{2}){1,384}'
 HEX=r'[a-f0-9]{64}'
 CAPS='/v1/capabilities'
@@ -51,6 +51,7 @@ _ALLOW=MappingProxyType({
  'media':(_EXACT,frozenset({'/v1/media-artifacts/publish'})),
  'audio':(_EXACT,frozenset(_AUDIO_POST)),
  'props':(_EXACT,frozenset(_PROPS_POST)),
+ 'cinematics':(_EXACT,frozenset('/v1/workflow/cinematics'+p for p in ('','/asset','/source-status','/result'))),
 })
 _DYNAMIC=MappingProxyType({
  'concept':(('GET',r'/v1/requests/'+RECEIPT_TOKEN),),
@@ -98,6 +99,7 @@ def _special_caps(profile,folder):
        'media':{'mediaArtifactsV1':True},
        'audio':{'workflowAudioResultV1':True,'workflowAudioSeparateV1':True,'workflowAudioDeleteV1':True},
        'props':{'workflowPropPackageV1':True},
+       'cinematics':{'workflowCinematicV1':True},
     }
     return {'namespace':CANONICAL_NAMESPACE+folder+'/',**entries[profile]} if profile in entries else None
 
@@ -146,11 +148,11 @@ def bind_scopes(registry, root, credentials, *, verify_mounts=None):
     from concept_store import ConceptStore
     from fenced_store import FencedOwnedNPCStore
     from motion_store import MotionStore
-    from media_store import MediaStore
+    from media_store import MediaStore,CinematicStore
     from workflow_audio_store import AudioResult
     from prop_package_store import PropPackageStore
     constructors={'concept':ConceptStore,'npc':FencedOwnedNPCStore,'motion':MotionStore,
-                  'media':MediaStore,'props':PropPackageStore}
+                  'media':MediaStore,'props':PropPackageStore,'cinematics':CinematicStore}
     stores={r.id:constructors[r.profile](roots[r.id]) for r in registry if r.profile!='audio'}
     for r in registry:
         if r.profile in ('concept','motion'):

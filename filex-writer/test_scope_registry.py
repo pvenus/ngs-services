@@ -33,7 +33,7 @@ class UnifiedFixture(unittest.TestCase):
             with e:self.assertEqual(e.code,status);return e.read()
     def test_one_listener_all_runtime_roles_and_no_legacy_or_cross_scope_fallback(self):
         roles={'npc':('npc','npcs'),'concept':('concept','concept'),'motion':('motion','motion-presets'),
-          'media':('media','media-artifacts'),'audio':('concept','audio'),'props':('concept','props')}
+          'media':('media','media-artifacts'),'audio':('concept','audio'),'props':('concept','props'),'cinematics':('media','cinematics')}
         for key,(auth,folder) in roles.items():
             with self.subTest(key=key):
                 path=f'/v1/scopes/{key}/capabilities'

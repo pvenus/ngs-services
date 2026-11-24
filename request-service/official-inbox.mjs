@@ -19,13 +19,15 @@ import {ensurePendingReasonTable,unsupportedPlannerPolicy} from './pending-unsup
 import {propTypes,propGenerateType,propAnimationType,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable} from './prop-generate-envelope.mjs';
 import {propImageType,propImageUnavailable} from './prop-image-envelope.mjs';
 
+import {cinematicType,cinematicUnavailable} from './cinematic-envelope.mjs';
+
 const error=()=>Error('OFFICIAL_REQUEST_INBOX_PRIVATE_REQUIRED');
 export function validateInboxPath(directory){
  if(typeof directory!=='string'||!isAbsolute(directory)||resolve(directory)!==directory||dirname(directory)===directory)
   throw error();
  return directory;
 }
-export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propMutationsEnabled=false}={}){
+export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propMutationsEnabled=false,cinematicEnabled=false}={}){
  validateInboxPath(directory);
  if(realpathSync(dirname(directory))!==dirname(directory))throw error();
  try{mkdirSync(directory,{mode:0o700});}catch(e){if(e.code!=='EEXIST')throw e;}
@@ -71,15 +73,18 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
   AND ${propGenerateMotionEnabled===true?'1=1':`(request_type NOT IN ('${propGenerateType}','${propTypes[1]}') OR json_extract(payload_json,'$.motion') IS NOT 'subtle')`}
   AND ${propGenerateEnabled===true?'1=1':`request_type<>'${propGenerateType}'`}
   AND ${propImageEnabled===true?'1=1':`request_type<>'${propImageType}'`}
+  AND ${cinematicEnabled===true?'1=1':`request_type<>'${cinematicType}'`}
   AND ${workflowScopeSql}`);
  const localOwnedStatus=db.prepare(`SELECT state FROM official_requests
   WHERE official_request_id=? AND source_id='local' AND project_id='binari' AND ${workflowScopeSql}`);
  const cancelRow=db.prepare(`UPDATE official_requests SET state='cancelled'
   WHERE official_request_id=? AND source_id='local' AND project_id='binari'
-   AND ${workflowScopeSql} AND state='registered'`);
+   AND ${cinematicEnabled===true?'1=1':`request_type<>'${cinematicType}'`}
+  AND ${workflowScopeSql} AND state='registered'`);
  const transition=db.prepare(`UPDATE official_requests SET state=?
   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
-   AND ${workflowScopeSql} AND state=?`);
+   AND ${cinematicEnabled===true?'1=1':`request_type<>'${cinematicType}'`}
+  AND ${workflowScopeSql} AND state=?`);
  function proof(prior,request){
   if(!prior||prior.official_request_id!==officialIdFor(request)||prior.request_type!==request.requestType||
      prior.schema_version!==request.schemaVersion||prior.payload_json!==request.payload||
@@ -90,6 +95,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  function register(request,isSite=false,raw){
    const {sourceId,projectId,requestType:kind,idempotencyKey,payload,payloadSha256,schemaVersion,npcId,npcSlug,categoryId}=request;
+   if(kind===cinematicType&&cinematicEnabled!==true)throw Error(cinematicUnavailable);
    if(propTypes.includes(kind)){
     if(propGenerateEnabled!==true)throw Error(propGenerateUnavailable);
     if(kind!==propGenerateType&&propMutationsEnabled!==true)throw Error(propMutationUnavailable);
@@ -140,7 +146,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  return {
   list:createRequestList(db),
-  workflowList:createWorkflowList(db,{propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propMutationsEnabled}),
+  workflowList:createWorkflowList(db,{propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propMutationsEnabled,cinematicEnabled}),
   register:value=>register(validateOfficialSubmit(value),false,value),
   registerSpace:typeof readSpaceRequest==='function'?request=>register(request,true):undefined,
   cancel(value){

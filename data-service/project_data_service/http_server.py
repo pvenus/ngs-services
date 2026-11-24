@@ -67,6 +67,9 @@ class Handler(DomainHandler):
         from .workflow_motion_2d import ROUTES as motion_2d_routes,serve as motion_2d
         if media_path in motion_2d_routes:return motion_2d(self)
 
+        from .workflow_cinematic import ROUTES as cinematic_routes,serve as workflow_cinematic
+        if media_path in cinematic_routes:return workflow_cinematic(self)
+
         from .workflow_prop_stage import ROUTES as prop_stage_routes,serve as workflow_prop_stage
         if media_path in prop_stage_routes:return workflow_prop_stage(self)
 
@@ -749,6 +752,9 @@ def serve(storage_root: Path, host: str, port: int):
         if not stage_root or not hasattr(server,'workflow_delete'):raise ValueError('PDS_WORKFLOW_PROP_AUTHORITY_REQUIRED')
         configure_static(server,host,planner,app.concept,stage_root,
                          ready_file=os.environ.get('PDS_WORKFLOW_PROP_ANIMATION_READY_FILE'))
+    if host=='127.0.0.1' and hasattr(server,'workflow_delete'):
+        from .workflow_cinematic import WorkflowCinematic
+        server.workflow_cinematic=WorkflowCinematic(planner)
     from .workflow_prop_image import configured as configure_prop_image
     server.workflow_prop_image=configure_prop_image(host,app.concept,
         planner if hasattr(server,'workflow_delete') else None,getattr(server,'media_artifacts',None))

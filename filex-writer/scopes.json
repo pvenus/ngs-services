@@ -6,6 +6,7 @@
     {"id": "motion", "folder": "motion-presets", "credential": "motion", "profile": "motion"},
     {"id": "media", "folder": "media-artifacts", "credential": "media", "profile": "media"},
     {"id": "audio", "folder": "audio", "credential": "concept", "profile": "audio"},
-    {"id": "props", "folder": "props", "credential": "concept", "profile": "props"}
+    {"id": "props", "folder": "props", "credential": "concept", "profile": "props"},
+    {"id": "cinematics", "folder": "cinematics", "credential": "media", "profile": "cinematics"}
   ]
 }
