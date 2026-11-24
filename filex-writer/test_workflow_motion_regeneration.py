@@ -252,3 +252,10 @@ class RegenerationTests(legacy.SelectedTests):
         self.assertEqual(after[2],before[2])
         for f,data in staged:
             self.assertEqual(after[1][f"{self.owner}/assets/animation-sequences/combat/{f['motion']}/{f['direction']}/raw-0.png"],data[0])
+
+
+def load_tests(loader, suite, pattern):
+    # Reuse the canonical fixture setup, but do not run its inherited tests
+    # twice after both fixtures moved to the same canonical suite.
+    import unittest
+    return unittest.TestSuite(RegenerationTests(name) for name in vars(RegenerationTests) if name.startswith('test_'))
