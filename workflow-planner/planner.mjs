@@ -17,6 +17,8 @@ import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit}
 
 import {npcAnimationRegenerateType,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
+import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
+
 export const portraitPixelTaskType='npc.portrait-pixel';
 export const pixelImageStyle='pixel-sprite.v1';
 export const directions=Object.freeze(['n','ne','e','se','s','sw','w','nw']);
@@ -29,10 +31,11 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
- const payload=(row.requestType===npcAnimationRegenerateType?validateNpcAnimationRegenerate:
+ const payload=(row.requestType===propImageType?validatePropImage:
+  row.requestType===npcAnimationRegenerateType?validateNpcAnimationRegenerate:
   row.requestType===motion2DRequestType?validateMotion2D:
   row.requestType===audioDeleteType?validateAudioDelete:
   row.requestType===audioSeparateType?validateAudioSeparate:
@@ -49,6 +52,10 @@ export function buildPlan(row,{pixelPortraits=true}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true){
+ if(row.requestType===propImageType)return {payload,tasks:[{
+  id:'workflow.task.'+sha(canonical([row.officialRequestId,propImageKey])),key:propImageKey,type:propImageType,
+  workerType:'image',dependsOn:null,input:JSON.parse(payload),
+ }]};
  if(row.requestType===npcAnimationRegenerateType){
   const {npcId,motionSelection}=row.payload,tasks=[];
   const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
@@ -199,7 +206,7 @@ function hasExhaustedRegenerationGraph(run,readTasks){
  });
 }
 
-function hasExhaustedAudioSeparation(run,readTasks){
+function hasExhaustedSingleTask(run,readTasks){
  const plan=restoreStoredPlan(run);
  if(!plan||plan.tasks.length!==1)return false;
  const rows=readTasks.all(run.official_request_id,2);
@@ -211,11 +218,14 @@ function hasExhaustedAudioSeparation(run,readTasks){
 // continue to use their existing status behavior.
 const failurePolicies=new Map([
  [npcAnimationRegenerateType,hasExhaustedRegenerationGraph],
- [audioSeparateType,hasExhaustedAudioSeparation],
+ [audioSeparateType,hasExhaustedSingleTask],
+ [propImageType,hasExhaustedSingleTask],
 ]);
 
 export class PlannerStore{
- constructor(path){
+ #propImageEnabled;
+ constructor(path,{propImageEnabled=false}={}){
+  this.#propImageEnabled=propImageEnabled===true;
   this.db=new DatabaseSync(path);
   const names=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
   if(names.some(({name})=>!['workflow_runs','workflow_tasks'].includes(name))){this.db.close();throw Error('WORKFLOW_DATABASE_NOT_DEDICATED');}
@@ -232,6 +242,7 @@ export class PlannerStore{
  }
  stage(row){
   const payload=checkRow(row);
+  if(row.requestType===propImageType&&!this.#propImageEnabled)throw Error(propImageUnavailable);
   this.db.exec('BEGIN IMMEDIATE');
   try{
    const prior=this.db.prepare('SELECT * FROM workflow_runs WHERE official_request_id=?').get(row.officialRequestId);
@@ -250,14 +261,15 @@ export class PlannerStore{
    this.db.exec('COMMIT');return prior===undefined;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
- pending(){return this.db.prepare("SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' ORDER BY registered_at,official_request_id").all();}
+ pending(){return this.db.prepare("SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) ORDER BY registered_at,official_request_id")
+  .all(Number(this.#propImageEnabled),propImageType);}
  acknowledge(id){return this.db.prepare("UPDATE workflow_runs SET state='planned',updated_at=? WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id).changes;}
  conflict(id){this.db.prepare("UPDATE workflow_runs SET state='not_claimable',updated_at=?,reason='WORKFLOW_RS_STATUS_CONFLICT' WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id);}
  terminalReady(){
   const result=[];
   this.db.exec('BEGIN');
   try{
-   const candidates=this.db.prepare(`SELECT r.official_request_id,r.request_type,r.schema_version,r.project_id,r.payload,r.payload_sha256
+   const candidates=this.db.prepare(`SELECT r.official_request_id,r.request_type,r.schema_version,r.project_id,r.payload,r.payload_sha256,r.registered_at
     FROM workflow_runs r
     WHERE r.state='planned' AND r.reason IS NULL
       AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id)
@@ -265,6 +277,11 @@ export class PlannerStore{
     ORDER BY r.registered_at,r.official_request_id`).all();
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    for(const row of candidates){
+    if(row.request_type===propImageType){
+     if(!this.#propImageEnabled)continue;
+     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,2);
+     if(!plan||rows.length!==1||!exactStoredTask(rows[0],plan.tasks[0])||!validPropImageRef(rows[0].result_ref))continue;
+    }
     if(row.request_type===motion2DRequestType){
      let payload;
      try{
@@ -288,10 +305,11 @@ export class PlannerStore{
   this.db.exec('BEGIN');
   try{
    const candidates=this.db.prepare(`SELECT r.* FROM workflow_runs r
-    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?)
+    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?,?)
+      AND (?=1 OR r.request_type<>?)
       AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id
         AND t.status='failed' AND t.retry_count=?)
-    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,WORKFLOW_TASK_MAX_RETRIES);
+    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,propImageType,Number(this.#propImageEnabled),propImageType,WORKFLOW_TASK_MAX_RETRIES);
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    const ready=candidates.filter(run=>failurePolicies.get(run.request_type)(run,evidence))
     .map(({official_request_id,request_type})=>({official_request_id,request_type}));
@@ -299,7 +317,7 @@ export class PlannerStore{
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  terminalFailureAcknowledged(id,requestType){
-  if(!failurePolicies.has(requestType))return 0;
+  if(!failurePolicies.has(requestType)||requestType===propImageType&&!this.#propImageEnabled)return 0;
   return this.db.prepare(`UPDATE workflow_runs SET state='failed',reason='WORKFLOW_TASK_RETRIES_EXHAUSTED',updated_at=?
     WHERE official_request_id=? AND request_type=? AND state='planned' AND reason IS NULL`)
    .run(Date.now(),id,requestType).changes;
@@ -318,8 +336,8 @@ export async function pollOnce(store,rs){
    for(const row of page.requests){
     try{staged+=Number(store.stage(row));}
     catch(e){
-     if(e.message==='WORKFLOW_COMBAT_NOT_SUPPORTED'){unsupported++;continue;}
-     if(!['WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_AUDIO_SEPARATE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
+     if(['WORKFLOW_COMBAT_NOT_SUPPORTED',propImageUnavailable].includes(e.message)){unsupported++;continue;}
+     if(![propImageInvalid,'WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_AUDIO_SEPARATE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
      invalid++;
     }
    }

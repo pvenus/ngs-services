@@ -15,9 +15,12 @@ import {spaceQueueIdPattern,verifiedSpaceRequest} from './space-intake.mjs';
 
 import {unsupportedReason} from './pending-unsupported.mjs';
 
+import {propImageType,propImagePayloadSchema,propImageInvalid,propImageUnavailable} from './prop-image-envelope.mjs';
+
 const version='2025-06-18';
 const maxBody=96*1024;
 const known={
+ [propImageInvalid]:400,[propImageUnavailable]:503,
  REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
  NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID:400,NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID:400,NGS_AUDIO_GENERATE_PAYLOAD_INVALID:400,NGS_AUDIO_DELETE_PAYLOAD_INVALID:400,
  NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID:400,NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID:400,OFFICIAL_MOTION_2D_VARIANT_ALREADY_REGISTERED:409,
@@ -113,6 +116,11 @@ const tool={
   status:{const:'registered'}},required:['officialRequestId','status'],additionalProperties:false},
  annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
 };
+function addPropImage(tool){
+ return {...tool,inputSchema:{...tool.inputSchema,properties:{...tool.inputSchema.properties,
+  requestType:{enum:[...tool.inputSchema.properties.requestType.enum,propImageType]}},
+  oneOf:[...tool.inputSchema.oneOf,{properties:{requestType:{const:propImageType},payload:propImagePayloadSchema}}]}};
+}
 const cancel={
  name:cancelTool,description:'Mark one exact locally registered request cancelled, keeping its record and payload.',
  inputSchema:{type:'object',properties:{officialRequestId:tool.outputSchema.properties.officialRequestId},
@@ -198,7 +206,7 @@ async function body(req){
  if(size!==Number(len))throw Error();
  return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,size)));
 }
-export async function requestMcp(req,res,inbox,{readSpaceRequest}={}){
+export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness}={}){
  if(!allowed(req,req.socket.localPort))return send(res,403,{error:'REQUEST_MCP_LOOPBACK_REQUIRED'});
  if(req.url!=='/mcp')return send(res,404,{error:'NOT_FOUND'});
  if(req.method!=='POST')return send(res,405,{error:'REQUEST_MCP_POST_ONLY'},{Allow:'POST'});
@@ -223,7 +231,8 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest}={}){
   return result(res,id,{protocolVersion:version,capabilities:{tools:{}},serverInfo:{name:'vinus-request-service',version:'1.0.0'}});
  }
  if(method==='ping'&&!Object.keys(params).length)return result(res,id,{});
- if(method==='tools/list'&&!Object.keys(params).length)return result(res,id,{tools:[tool,cancel,list,workflowList,updateStatus,...(readSpaceRequest?[siteToolSchema]:[])]});
+ const ready=async()=>propImageEnabled===true&&(!propImageReadiness||await propImageReadiness()===true);
+ if(method==='tools/list'&&!Object.keys(params).length)return result(res,id,{tools:[await ready()?addPropImage(tool):tool,cancel,list,workflowList,updateStatus,...(readSpaceRequest?[siteToolSchema]:[])]});
  if(method!=='tools/call')return rpcError(res,id,-32601,'Method not found');
  const site=readSpaceRequest&&params.name===siteToolSchema.name;
  const binding=site?['registerSpace','OFFICIAL_REQUEST_SPACE_FAILED']:toolBindings.get(params.name);
@@ -232,6 +241,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest}={}){
   return rpcError(res,id,-32602,'Unknown tool or invalid tool call');
  try{
   const args=site?await verifiedSpaceRequest(params.arguments,readSpaceRequest):params.arguments;
+  if((site||params.name===submitTool)&&args?.requestType===propImageType&&propImageReadiness&&!await ready())throw Error(propImageUnavailable);
   const value=inbox[binding[0]](args);
   return result(res,id,{isError:false,content:text(value),structuredContent:value});
  }catch(err){

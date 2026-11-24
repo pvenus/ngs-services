@@ -4,6 +4,7 @@ import {openOfficialInbox,validateInboxPath} from './official-inbox.mjs';
 import {requestMcp} from './request-mcp.mjs';
 import {startServiceHeartbeat} from './service-heartbeat.mjs';
 import {configureSpaceMachineReader} from './space-machine-reader.mjs';
+import {propImageReady} from './prop-image-readiness.mjs';
 
 export const host='127.0.0.1',port=8770;
 export function configuration(env){
@@ -11,11 +12,11 @@ export function configuration(env){
  const readSpaceRequest=configureSpaceMachineReader(env);
  return {directory,...(readSpaceRequest?{readSpaceRequest}:{})};
 }
-export function createRequestService({directory,readSpaceRequest}){
+export function createRequestService({directory,readSpaceRequest,propImageEnabled=false,propImageReadiness}){
  if(readSpaceRequest!==undefined&&typeof readSpaceRequest!=='function')throw Error('REQUEST_SPACE_INVALID');
- const inbox=openOfficialInbox(directory,{readSpaceRequest});
+ const inbox=openOfficialInbox(directory,{readSpaceRequest,propImageEnabled});
  const server=createServer({headersTimeout:15000,requestTimeout:15000},(req,res)=>{
-  void requestMcp(req,res,inbox,{readSpaceRequest}).catch(()=>{
+  void requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled,propImageReadiness}).catch(()=>{
    if(res.headersSent)return res.destroy();
    const raw=JSON.stringify({error:'OFFICIAL_REQUEST_REGISTER_FAILED'});
    res.writeHead(503,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}).end(raw);
@@ -26,7 +27,7 @@ export function createRequestService({directory,readSpaceRequest}){
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  try{
-  const server=createRequestService(configuration(process.env));
+  const server=createRequestService({...configuration(process.env),propImageEnabled:true,propImageReadiness:propImageReady});
   server.on('error',err=>{
    console.error(err.code==='EADDRINUSE'?'REQUEST_SERVICE_PORT_IN_USE':'REQUEST_SERVICE_START_FAILED');
    server.close();

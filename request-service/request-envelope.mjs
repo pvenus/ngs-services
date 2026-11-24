@@ -13,8 +13,11 @@ import {audioSeparateType,audioSeparateSchema,validateAudioSeparate} from './aud
 
 import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
+import {propImageType,propImageSchema,validatePropImage} from './prop-image-envelope.mjs';
+
 const fields=['sourceId','requestType','idempotencyKey','payload'];
 const workflowFamilies=new Map([
+ [propImageType,{schemas:[propImageSchema],validate:validatePropImage}],
  [npcRequestType,{schemas:oneStopSchemas,validate:validateOneStop}],
  [npcAnimationRegenerateType,{schemas:npcAnimationRegenerateSchemas,validate:validateNpcAnimationRegenerate}],
  [conceptCategoryRequestType,{schemas:[conceptCategorySchema],validate:validateConceptCategory}],

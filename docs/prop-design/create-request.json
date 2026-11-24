@@ -1,0 +1,16 @@
+{
+  "sourceId":"local",
+  "requestType":"concept.category.workflow",
+  "idempotencyKey":"fixture-prop-design-category",
+  "payload":{
+    "schemaVersion":"ngs.concept-category-workflow.v1",
+    "projectId":"binari",
+    "operation":"add",
+    "categoryId":"category.add.26710502f5713d99018b77a29384d5da",
+    "groupId":"group.art-design",
+    "title":"프랍 디자인 설계",
+    "outline":"테스트 프랍 문서의 항목을 작성한다.",
+    "requirements":"격리 fixture 전용 문서 한 개.",
+    "requiredSections":["형태와 식별","재료와 색","상태 사이의 일관성","납품과 검수"]
+  }
+}

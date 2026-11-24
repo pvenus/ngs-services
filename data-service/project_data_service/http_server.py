@@ -67,6 +67,9 @@ class Handler(DomainHandler):
         from .workflow_motion_2d import ROUTES as motion_2d_routes,serve as motion_2d
         if media_path in motion_2d_routes:return motion_2d(self)
 
+        from .workflow_prop_image import ROUTES as prop_image_paths,serve as workflow_prop_image
+        if media_path in prop_image_paths:return workflow_prop_image(self)
+
         from .workflow_audio_separate import PATH as separate_path,serve as audio_separate
         if media_path in (separate_path,separate_path+'/read',separate_path+'/asset'):return audio_separate(self)
 
@@ -725,6 +728,9 @@ def serve(storage_root: Path, host: str, port: int):
     if os.environ.get('PDS_MEDIA_ARTIFACT_CONFIG'):
         from .media_artifacts import MediaArtifacts
         server.media_artifacts=MediaArtifacts.configured(os.environ['PDS_MEDIA_ARTIFACT_CONFIG'])
+    from .workflow_prop_image import configured as configure_prop_image
+    server.workflow_prop_image=configure_prop_image(host,app.concept,
+        planner if hasattr(server,'workflow_delete') else None,getattr(server,'media_artifacts',None))
     owned_opt_in=os.environ.get('PDS_OWNED_OPERATIONS','0')
     if owned_opt_in not in ('0','1'):raise ValueError('OWNED_OPT_IN')
     from .owned_operation_http import configure as configure_owned_operations

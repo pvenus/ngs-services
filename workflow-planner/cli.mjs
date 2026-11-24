@@ -21,7 +21,8 @@ try{
  const fd=openSync(file,constants.O_CREAT|constants.O_RDWR|constants.O_NOFOLLOW|constants.O_NONBLOCK,0o600);
  try{const s=fstatSync(fd);if(!s.isFile()||s.uid!==process.getuid()||s.nlink!==1||(s.mode&0o777)!==0o600)throw Error();}
  finally{closeSync(fd);}
- store=new PlannerStore(file);
+ // Request Service admits prop work only when the canonical PDS capability is ready.
+ store=new PlannerStore(file,{propImageEnabled:true});
 }catch{
  console.error('WORKFLOW_PLANNER_DATABASE_INVALID');process.exit(1);
 }
