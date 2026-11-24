@@ -593,8 +593,25 @@ def main():
     try:
         if len(sys.argv) != 1 or executable != target_directory(control) / "run-once":
             raise ApplyFailure("preflight", "TARGET_INPUT_INVALID")
-        receipt = apply_target(sha, artifact, home, control)
-    except ApplyFailure as error:
+        need(matches(SHA,sha) and matches(DIGEST,artifact), "TARGET_INPUT_INVALID")
+        p=target_directory(control)/"candidate.json"
+        private_file(p,0o600)
+        candidate=json_load(p.read_bytes())
+        if candidate.get('schemaVersion')=='ops.filex-unified-apply-candidate.v1':
+            sys.modules.setdefault('filex_writer_apply',sys.modules[__name__])
+            from filex_unified_runtime import CutoverFailure, apply_managed
+            try:
+                receipt=apply_managed(sha,artifact,home,control)
+            except CutoverFailure as error:
+                phase={'pause_backend':'unload','hold_writers':'unload','select_writer':'selector',
+                       'start_backend':'start','commit':'health'}.get(error.phase,'health')
+                raise ApplyFailure(phase,"TARGET_APPLY_REFUSED",error.rollback) from None
+        else:
+            receipt=apply_target(sha,artifact,home,control)
+    except (ApplyFailure, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as e:
+        if not isinstance(e,ApplyFailure):
+            e=ApplyFailure("preflight",diagnostic(e))
+        error=e
         if matches(SHA, sha):
             sys.stdout.buffer.write(json_bytes({"schemaVersion": "ops.deploy-target-error.v1", "target": TARGET,
                 "sha": sha, "phase": error.phase, "code": error.code, "rollback": error.rollback}))

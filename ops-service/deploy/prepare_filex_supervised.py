@@ -64,7 +64,7 @@ def image_evidence(value, head, policy):
 
 
 def prepare_filex_candidate(github, repo, home, control, head, *, assert_current,
-                            read_prior, docker, prepare_image=prepare):
+                            read_prior, docker, prepare_image=prepare, services=None):
     """Validate prior with a read-only observer, smoke, then register exact manual prep."""
     loaded = config(control)
     if loaded is None:
@@ -77,8 +77,16 @@ def prepare_filex_candidate(github, repo, home, control, head, *, assert_current
     runner = runner_digest(directory)
     need(runner==policy['runnerSha256'], 'FILEX_RUNNER_PIN_MISMATCH')
     assert_current(head)
-    prior = expected_prior(read_prior(home,control),policy)
+    if services is None:
+        prior=expected_prior(read_prior(home,control),policy)
     proof = prepare_image(github,repo,control,policy['base'],docker)
+    from prepare_filex_writer import UNIFIED_CAP_DIGEST
+    if proof.get('capabilitiesSha256') == UNIFIED_CAP_DIGEST:
+        from filex_unified_runtime import prepare_candidate
+        return prepare_candidate(github,repo,home,control,head,policy,loaded,runner,proof,
+                                 assert_current=assert_current,docker=docker,services=services)
+    if services is not None:
+        prior=expected_prior(read_prior(home,control),policy)
     image, archive = image_evidence(proof,head,policy)
     assert_current(head)
     need(docker.verify_image(image) is True, 'FILEX_IMAGE_ID_INVALID')

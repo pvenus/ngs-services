@@ -35,6 +35,7 @@ HELPERS = (
 # Only the private checksum manifest can admit these two mutually dependent
 # helpers; never fall through to names on a Python installation search path.
 FILEX_HELPERS = ('filex_writer_apply','filex_writer_active')
+FILEX_UNIFIED_HELPER = 'filex_unified_runtime'
 
 SERVICES = 'pvenus/ngs-services'
 WORKERS = 'pvenus/ngs-workers'
@@ -143,9 +144,11 @@ class PinnedHelpers(importlib.abc.MetaPathFinder, importlib.abc.Loader):
                 'HELPER_BUNDLE_UNVERIFIED')
         fixed = {name+'.py' for name in HELPERS}
         extras = {name+'.py' for name in FILEX_HELPERS}
-        require(set(manifest['files']) in (fixed,fixed|extras), 'HELPER_BUNDLE_UNVERIFIED')
+        unified={FILEX_UNIFIED_HELPER+'.py'}
+        require(set(manifest['files']) in (fixed,fixed|extras,fixed|extras|unified), 'HELPER_BUNDLE_UNVERIFIED')
         self.by_name = {}
-        for name in (*HELPERS,*(FILEX_HELPERS if extras <= manifest['files'].keys() else ())):
+        for name in (*HELPERS,*(FILEX_HELPERS if extras <= manifest['files'].keys() else ()),
+                     *((FILEX_UNIFIED_HELPER,) if unified <= manifest['files'].keys() else ())):
             path = parent/(name+'.py')
             expected = manifest['files'][path.name]
             raw = read_private(path)
@@ -453,7 +456,7 @@ def run_once(deps, home, control, *, fetch=fetch_git, prior_fetch=fetch_git, hos
                     require(expected==head and main()==head,'MAIN_ADVANCED')
                 assert_current(head)
                 if repo==SERVICES:
-                    filex_git = (head,git)
+                    filex_git = (head,git,ev['verified'])
                     def filex_ready(expected):
                         active = getattr(deps,'filex_active',None)
                         return bool(expected==head and active and active(home,control,git,head) is True)
@@ -497,7 +500,9 @@ def run_once(deps, home, control, *, fetch=fetch_git, prior_fetch=fetch_git, hos
                     SERVICES,Path(root)/'filex-ngs-services',filex_head)
                 def assert_filex_current(expected):
                     require(expected==filex_head and deps.canonical(SERVICES)==filex_head,'MAIN_ADVANCED')
-                receipt = deps.prepare_filex(repo,home,control,filex_head,assert_current=assert_filex_current)
+                options={'services':filex_git[2]} if (getattr(deps,'filex_unified',False)
+                            and filex_git and filex_git[0]==filex_head) else {}
+                receipt = deps.prepare_filex(repo,home,control,filex_head,assert_current=assert_filex_current,**options)
                 require(type(receipt) is dict and receipt.get('target')==FILEX and receipt.get('sha')==filex_head,
                         'GITHUB_TARGET_EVIDENCE_INVALID')
                 states[FILEX] = convert(receipt,filex_head)
@@ -519,7 +524,7 @@ def run_once(deps, home, control, *, fetch=fetch_git, prior_fetch=fetch_git, hos
 
 
 def load_deps(parent):
-    require(all(name not in sys.modules for name in (*HELPERS,*FILEX_HELPERS)), 'HELPER_BUNDLE_UNVERIFIED')
+    require(all(name not in sys.modules for name in (*HELPERS,*FILEX_HELPERS,FILEX_UNIFIED_HELPER)), 'HELPER_BUNDLE_UNVERIFIED')
     # Keep the finder active throughout this single invocation for lazy support
     # imports. Do not put the private helper or candidate directories in sys.path.
     finder = PinnedHelpers(parent)
@@ -536,10 +541,10 @@ def load_deps(parent):
 
     filex_prep = filex_live = None
     if all(name in finder.by_name for name in FILEX_HELPERS):
-        def filex_prep(repo,home,control,head,*,assert_current):
+        def filex_prep(repo,home,control,head,*,assert_current,services=None):
             from filex_writer_apply import filex_prior
             return prepare_filex_candidate(FilexGitHubEvidence(),repo,home,control,head,
-                assert_current=assert_current,read_prior=filex_prior,docker=IsolatedDocker(home))
+                assert_current=assert_current,read_prior=filex_prior,docker=IsolatedDocker(home),services=services)
 
         def filex_live(home,control,repo,head):
             from filex_writer_active import filex_active
@@ -549,7 +554,8 @@ def load_deps(parent):
         local_main=lambda:main_head(KeychainGitHubEvidence()),prepare_services=prepare_service_candidates,
         prepare_workers=prepare_worker_candidates,prepare_relay=prepare_rs_mcp_candidate,
         target_specs=target_specs,loaded_selector=loaded_selector,
-        filex_config=filex_config,prepare_filex=filex_prep,filex_active=filex_live)
+        filex_config=filex_config,prepare_filex=filex_prep,filex_active=filex_live,
+        filex_unified=FILEX_UNIFIED_HELPER in finder.by_name)
 
 
 def main():

@@ -41,6 +41,10 @@ FILES = (
 CLOSURE = {"Dockerfile", *FILES}
 PROP_FILES = ("prop_package_contract.py", "prop_package_store.py")
 PROP_CLOSURE = CLOSURE | set(PROP_FILES)
+UNIFIED_CLOSURE = PROP_CLOSURE | {'scope_registry.py', 'scopes.json'}
+# This discriminator binds smoke and target kind, not the registry itself.
+# The exact registry blob is always separately covered by the source proof.
+UNIFIED_CAP_DIGEST = digest(b'ngs.filex-writer-scopes.v1')
 SCHEMA = "ops.filex-writer-source.v1"
 
 
@@ -63,29 +67,40 @@ def closure(repo, head):
         path = path.decode()
         need(path.startswith(PREFIX), "FILEX_SOURCE_SCOPE_INVALID")
         name = path.removeprefix(PREFIX)
-        if name not in PROP_CLOSURE:
+        if name not in UNIFIED_CLOSURE:
             continue
         mode, kind, oid = flags.decode().split()
         need(mode == "100644" and kind == "blob" and matches(SHA, oid)
              and name not in names, "FILEX_SOURCE_SCOPE_INVALID")
         names[name] = oid
-    need(set(names) in (CLOSURE, PROP_CLOSURE), "FILEX_SOURCE_MISSING")
+    need(set(names) in (CLOSURE, PROP_CLOSURE, UNIFIED_CLOSURE), "FILEX_SOURCE_MISSING")
     blobs = {}
     for name, oid in names.items():
         size = int(git(repo, "cat-file", "-s", oid))
         need(0 < size <= MAX_SOURCE, "FILEX_SOURCE_SIZE_INVALID")
         blobs[name] = git(repo, "cat-file", "blob", oid)
         need(len(blobs[name]) == size, "FILEX_SOURCE_SIZE_INVALID")
-        if name != "Dockerfile":
+        if name.endswith(".py"):
             compile(blobs[name], name, "exec", dont_inherit=True)
     # A changed Dockerfile, privilege assumption, or runtime file requires source review.
+    if set(blobs) == UNIFIED_CLOSURE:
+        from filex_unified_runtime import registry
+        registry(blobs['scopes.json'])
+        need(blobs['Dockerfile']==dockerfile('python:3.12-slim',unified=True),'FILEX_DOCKERFILE_DRIFT')
+        return root, blobs
     scoped = set(blobs) == PROP_CLOSURE
     need(scoped == (declared_capabilities(blobs["server.py"]) == PROP_CAP_DIGEST), "FILEX_SOURCE_CAPABILITIES_INVALID")
     need(blobs["Dockerfile"] == dockerfile("python:3.12-slim", prop=scoped), "FILEX_DOCKERFILE_DRIFT")
     return root, blobs
 
 
-def dockerfile(base, *, prop=False):
+def dockerfile(base, *, prop=False, unified=False):
+    if unified:
+        return (f"FROM {base}\nWORKDIR /app\n"
+                f"COPY server.py scope_registry.py scopes.json {' '.join(FILES[1:] + PROP_FILES)} /app/\n"
+                "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
+                "USER 1000:1000\n"
+                'CMD ["python", "-B", "/app/server.py"]\n').encode()
     return (
         f"FROM {base}\n"
         "WORKDIR /app\n"
@@ -232,6 +247,54 @@ def capability_smoke(profile):
             repr(PROP_ENV if profile == PROP_CAP_DIGEST else {}) + "\n").encode() + SMOKE
 
 
+def unified_smoke(rows):
+    # No deployment secret or Filex host bind is visible to this isolated probe.
+    header = 'SCOPES = ' + repr(rows) + '\n'
+    return (header + '''
+import hashlib,json,os,subprocess,sys,time
+from pathlib import Path
+from urllib.error import HTTPError,URLError
+from urllib.request import Request,urlopen
+CREDENTIALS = {r['credential'] for r in SCOPES}
+tokens = {k:hashlib.sha256(('fixture-' + k).encode()).hexdigest() for k in CREDENTIALS}
+for k,v in tokens.items():
+    p=Path('/run/secrets')/k/'writer_token'
+    fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    with os.fdopen(fd,'w') as f:
+        f.write(v)
+child=subprocess.Popen([sys.executable,'-B','/app/server.py'])
+def probe(path,token=None):
+    req=Request('http://127.0.0.1:8093'+path,headers={'Authorization':'Bearer '+token} if token else {})
+    try:
+        with urlopen(req,timeout=1) as response:
+            return response.status,json.load(response)
+    except HTTPError as error:
+        return error.code,None
+try:
+    last=time.monotonic()+8
+    while time.monotonic()<last:
+        if child.poll() is not None:
+            raise RuntimeError('writer did not start')
+        try:
+            assert probe('/v1/capabilities')[0]==404
+            break
+        except URLError:
+            time.sleep(.1)
+    else:
+        raise RuntimeError('writer did not bind')
+    for r in SCOPES:
+        path='/v1/scopes/'+r['id']+'/capabilities'
+        assert probe(path)[0]==401
+        status,body=probe(path,tokens[r['credential']])
+        assert status==200 and body['namespace']=='canonical-files/binari/'+r['folder']+'/'
+        wrong=next((v for k,v in tokens.items() if k!=r['credential']),None)
+        assert wrong is None or probe(path,wrong)[0]==401
+finally:
+    child.terminate()
+    child.wait(5)
+''').encode()
+
+
 class IsolatedDocker:
     """Fixed Mac backend. Never references a Compose project, tag, or host mount."""
     executable = "/opt/homebrew/bin/docker"
@@ -278,14 +341,23 @@ class IsolatedDocker:
                   "--iidfile", str(iid), str(context), timeout=240)
         image = iid.read_text().strip()
         self.verify_image(image)
+        if capability == UNIFIED_CAP_DIGEST:
+            from filex_unified_runtime import registry
+            rows = registry((context/'scopes.json').read_bytes())
+            tmpfs = ['/canonical/'+row['folder'] for row in rows]
+            tmpfs += ['/run/secrets/'+name for name in sorted({row['credential'] for row in rows})]
+            smoke = unified_smoke(rows)
+        else:
+            tmpfs = ["/"+path for path in (("canonical", "audio", "tmp", "props") if capability == PROP_CAP_DIGEST else ("canonical", "audio", "tmp"))]
+            smoke = capability_smoke(capability)
         try:
             self.call("run", "--rm", "--pull=never", "--cidfile", str(cid), "--network=none",
                       "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                       "--user=501:20", "--memory=256m", "--pids-limit=32",
-                      *sum((("--tmpfs", f"/{path}:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=0700,size=16m")
-                            for path in (("canonical", "audio", "tmp", "props") if capability == PROP_CAP_DIGEST else ("canonical", "audio", "tmp"))), ()),
+                      *sum((("--tmpfs", f"{path}:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=0700,size=16m")
+                            for path in tmpfs), ()) ,
                       "-i", "--entrypoint=/usr/local/bin/python", image, "-B", "-",
-                      data=capability_smoke(capability), timeout=25)
+                      data=smoke, timeout=25)
         except (OSError, ValueError, subprocess.SubprocessError):
             if cid.is_file():
                 fixture_id = cid.read_text().strip()
@@ -327,7 +399,7 @@ def stage(github, repo, control, base, docker):
         tree, sources = closure(repo, head)
         need(tree == proof["rootTree"] and {k: digest(v) for k, v in sources.items()} == proof["files"],
              "FILEX_GIT_PROOF_MISMATCH")
-        profile = declared_capabilities(sources["server.py"])
+        profile = UNIFIED_CAP_DIGEST if "scopes.json" in sources else declared_capabilities(sources["server.py"])
         mark = {"capabilitiesSha256": profile} if profile != LEGACY_CAP_DIGEST else {}
         record_file = root / (head + ".json")
         if os.path.lexists(record_file):
@@ -335,13 +407,13 @@ def stage(github, repo, control, base, docker):
             saved = json_load(record_file.read_bytes())
             need(saved.get("source") == proof and saved.get("provenance") == evidence and saved.get("base") == base
                  and matches(IMAGE_ID, saved.get("imageId"))
-                 and capability_markers(saved, {"capabilitiesSha256"})
+                 and (profile == UNIFIED_CAP_DIGEST or capability_markers(saved, {"capabilitiesSha256"}))
                  and saved.get("capabilitiesSha256") == mark.get("capabilitiesSha256"), "FILEX_EXISTING_CANDIDATE_MISMATCH")
             return saved
         with tempfile.TemporaryDirectory(prefix=".filex-source-", dir=root) as temp:
             context = Path(temp) / "context"
             context.mkdir(mode=0o700)
-            sources["Dockerfile"] = dockerfile(base, prop=profile==PROP_CAP_DIGEST)
+            sources["Dockerfile"] = dockerfile(base, prop=profile==PROP_CAP_DIGEST, unified=profile==UNIFIED_CAP_DIGEST)
             for name, data in sources.items():
                 p = context / name
                 p.write_bytes(data)
