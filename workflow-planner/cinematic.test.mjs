@@ -43,3 +43,32 @@ test('RS remains planned until durable full-scene MP4 proof matches exact source
   assert.equal(store.db.prepare('SELECT reason FROM workflow_runs').get().reason,'RS_COMPLETED');
  }finally{store.close();}
 });
+
+test('PNG sequence graph and completion prove exact authored numeric curves without a postprocess stage',async()=>{
+ const {cinematicSequenceType,cinematicSequenceSchema,cinematicSequenceResultRef}=await import('./cinematic-envelope.mjs');
+ const playback={durationFrames:132,speedCurve:[{frame:0,rate:1/3},{frame:120,rate:0.0000001}],
+  cameraCurve:[{frame:0,x:.5,y:.5,zoom:1},{frame:120,x:.6,y:.4,zoom:2}]};
+ const payload={...p,schemaVersion:cinematicSequenceSchema,playback};
+ const input={...request(payload),requestType:cinematicSequenceType,schemaVersion:cinematicSequenceSchema};
+ const plan=buildPlan(input);
+ assert.deepEqual(plan.tasks.map(t=>[t.key,t.type,t.workerType,t.dependsOn]),
+  [['cinematic_sequence_render','cinematic.sequence.generate.render','animation',null]]);
+ assert.deepEqual(plan.tasks[0].input,{sourceSha256,motionPrompt:p.motionPrompt,playback});
+ const manifest={schemaVersion:'ngs.cinematic-sequence-result.v1',projectId:'binari',officialRequestId:oid,sourceSha256,
+  width:512,height:352,masterFps:24,frameCount:45,frames:Array.from({length:45},(_,i)=>({index:i,sha256:'f'.repeat(64),bytes:1024})),playback};
+ const resultRef=cinematicSequenceResultRef(oid);
+ let proof=null;const store=new PlannerStore(':memory:',{cinematicEnabled:true,readCinematicPublication:async()=>proof});
+ try{
+  store.stage(input);store.acknowledge(oid);
+  store.db.prepare("UPDATE workflow_tasks SET status='completed',result_ref=?").run(resultRef);
+  const evidence=store.terminalReady()[0];
+  assert.equal(evidence.publication.family,'cinematic-sequence');
+  assert.equal(await store.verifyCompletion(evidence),false);
+  proof={ok:true,resultRef,manifest:{...manifest,playback:{...playback,durationFrames:140}}};
+  assert.equal(await store.verifyCompletion(evidence),false);
+  proof={ok:true,resultRef,manifest:{...manifest,frames:manifest.frames.slice(1)}};
+  assert.equal(await store.verifyCompletion(evidence),false);
+  proof={ok:true,resultRef,manifest};
+  assert.equal(await store.verifyCompletion(evidence),true);
+ }finally{store.close();}
+});

@@ -150,3 +150,232 @@ class CinematicStore(Store):
    require(self._read(video,CINEMATIC_MAX)==raw,'cinematic video readback')
    self.write(metadata,wire(m))
    return self._result(oid)
+
+# Native PNG sequences share the cinematic authentication scope. Frames are
+# never written to a visible result path until the whole manifest verifies.
+import math,os,stat
+
+SEQUENCE_ROUTE='/v1/workflow/cinematics-sequence'
+SEQUENCE_MAX_FRAME=4*1024*1024
+SEQUENCE_MAX_TOTAL=64*1024*1024
+SEQUENCE_FRAME_COUNT=45
+SEQUENCE_KEYS={'schemaVersion','projectId','officialRequestId','sourceSha256','width','height',
+               'masterFps','frameCount','frames','playback'}
+
+def sequence_playback(p):
+ require(type(p)is dict and set(p)=={'durationFrames','speedCurve','cameraCurve'},'sequence playback fields')
+ length=p['durationFrames']
+ require(type(length)is int and 1<=length<=1440,'sequence duration')
+ def bounded(n,low,high):
+  return type(n) in (int,float) and low<=n<=high and math.isfinite(n)
+ for name,limits in (('speedCurve',{'rate':(0,4)}),('cameraCurve',{'zoom':(1,3),'x':(0,1),'y':(0,1)})):
+  points=p[name]
+  require(type(points)is list and 1<=len(points)<=128,'sequence playback points')
+  prior=-1
+  for i,pt in enumerate(points):
+   require(type(pt)is dict and set(pt)=={'frame',*limits} and type(pt['frame'])is int and
+    prior<pt['frame']<length and (i>0 or pt['frame']==0) and
+    all(bounded(pt[k],*limits[k]) for k in limits),'sequence playback curve')
+   prior=pt['frame']
+ return p
+
+def seq_frame_meta(value,index=None):
+ require(type(value)is dict and set(value)=={'index','sha256','bytes'} and
+  type(value['index'])is int and 0<=value['index']<SEQUENCE_FRAME_COUNT and
+  (index is None or value['index']==index) and cinematic_match(value['sha256'],CINEMATIC_DIGEST) and
+  type(value['bytes'])is int and 0<value['bytes']<=SEQUENCE_MAX_FRAME,'sequence frame metadata')
+ return value
+
+def seq_manifest(m):
+ require(type(m)is dict and set(m)==SEQUENCE_KEYS and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
+  m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
+  cinematic_match(m['sourceSha256'],CINEMATIC_DIGEST) and type(m['masterFps'])is int and m['masterFps']==24 and
+  type(m['frameCount'])is int and m['frameCount']==SEQUENCE_FRAME_COUNT and
+  all(type(m[k])is int and 128<=m[k]<=512 and m[k]%32==0 for k in ('width','height')) and
+  type(m['frames'])is list and len(m['frames'])==SEQUENCE_FRAME_COUNT,'sequence manifest')
+ require(sum(seq_frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=SEQUENCE_MAX_TOTAL,'sequence byte budget')
+ sequence_playback(m['playback'])
+ return m
+
+def seq_png(raw,line):
+ require(len(raw)==line['bytes'] and sha(raw)==line['sha256'] and len(raw)>=57 and
+  raw[:16]==b'\x89PNG\r\n\x1a\n\0\0\0\rIHDR' and raw[24:29]==b'\x08\x02\0\0\0','sequence RGB integrity')
+ w,h=struct.unpack_from('>II',raw,16)
+ require(all(128<=v<=512 and v%32==0 for v in (w,h)),'sequence geometry')
+ png(raw)
+ at=8
+ while at<len(raw):
+  n,kind=struct.unpack_from('>I4s',raw,at)
+  require(kind not in (b'acTL',b'fcTL',b'fdAT',b'tRNS'),'sequence frame must be still RGB')
+  at+=12+n
+ return w,h
+
+def seq_sync_dir(p):
+ fd=os.open(p,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+ try:os.fsync(fd)
+ finally:os.close(fd)
+
+class CinematicSequenceStore(CinematicStore):
+ def _seq_dir(self,name):
+  base=self.root/'sequences'
+  require(not base.is_symlink(),'sequence scope folder')
+  child=base/name
+  require(not child.is_symlink(),'sequence result folder')
+  return child
+ def _seq_frames(self,root):
+  p=root/'frames'
+  require(not p.is_symlink(),'sequence frames folder')
+  return p
+ def _seq_verify_frames(self,root,m):
+  folder=self._seq_frames(root)
+  expected={f'{row["index"]:04}.png' for row in m['frames']}
+  require({p.name for p in folder.iterdir()}==expected,'sequence files incomplete')
+  for row in m['frames']:
+   raw=self._read(folder/f'{row["index"]:04}.png',SEQUENCE_MAX_FRAME)
+   require(seq_png(raw,row)==(m['width'],m['height']),'sequence frame geometry mismatch')
+ def _seq_result(self,oid):
+  require(cinematic_match(oid,CINEMATIC_ID),'sequence result id')
+  folder=self._seq_dir(oid)
+  raw=self._read(folder/'manifest.json',64*1024)
+  m=seq_manifest(json.loads(raw))
+  require(m['officialRequestId']==oid and wire(m)==raw,'sequence receipt integrity')
+  self._seq_verify_frames(folder,m)
+  return m
+ def cinematic_sequence_result(self,p):
+  require(type(p)is dict and set(p)=={'officialRequestId'},'sequence result request')
+  with self.lock():return self._seq_result(p['officialRequestId'])
+ def cinematic_sequence_frame(self,p):
+  require(type(p)is dict and set(p)=={'officialRequestId','frame'} and cinematic_match(p['officialRequestId'],CINEMATIC_ID),'sequence frame request')
+  oid=p['officialRequestId']; frame=p['frame']
+  require(type(frame)is dict and set(frame)=={'index','sha256','bytes','base64'} and type(frame['base64'])is str and
+   len(frame['base64'])<=4*((SEQUENCE_MAX_FRAME+2)//3),'sequence frame packet')
+  meta=seq_frame_meta({k:v for k,v in frame.items() if k!='base64'})
+  data=base64.b64decode(frame['base64'],validate=True)
+  seq_png(data,meta)
+  index=meta['index']; name=f'{index:04}.png'
+  with self.lock():
+   final=self._seq_dir(oid)
+   if final.exists():
+    # Replayed frame acknowledgements validate just that immutable frame.
+    raw=self._read(final/'manifest.json',64*1024)
+    m=seq_manifest(json.loads(raw))
+    require(wire(m)==raw and m['officialRequestId']==oid,'sequence receipt integrity')
+    if m['frames'][index]!=meta or self._read(self._seq_frames(final)/name,SEQUENCE_MAX_FRAME)!=data:
+     raise Conflict('immutable sequence frame')
+   else:
+    stage=self._seq_dir('.staged-'+oid)
+    folder=self._seq_frames(stage); dest=folder/name
+    if dest.exists() or dest.is_symlink():
+     if self._read(dest,SEQUENCE_MAX_FRAME)!=data:raise Conflict('sequence staged frame changed')
+    else:
+     saved=0
+     if folder.exists():
+      for f in folder.iterdir():
+       n=f.lstat()
+       require(re.fullmatch(r'00(?:[0-3][0-9]|4[0-4])\.png',f.name) and stat.S_ISREG(n.st_mode) and n.st_nlink==1 and
+        0<n.st_size<=SEQUENCE_MAX_FRAME,'sequence stage integrity')
+       saved+=n.st_size
+     require(saved+len(data)<=SEQUENCE_MAX_TOTAL,'sequence stage byte budget')
+     self.write(dest,data)
+     require(self._read(dest,SEQUENCE_MAX_FRAME)==data,'sequence stage readback')
+   return {'ok':True,'index':index,'sha256':meta['sha256']}
+ def cinematic_sequence_publish(self,p):
+  require(type(p)is dict and set(p)=={'manifest'},'sequence publish request')
+  manifest=seq_manifest(p['manifest']);oid=manifest['officialRequestId']
+  with self.lock():
+   final=self._seq_dir(oid)
+   if final.exists():
+    if self._seq_result(oid)!=manifest:raise Conflict('immutable sequence manifest')
+    return manifest
+   stage=self._seq_dir('.staged-'+oid)
+   self._seq_verify_frames(stage,manifest)
+   self.write(stage/'manifest.json',wire(manifest))
+   require(self._read(stage/'manifest.json',64*1024)==wire(manifest),'sequence pre-publication manifest readback')
+   # The rename is the single visibility boundary. Its source and destination
+   # are siblings in the same controlled mount. Folders are committed once.
+   os.rename(stage,final)
+   seq_sync_dir(final.parent)
+   return self._seq_result(oid)
+
+PLAYBACK_ROUTE='/v1/workflow/cinematics-playback'
+PLAYBACK_SCHEMA='ngs.cinematic-playback-state.v1'
+PLAYBACK_LIMIT=64*1024
+MAX_SAFE_INTEGER=2**53-1
+
+def playback_state(value,oid):
+ require(type(value)is dict and set(value)=={'schemaVersion','projectId','sequenceId','revision','playback'} and
+  value['schemaVersion']==PLAYBACK_SCHEMA and value['projectId']=='binari' and value['sequenceId']==oid and
+  type(value['revision'])is int and 1<=value['revision']<=MAX_SAFE_INTEGER,'playback state')
+ sequence_playback(value['playback'])
+ return value
+
+def playback_edit(value):
+ require(type(value)is dict and set(value)=={'officialRequestId','sequenceId','expectedRevision','playback'} and
+  all(cinematic_match(value[k],CINEMATIC_ID) for k in ('officialRequestId','sequenceId')) and
+  type(value['expectedRevision'])is int and 0<=value['expectedRevision']<MAX_SAFE_INTEGER,'playback edit fields')
+ sequence_playback(value['playback'])
+ return value
+
+class CinematicPlaybackStore(CinematicSequenceStore):
+ def _playback_base(self,oid):
+  require(cinematic_match(oid,CINEMATIC_ID),'playback sequence id')
+  folder=self._seq_dir(oid)
+  raw=self._read(folder/'manifest.json',64*1024)
+  m=seq_manifest(json.loads(raw))
+  require(m['officialRequestId']==oid and wire(m)==raw,'playback original manifest integrity')
+  return folder,m
+ def _playback_current(self,folder,manifest):
+  oid=manifest['officialRequestId'];path=folder/'timeline.json'
+  try:raw=self._read(path,PLAYBACK_LIMIT)
+  except FileNotFoundError:return {'revision':0,'playback':manifest['playback']}
+  state=playback_state(json.loads(raw),oid)
+  require(wire(state)==raw,'playback state integrity')
+  return state
+ def _playback_plan(self,edit,folder):
+  rev=edit['expectedRevision']+1
+  state={'schemaVersion':PLAYBACK_SCHEMA,'projectId':'binari','sequenceId':edit['sequenceId'],
+         'revision':rev,'playback':edit['playback']}
+  receipts=folder/'.playback-receipts'; require(not receipts.is_symlink(),'playback receipt directory')
+  entry=receipts/(str(rev)+'.json')
+  receipt={'officialRequestId':edit['officialRequestId'],'state':state}
+  return state,entry,receipt
+ def cinematic_playback_target(self,packet):
+  require(type(packet)is dict and set(packet)=={'sequenceId','expectedRevision'} and
+   type(packet['expectedRevision'])is int and 0<=packet['expectedRevision']<MAX_SAFE_INTEGER,'playback target')
+  with self.lock():
+   folder,m=self._playback_base(packet['sequenceId'])
+   current=self._playback_current(folder,m)
+   if current['revision']!=packet['expectedRevision']:raise Conflict('playback target moved')
+   return {'ok':True,'sequenceId':packet['sequenceId'],'revision':current['revision']}
+ def cinematic_playback_update(self,packet):
+  edit=playback_edit(packet)
+  with self.lock():
+   folder,m=self._playback_base(edit['sequenceId'])
+   current=self._playback_current(folder,m)
+   state,entry,receipt=self._playback_plan(edit,folder);frozen=wire(receipt)
+   # Freeze the winning update before advancing the public state. A competing
+   # request cannot take this revision after an interrupted write. Retry of
+   # the owning request either continues or returns its immutable receipt.
+   if entry.exists() or entry.is_symlink():
+    if self._read(entry,PLAYBACK_LIMIT)!=frozen:raise Conflict('playback revision owned by another request')
+   elif current['revision']!=edit['expectedRevision']:
+    raise Conflict('playback update stale')
+   else:self.write(entry,frozen)
+   if current['revision']==edit['expectedRevision']:
+    self.write(folder/'timeline.json',wire(state))
+    require(self._playback_current(folder,m)==state,'playback durable write')
+   else:
+    require(current['revision']>=state['revision'] and
+            (current['revision']>state['revision'] or current==state),'playback receipt not committed')
+   require(self._read(entry,PLAYBACK_LIMIT)==frozen,'playback receipt readback')
+   return state
+ def cinematic_playback_result(self,packet):
+  edit=playback_edit(packet)
+  with self.lock():
+   folder,m=self._playback_base(edit['sequenceId'])
+   state,entry,receipt=self._playback_plan(edit,folder)
+   current=self._playback_current(folder,m)
+   require(current['revision']>=state['revision'] and
+    (current['revision']>state['revision'] or current==state) and
+    self._read(entry,PLAYBACK_LIMIT)==wire(receipt),'playback result evidence')
+   return state

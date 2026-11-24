@@ -19,7 +19,7 @@ import {ensurePendingReasonTable,unsupportedPlannerPolicy} from './pending-unsup
 import {propTypes,propGenerateType,propAnimationType,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable} from './prop-generate-envelope.mjs';
 import {propImageType,propImageUnavailable} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicUnavailable} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicSequenceType,cinematicUnavailable,cinematicPlaybackType} from './cinematic-envelope.mjs';
 
 const error=()=>Error('OFFICIAL_REQUEST_INBOX_PRIVATE_REQUIRED');
 export function validateInboxPath(directory){
@@ -73,17 +73,17 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
   AND ${propGenerateMotionEnabled===true?'1=1':`(request_type NOT IN ('${propGenerateType}','${propTypes[1]}') OR json_extract(payload_json,'$.motion') IS NOT 'subtle')`}
   AND ${propGenerateEnabled===true?'1=1':`request_type<>'${propGenerateType}'`}
   AND ${propImageEnabled===true?'1=1':`request_type<>'${propImageType}'`}
-  AND ${cinematicEnabled===true?'1=1':`request_type<>'${cinematicType}'`}
+  AND ${cinematicEnabled===true?'1=1':`request_type NOT IN ('${cinematicType}','${cinematicSequenceType}','${cinematicPlaybackType}')`}
   AND ${workflowScopeSql}`);
  const localOwnedStatus=db.prepare(`SELECT state FROM official_requests
   WHERE official_request_id=? AND source_id='local' AND project_id='binari' AND ${workflowScopeSql}`);
  const cancelRow=db.prepare(`UPDATE official_requests SET state='cancelled'
   WHERE official_request_id=? AND source_id='local' AND project_id='binari'
-   AND ${cinematicEnabled===true?'1=1':`request_type<>'${cinematicType}'`}
+   AND ${cinematicEnabled===true?'1=1':`request_type NOT IN ('${cinematicType}','${cinematicSequenceType}','${cinematicPlaybackType}')`}
   AND ${workflowScopeSql} AND state='registered'`);
  const transition=db.prepare(`UPDATE official_requests SET state=?
   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
-   AND ${cinematicEnabled===true?'1=1':`request_type<>'${cinematicType}'`}
+   AND ${cinematicEnabled===true?'1=1':`request_type NOT IN ('${cinematicType}','${cinematicSequenceType}','${cinematicPlaybackType}')`}
   AND ${workflowScopeSql} AND state=?`);
  function proof(prior,request){
   if(!prior||prior.official_request_id!==officialIdFor(request)||prior.request_type!==request.requestType||
@@ -95,7 +95,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  function register(request,isSite=false,raw){
    const {sourceId,projectId,requestType:kind,idempotencyKey,payload,payloadSha256,schemaVersion,npcId,npcSlug,categoryId}=request;
-   if(kind===cinematicType&&cinematicEnabled!==true)throw Error(cinematicUnavailable);
+   if([cinematicType,cinematicSequenceType,cinematicPlaybackType].includes(kind)&&cinematicEnabled!==true)throw Error(cinematicUnavailable);
    if(propTypes.includes(kind)){
     if(propGenerateEnabled!==true)throw Error(propGenerateUnavailable);
     if(kind!==propGenerateType&&propMutationsEnabled!==true)throw Error(propMutationUnavailable);

@@ -32,3 +32,34 @@ published files to NGS Local/Space.
 uses `ngs.cinematic-result.v1` with the exact official ID, project ID, source/output digests,
 byte count, MIME, width, height, FPS, and frame count. UI should only show playback when both
 replica files are present and the video matches the sidecar.
+
+## Native PNG sequences (new requests)
+
+The Local/Space authoring UI now submits `cinematic.sequence.generate` with
+`ngs.cinematic-sequence-generate.v1`: the same immutable source SHA and motion
+prompt, plus `playback`. The ordinary official Planner has one animation task.
+The worker sends no MP4 and performs no masking, interpolation, or encoder
+conversion. Each of the 45 native RGB PNG frames is verified separately; the
+hidden stage is bounded (4 MiB per PNG, 64 MiB total) and made visible via one
+directory rename only after the whole digest-pinned manifest verifies.
+`cinematics/sequences/<officialRequestId>/manifest.json` is
+`ngs.cinematic-sequence-result.v1`; its frame descriptors index the exact bytes
+under `frames/0000.png` through `frames/0044.png`. The 24 fps native rate is
+independent of playback. The legacy MP4 scan/read and already-registered
+jobs remain supported; production Request Service no longer admits new MP4 jobs.
+
+Both speed and camera curves use integer presentation frames from 0 (maximum
+duration 1440 frames). Rates 0–4 and normalized camera focus plus 1–3 zoom
+are authored values. The first point is at 0 and successive points strictly
+ascend within the duration. Each curve has at most 128 points. This metadata is
+passed with the official request, not interpreted by the generation model.
+
+`cinematic.playback.update` applies a checked revision to an already committed
+sequence without a GPU or any image writes. The update accepts exactly the
+sequence ID, expected revision, and validated playback. The immutable
+manifest is revision 0 until the first edit. The canonical mutable JSON
+`timeline.json` is `ngs.cinematic-playback-state.v1` and increments once per
+approved edit. Already-committed idempotent retries read their immutable
+receipt, and stale/competing edits return an explicit conflict. A downloaded
+JSON file edited by the user is submitted via the same typed request rather
+than written directly to canonical storage.

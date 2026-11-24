@@ -22,8 +22,8 @@ import {buildPropGeneratePlan,exactPropTask,isPropRef,propCompletionLimit} from 
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic} from './cinematic-envelope.mjs';
-import {verifyCinematicReadback} from './cinematic-readback.mjs';
+import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate} from './cinematic-envelope.mjs';
+import {verifyCinematicReadback,verifyCinematicSequenceReadback,verifyCinematicPlaybackReadback} from './cinematic-readback.mjs';
 
 export const portraitPixelTaskType='npc.portrait-pixel';
 export const pixelImageStyle='pixel-sprite.v1';
@@ -37,11 +37,13 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,cinematicType,...propTypes].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,cinematicType,cinematicSequenceType,cinematicPlaybackType,...propTypes].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
  const payload=(Object.hasOwn(propValidator,row.requestType)?propValidator[row.requestType]:row.requestType===propImageType?validatePropImage:
   row.requestType===cinematicType?validateCinematic:
+  row.requestType===cinematicSequenceType?validateCinematicSequence:
+  row.requestType===cinematicPlaybackType?validateCinematicPlaybackUpdate:
   row.requestType===npcAnimationRegenerateType?validateNpcAnimationRegenerate:
   row.requestType===motion2DRequestType?validateMotion2D:
   row.requestType===audioDeleteType?validateAudioDelete:
@@ -59,6 +61,16 @@ export function buildPlan(row,{pixelPortraits=true}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true){
+ if(row.requestType===cinematicPlaybackType){
+  const {sequenceId,expectedRevision,playback}=row.payload;
+  return {payload,tasks:[{id:'workflow.task.'+sha(canonical([row.officialRequestId,cinematicPlaybackTask])),
+   key:cinematicPlaybackTask,type:cinematicPlaybackType,workerType:'file',dependsOn:null,input:{sequenceId,expectedRevision,playback}}]};
+ }
+ if(row.requestType===cinematicSequenceType){
+  const {sourceSha256,motionPrompt,playback}=row.payload;
+  return {payload,tasks:[{id:'workflow.task.'+sha(canonical([row.officialRequestId,cinematicSequenceTask])),
+   key:cinematicSequenceTask,type:cinematicSequenceTaskType,workerType:'animation',dependsOn:null,input:{sourceSha256,motionPrompt,playback}}]};
+ }
  if(row.requestType===cinematicType){
   const {sourceSha256,motionPrompt}=row.payload;
   return {payload,tasks:[{id:'workflow.task.'+sha(canonical([row.officialRequestId,cinematicTask])),
@@ -249,6 +261,8 @@ const failurePolicies=new Map([
  [audioSeparateType,hasExhaustedSingleTask],
  [propImageType,hasExhaustedSingleTask],
  [cinematicType,hasExhaustedSingleTask],
+ [cinematicSequenceType,hasExhaustedSingleTask],
+ [cinematicPlaybackType,hasExhaustedSingleTask],
  ...propTypes.map(type=>[type,hasExhaustedPropGraph]),
 ]);
 
@@ -293,7 +307,7 @@ export class PlannerStore{
    if((row.requestType===propAnimationType?!this.#propAnimationEnabled:row.payload.motion==='subtle'&&!this.#propGenerateMotionEnabled))throw Error(propGenerateMotionUnavailable);
   }
   if(row.requestType===propImageType&&!this.#propImageEnabled)throw Error(propImageUnavailable);
-  if(row.requestType===cinematicType&&!this.#cinematicEnabled)throw Error(cinematicUnavailable);
+  if([cinematicType,cinematicSequenceType,cinematicPlaybackType].includes(row.requestType)&&!this.#cinematicEnabled)throw Error(cinematicUnavailable);
   this.db.exec('BEGIN IMMEDIATE');
   try{
    const prior=this.db.prepare('SELECT * FROM workflow_runs WHERE official_request_id=?').get(row.officialRequestId);
@@ -321,9 +335,9 @@ export class PlannerStore{
    Number(this.#propMutationsEnabled)+"=1 OR "+type+"='"+propGenerateType+"') AND ("+
    motion+")))";
  }
- pending(){return this.db.prepare( `SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) AND (?=1 OR request_type<>?) AND
+ pending(){return this.db.prepare( `SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) AND (?=1 OR request_type NOT IN (?,?,?)) AND
    ${this.#propSql('request_type','payload')} ORDER BY registered_at,official_request_id`)
-  .all(Number(this.#propImageEnabled),propImageType,Number(this.#cinematicEnabled),cinematicType);}
+  .all(Number(this.#propImageEnabled),propImageType,Number(this.#cinematicEnabled),cinematicType,cinematicSequenceType,cinematicPlaybackType);}
  acknowledge(id){return this.db.prepare("UPDATE workflow_runs SET state='planned',updated_at=? WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id).changes;}
  conflict(id){this.db.prepare("UPDATE workflow_runs SET state='not_claimable',updated_at=?,reason='WORKFLOW_RS_STATUS_CONFLICT' WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id);}
  terminalReady(){
@@ -338,13 +352,25 @@ export class PlannerStore{
     ORDER BY r.registered_at,r.official_request_id`).all();
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    for(const row of candidates){
-    if(row.request_type===cinematicType){
+    if(row.request_type===cinematicPlaybackType){
      if(!this.#cinematicEnabled)continue;
      const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,2);
-     const resultRef=cinematicResultRef(row.official_request_id);
+     if(!plan||rows.length!==1||!exactStoredTask(rows[0],plan.tasks[0]))continue;
+     const resultRef=cinematicPlaybackResultRef(plan.tasks[0].input.sequenceId);
+     if(rows[0].result_ref!==resultRef)continue;
+     result.push({official_request_id:row.official_request_id,publication:{
+      family:'cinematic-playback',officialRequestId:row.official_request_id,resultRef,...plan.tasks[0].input}});
+     continue;
+    }
+    if([cinematicType,cinematicSequenceType].includes(row.request_type)){
+     if(!this.#cinematicEnabled)continue;
+     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,2);
+     const sequence=row.request_type===cinematicSequenceType;
+     const resultRef=(sequence?cinematicSequenceResultRef:cinematicResultRef)(row.official_request_id);
      if(!plan||rows.length!==1||!exactStoredTask(rows[0],plan.tasks[0])||rows[0].result_ref!==resultRef)continue;
      result.push({official_request_id:row.official_request_id,publication:{
-      family:'cinematic',officialRequestId:row.official_request_id,resultRef,sourceSha256:plan.tasks[0].input.sourceSha256}});
+      family:sequence?'cinematic-sequence':'cinematic',officialRequestId:row.official_request_id,resultRef,sourceSha256:plan.tasks[0].input.sourceSha256,
+      ...(sequence?{playback:plan.tasks[0].input.playback}:{})}});
      continue;
     }
     if(propTypes.includes(row.request_type)){
@@ -379,9 +405,11 @@ export class PlannerStore{
  }
  async verifyCompletion({publication}){
   if(!publication)return true;
-  if(publication.family==='cinematic'){
+  if(['cinematic','cinematic-sequence','cinematic-playback'].includes(publication.family)){
    if(!this.#cinematicEnabled||typeof this.#readCinematicPublication!=='function')return false;
-   try{return verifyCinematicReadback(publication,await this.#readCinematicPublication(publication));}catch{return false;}
+   try{const verify=publication.family==='cinematic-sequence'?verifyCinematicSequenceReadback:
+      publication.family==='cinematic-playback'?verifyCinematicPlaybackReadback:verifyCinematicReadback;
+    return verify(publication,await this.#readCinematicPublication(publication));}catch{return false;}
   }
   if(!this.#propGenerateEnabled)return false;
   // Independent authenticated read; the immutable receipt/manifests are
@@ -396,12 +424,12 @@ export class PlannerStore{
   this.db.exec('BEGIN');
   try{
    const candidates=this.db.prepare(`SELECT r.* FROM workflow_runs r
-    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?,?,?,?,?,?)
-      AND (?=1 OR r.request_type<>?) AND (?=1 OR r.request_type<>?)
+    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?,?,?,?,?,?,?,?)
+      AND (?=1 OR r.request_type<>?) AND (?=1 OR r.request_type NOT IN (?,?,?))
       AND ${this.#propSql('r.request_type','r.payload')}
       AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id
         AND t.status='failed' AND t.retry_count=?)
-    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,propImageType,cinematicType,...propTypes,Number(this.#propImageEnabled),propImageType,Number(this.#cinematicEnabled),cinematicType,WORKFLOW_TASK_MAX_RETRIES);
+    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,propImageType,cinematicType,cinematicSequenceType,cinematicPlaybackType,...propTypes,Number(this.#propImageEnabled),propImageType,Number(this.#cinematicEnabled),cinematicType,cinematicSequenceType,cinematicPlaybackType,WORKFLOW_TASK_MAX_RETRIES);
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    const ready=candidates.filter(run=>failurePolicies.get(run.request_type)(run,evidence))
     .map(({official_request_id,request_type})=>({official_request_id,request_type}));
@@ -409,7 +437,7 @@ export class PlannerStore{
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  terminalFailureAcknowledged(id,requestType){
-  if(!failurePolicies.has(requestType)||propTypes.includes(requestType)&&!this.#propGenerateEnabled||requestType===propImageType&&!this.#propImageEnabled||requestType===cinematicType&&!this.#cinematicEnabled)return 0;
+  if(!failurePolicies.has(requestType)||propTypes.includes(requestType)&&!this.#propGenerateEnabled||requestType===propImageType&&!this.#propImageEnabled||[cinematicType,cinematicSequenceType,cinematicPlaybackType].includes(requestType)&&!this.#cinematicEnabled)return 0;
   return this.db.prepare(`UPDATE workflow_runs SET state='failed',reason='WORKFLOW_TASK_RETRIES_EXHAUSTED',updated_at=?
     WHERE official_request_id=? AND request_type=? AND state='planned' AND reason IS NULL`)
    .run(Date.now(),id,requestType).changes;

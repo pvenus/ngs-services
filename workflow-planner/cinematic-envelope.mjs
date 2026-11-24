@@ -2,6 +2,7 @@
 export const cinematicType='cinematic.generate',cinematicSchema='ngs.cinematic-generate.v1';
 export const cinematicTask='cinematic_render',cinematicTaskType='cinematic.generate.render';
 export const cinematicInvalid='NGS_CINEMATIC_PAYLOAD_INVALID',cinematicUnavailable='WORKFLOW_CINEMATIC_UNAVAILABLE';
+export const cinematicLegacyRetired='WORKFLOW_CINEMATIC_MP4_INTAKE_RETIRED';
 export const cinematicSourceMissing='WORKFLOW_CINEMATIC_SOURCE_NOT_FOUND';
 const keys=['motionPrompt','projectId','schemaVersion','sourceSha256'];
 const digest=/^[a-f0-9]{64}$/u;
@@ -21,3 +22,66 @@ export function validateCinematic(p,projectId){
  return JSON.stringify(Object.fromEntries(keys.map(k=>[k,p[k]])));
 }
 export const cinematicResultRef=id=>'binari/cinematics/results/'+id+'.json';
+
+
+export const cinematicSequenceType='cinematic.sequence.generate',cinematicSequenceSchema='ngs.cinematic-sequence-generate.v1';
+export const cinematicSequenceTask='cinematic_sequence_render',cinematicSequenceTaskType='cinematic.sequence.generate.render';
+const exact=(o,k)=>o!==null&&typeof o==='object'&&!Array.isArray(o)&&
+ Object.keys(o).length===k.length&&k.every(x=>Object.hasOwn(o,x));
+const bound=(v,min,max)=>typeof v==='number'&&Number.isFinite(v)&&v>=min&&v<=max;
+const integer=(v,min,max)=>Number.isInteger(v)&&bound(v,min,max);
+const sequenceKeys=[...keys,'playback'].sort();
+const playbackKeys=['durationFrames','speedCurve','cameraCurve'];
+const speedKeys=['frame','rate'], cameraKeys=['frame','zoom','x','y'];
+const curveSchema=(points)=>({type:'array',minItems:1,maxItems:128,items:{type:'object',additionalProperties:false,
+ required:Object.keys(points),properties:points}});
+const frame={type:'integer',minimum:0,maximum:1439};
+const numeric=(minimum,maximum)=>({type:'number',minimum,maximum});
+export const cinematicPlaybackSchema={type:'object',additionalProperties:false,required:playbackKeys,properties:{
+ durationFrames:{type:'integer',minimum:1,maximum:1440},
+ speedCurve:curveSchema({frame,rate:numeric(0,4)}),
+ cameraCurve:curveSchema({frame,zoom:numeric(1,3),x:numeric(0,1),y:numeric(0,1)}),
+}};
+export const cinematicSequencePayloadSchema={...cinematicPayloadSchema,required:sequenceKeys,properties:{
+ ...cinematicPayloadSchema.properties,schemaVersion:{const:cinematicSequenceSchema},playback:cinematicPlaybackSchema}};
+
+export function validCinematicPlayback(v){
+ if(!exact(v,playbackKeys)||!integer(v.durationFrames,1,1440))return false;
+ const points=(rows,fields,check)=>Array.isArray(rows)&&rows.length>=1&&rows.length<=128&&
+  rows.every((p,i)=>exact(p,fields)&&integer(p.frame,0,v.durationFrames-1)&&
+   (i===0?p.frame===0:p.frame>rows[i-1].frame)&&check(p));
+ return points(v.speedCurve,speedKeys,p=>bound(p.rate,0,4))&&points(v.cameraCurve,cameraKeys,
+  p=>bound(p.zoom,1,3)&&bound(p.x,0,1)&&bound(p.y,0,1));
+}
+function sortValue(v){
+ if(Array.isArray(v))return v.map(sortValue);
+ if(v!==null&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().map(k=>[k,sortValue(v[k])]));
+ return v;
+}
+export function validateCinematicSequence(p,projectId){
+ if(!exact(p,sequenceKeys)||p.schemaVersion!==cinematicSequenceSchema||!validCinematicPlayback(p.playback))
+  throw Error(cinematicInvalid);
+ const {playback,schemaVersion,...rest}=p;
+ validateCinematic({...rest,schemaVersion:cinematicSchema},projectId);
+ return JSON.stringify(sortValue(p));
+}
+export const cinematicSequenceResultRef=id=>'binari/cinematics/sequences/'+id+'/manifest.json';
+
+export const cinematicPlaybackType='cinematic.playback.update',cinematicPlaybackRequestSchema='ngs.cinematic-playback-update.v1';
+export const cinematicPlaybackTask='cinematic_playback_update',cinematicPlaybackStateSchema='ngs.cinematic-playback-state.v1';
+export const cinematicPlaybackStale='WORKFLOW_CINEMATIC_PLAYBACK_CONFLICT';
+const playbackRequestKeys=['schemaVersion','projectId','sequenceId','expectedRevision','playback'];
+const sequenceId=/^request\.official\.[a-f0-9]{64}$/u;
+export const cinematicPlaybackRequestPayloadSchema={type:'object',required:playbackRequestKeys,additionalProperties:false,properties:{
+ schemaVersion:{const:cinematicPlaybackRequestSchema},projectId:{const:'binari'},
+ sequenceId:{type:'string',minLength:81,maxLength:81,pattern:sequenceId.source},
+ expectedRevision:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER-1},playback:cinematicPlaybackSchema,
+}};
+export function validateCinematicPlaybackUpdate(p,projectId){
+ if(!exact(p,playbackRequestKeys)||p.schemaVersion!==cinematicPlaybackRequestSchema||p.projectId!==projectId||projectId!=='binari'||
+  typeof p.sequenceId!=='string'||p.sequenceId.length!==81||!sequenceId.test(p.sequenceId)||
+  !integer(p.expectedRevision,0,Number.MAX_SAFE_INTEGER-1)||!validCinematicPlayback(p.playback))
+  throw Error(cinematicInvalid);
+ return JSON.stringify(sortValue(p));
+}
+export const cinematicPlaybackResultRef=id=>'binari/cinematics/sequences/'+id+'/timeline.json';

@@ -51,7 +51,8 @@ _ALLOW=MappingProxyType({
  'media':(_EXACT,frozenset({'/v1/media-artifacts/publish'})),
  'audio':(_EXACT,frozenset(_AUDIO_POST)),
  'props':(_EXACT,frozenset(_PROPS_POST)),
- 'cinematics':(_EXACT,frozenset('/v1/workflow/cinematics'+p for p in ('','/asset','/source-status','/result'))),
+ 'cinematics':(_EXACT,frozenset('/v1/workflow/cinematics'+p for p in
+  ('','/asset','/source-status','/result','-sequence','-sequence/frame','-sequence/result','-playback','-playback/target-status','-playback/result'))),
 })
 _DYNAMIC=MappingProxyType({
  'concept':(('GET',r'/v1/requests/'+RECEIPT_TOKEN),),
@@ -99,7 +100,7 @@ def _special_caps(profile,folder):
        'media':{'mediaArtifactsV1':True},
        'audio':{'workflowAudioResultV1':True,'workflowAudioSeparateV1':True,'workflowAudioDeleteV1':True},
        'props':{'workflowPropPackageV1':True},
-       'cinematics':{'workflowCinematicV1':True},
+       'cinematics':{'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True},
     }
     return {'namespace':CANONICAL_NAMESPACE+folder+'/',**entries[profile]} if profile in entries else None
 
@@ -148,11 +149,11 @@ def bind_scopes(registry, root, credentials, *, verify_mounts=None):
     from concept_store import ConceptStore
     from fenced_store import FencedOwnedNPCStore
     from motion_store import MotionStore
-    from media_store import MediaStore,CinematicStore
+    from media_store import MediaStore,CinematicPlaybackStore
     from workflow_audio_store import AudioResult
     from prop_package_store import PropPackageStore
     constructors={'concept':ConceptStore,'npc':FencedOwnedNPCStore,'motion':MotionStore,
-                  'media':MediaStore,'props':PropPackageStore,'cinematics':CinematicStore}
+                  'media':MediaStore,'props':PropPackageStore,'cinematics':CinematicPlaybackStore}
     stores={r.id:constructors[r.profile](roots[r.id]) for r in registry if r.profile!='audio'}
     for r in registry:
         if r.profile in ('concept','motion'):

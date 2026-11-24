@@ -7,7 +7,7 @@ import {configureSpaceMachineReader} from './space-machine-reader.mjs';
 import {propPackageReady,propAnimationReady} from './prop-package-readiness.mjs';
 import {propImageReady} from './prop-image-readiness.mjs';
 
-import {cinematicReady,cinematicSourceReady} from './cinematic-readiness.mjs';
+import {cinematicReady,cinematicSourceReady,cinematicSequenceReady,cinematicSequenceSourceReady,cinematicPlaybackReady,cinematicPlaybackTargetReady} from './cinematic-readiness.mjs';
 
 export const host='127.0.0.1',port=8770;
 export function configuration(env){
@@ -15,11 +15,11 @@ export function configuration(env){
  const readSpaceRequest=configureSpaceMachineReader(env);
  return {directory,...(readSpaceRequest?{readSpaceRequest}:{})};
 }
-export function createRequestService({directory,readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=false,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness}){
+export function createRequestService({directory,readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=false,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness}){
  if(readSpaceRequest!==undefined&&typeof readSpaceRequest!=='function')throw Error('REQUEST_SPACE_INVALID');
  const inbox=openOfficialInbox(directory,{readSpaceRequest,propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propMutationsEnabled,cinematicEnabled});
  const server=createServer({headersTimeout:15000,requestTimeout:15000},(req,res)=>{
-  void requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled,propImageReadiness,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propAnimationReadiness,propMutationsEnabled,propPackageReadiness,cinematicEnabled,cinematicReadiness,cinematicSourceReadiness}).catch(()=>{
+  void requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled,propImageReadiness,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propAnimationReadiness,propMutationsEnabled,propPackageReadiness,cinematicEnabled,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness}).catch(()=>{
    if(res.headersSent)return res.destroy();
    const raw=JSON.stringify({error:'OFFICIAL_REQUEST_REGISTER_FAILED'});
    res.writeHead(503,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}).end(raw);
@@ -32,7 +32,8 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  try{
   const server=createRequestService({...configuration(process.env),propImageEnabled:true,propImageReadiness:propImageReady,
    propGenerateEnabled:true,propMutationsEnabled:true,propAnimationEnabled:true,
-   cinematicEnabled:true,cinematicReadiness:cinematicReady,cinematicSourceReadiness:cinematicSourceReady,
+   cinematicEnabled:true,cinematicLegacyAdmission:false,cinematicSequenceReadiness:cinematicSequenceReady,cinematicSequenceSourceReadiness:cinematicSequenceSourceReady,
+   cinematicPlaybackReadiness:cinematicPlaybackReady,cinematicPlaybackTargetReadiness:cinematicPlaybackTargetReady,
    propAnimationReadiness:propAnimationReady,propPackageReadiness:propPackageReady});
   server.on('error',err=>{
    console.error(err.code==='EADDRINUSE'?'REQUEST_SERVICE_PORT_IN_USE':'REQUEST_SERVICE_START_FAILED');

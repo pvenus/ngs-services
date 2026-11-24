@@ -18,12 +18,12 @@ import {unsupportedReason} from './pending-unsupported.mjs';
 import {propTypes,propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propRegeneratePayloadSchema,propAnimationType,propAnimationPayloadSchema} from './prop-generate-envelope.mjs';
 import {propImageType,propImagePayloadSchema,propImageInvalid,propImageUnavailable} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic,cinematicSequenceType,cinematicSequencePayloadSchema,validateCinematicSequence,cinematicLegacyRetired,cinematicPlaybackType,cinematicPlaybackStale,cinematicPlaybackRequestPayloadSchema,validateCinematicPlaybackUpdate} from './cinematic-envelope.mjs';
 
 const version='2025-06-18';
 const maxBody=96*1024;
 const known={
- [cinematicInvalid]:400,[cinematicUnavailable]:503,[cinematicSourceMissing]:404,
+ [cinematicInvalid]:400,[cinematicUnavailable]:503,[cinematicSourceMissing]:404,[cinematicLegacyRetired]:422,[cinematicPlaybackStale]:409,
  [propGenerateInvalid]:400,[propGenerateUnavailable]:503,[propGenerateMotionUnavailable]:503,[propMutationUnavailable]:503,
  [propImageInvalid]:400,[propImageUnavailable]:503,
  REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
@@ -216,7 +216,7 @@ function addPropFamily(tool,kind,payload){
   requestType:{enum:[...tool.inputSchema.properties.requestType.enum,kind]}},
   oneOf:[...tool.inputSchema.oneOf,{properties:{requestType:{const:kind},payload}}]}};
 }
-export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness}={}){
+export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission=true,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness}={}){
  if(!allowed(req,req.socket.localPort))return send(res,403,{error:'REQUEST_MCP_LOOPBACK_REQUIRED'});
  if(req.url!=='/mcp')return send(res,404,{error:'NOT_FOUND'});
  if(req.method!=='POST')return send(res,405,{error:'REQUEST_MCP_POST_ONLY'},{Allow:'POST'});
@@ -242,12 +242,16 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
  }
  if(method==='ping'&&!Object.keys(params).length)return result(res,id,{});
  const cinematicReady=async()=>cinematicEnabled===true&&typeof cinematicReadiness==='function'&&await cinematicReadiness()===true;
+ const sequenceReady=async()=>cinematicEnabled===true&&typeof cinematicSequenceReadiness==='function'&&await cinematicSequenceReadiness()===true;
+ const playbackReady=async()=>cinematicEnabled===true&&typeof cinematicPlaybackReadiness==='function'&&await cinematicPlaybackReadiness()===true;
  const packageReady=async()=>propGenerateEnabled===true&&(!propPackageReadiness||await propPackageReadiness()===true);
  const animationReady=async()=>propAnimationEnabled===true&&(!propAnimationReadiness||await propAnimationReadiness()===true);
  const ready=async()=>propImageEnabled===true&&(!propImageReadiness||await propImageReadiness()===true);
  if(method==='tools/list'&&!Object.keys(params).length){
   let submit=await ready()?addPropImage(tool):tool;
-  if(await cinematicReady())submit=addPropFamily(submit,cinematicType,cinematicPayloadSchema);
+  if(cinematicLegacyAdmission&&await cinematicReady())submit=addPropFamily(submit,cinematicType,cinematicPayloadSchema);
+  if(await sequenceReady())submit=addPropFamily(submit,cinematicSequenceType,cinematicSequencePayloadSchema);
+  if(await playbackReady())submit=addPropFamily(submit,cinematicPlaybackType,cinematicPlaybackRequestPayloadSchema);
   if(await packageReady()){
    const generate=propGenerateMotionEnabled===true?propGeneratePayloadSchema:{...propGeneratePayloadSchema,
     properties:{...propGeneratePayloadSchema.properties,motion:{const:'still'}}};
@@ -273,11 +277,26 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
   if((site||params.name===submitTool)&&propTypes.includes(args?.requestType)&&!await packageReady())throw Error(propGenerateUnavailable);
   if((site||params.name===submitTool)&&args?.requestType===propAnimationType&&!await animationReady())throw Error(propGenerateMotionUnavailable);
   if((site||params.name===submitTool)&&args?.requestType===cinematicType){
+   if(!cinematicLegacyAdmission)throw Error(cinematicLegacyRetired);
    const payload=site?JSON.parse(args.payload):args.payload;
    validateCinematic(payload,'binari');
    if(!await cinematicReady()||typeof cinematicSourceReadiness!=='function')throw Error(cinematicUnavailable);
    const pin=await cinematicSourceReadiness(payload.sourceSha256);
    if(pin!==true)throw Error(pin===null?cinematicSourceMissing:cinematicUnavailable);
+  }
+  if((site||params.name===submitTool)&&args?.requestType===cinematicSequenceType){
+   const payload=site?JSON.parse(args.payload):args.payload;
+   validateCinematicSequence(payload,'binari');
+   if(!await sequenceReady()||typeof cinematicSequenceSourceReadiness!=='function')throw Error(cinematicUnavailable);
+   const pin=await cinematicSequenceSourceReadiness(payload.sourceSha256);
+   if(pin!==true)throw Error(pin===null?cinematicSourceMissing:cinematicUnavailable);
+  }
+  if((site||params.name===submitTool)&&args?.requestType===cinematicPlaybackType){
+   const payload=site?JSON.parse(args.payload):args.payload;
+   validateCinematicPlaybackUpdate(payload,'binari');
+   if(!await playbackReady()||typeof cinematicPlaybackTargetReadiness!=='function')throw Error(cinematicUnavailable);
+   const pin=await cinematicPlaybackTargetReadiness(payload.sequenceId,payload.expectedRevision);
+   if(pin!==true)throw Error(pin===null?cinematicSourceMissing:pin==='stale'?cinematicPlaybackStale:cinematicUnavailable);
   }
   let value=inbox[binding[0]](args);
   // Keep cursor semantics intact when PDS goes down. Suppress pending formal

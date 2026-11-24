@@ -34,6 +34,7 @@ JS_ENDS='\t\n\v\f\r \xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u
 
 
 class Denied(ValueError):pass
+class CinematicConflict(ValueError):pass
 
 
 def need(ok):
@@ -104,6 +105,14 @@ class WorkflowCinematic:
         need(self.call('/source-status',p,missing=True)==p)
         return {'ok':True,**p}
 
+    def asset_bytes(self,source):
+        v=self.call('/asset',{'sourceSha256':source},missing=True)
+        need(keys(v,('sourceSha256','base64')) and v['sourceSha256']==source and
+             type(v['base64'])is str and len(v['base64'])<=4*((MAX_PNG+2)//3))
+        raw=base64.b64decode(v['base64'],validate=True)
+        need(0<len(raw)<=MAX_PNG and raw.startswith(b'\x89PNG\r\n\x1a\n') and hashlib.sha256(raw).hexdigest()==source)
+        return raw
+
     def operate(self,op,packet):
         if op=='result':return self.result(packet)
         if op=='source-status':return self.source_status(packet)
@@ -123,13 +132,7 @@ class WorkflowCinematic:
             if op=='read':
                 self.source_status({'sourceSha256':source})
                 return inp
-            if op=='asset':
-                v=self.call('/asset',{'sourceSha256':source},missing=True)
-                need(keys(v,('sourceSha256','base64')) and v['sourceSha256']==source and
-                     type(v['base64'])is str and len(v['base64'])<=4*((MAX_PNG+2)//3))
-                raw=base64.b64decode(v['base64'],validate=True)
-                need(0<len(raw)<=MAX_PNG and raw.startswith(b'\x89PNG\r\n\x1a\n') and hashlib.sha256(raw).hexdigest()==source)
-                return raw
+            if op=='asset':return self.asset_bytes(source)
             a=packet['artifact'];need(keys(a,ARTIFACT) and type(a['base64'])is str)
             m={**{k:a[k] for k in ARTIFACT-{'base64'}},'schemaVersion':'ngs.cinematic-result.v1',
                'projectId':'binari','officialRequestId':oid}
@@ -149,32 +152,33 @@ class WorkflowCinematic:
         return {'ok':True,'resultRef':result_ref(oid),'manifest':m}
 
 
-def serve(handler):
-    obj=getattr(handler.server,'workflow_cinematic',None)
+def serve(handler,*,attribute='workflow_cinematic',path=PATH,capability=CAPABILITY,body_limits=None):
+    obj=getattr(handler.server,attribute,None)
     if not isinstance(obj,WorkflowCinematic):return handler.respond(404,{'error':'WORKFLOW_CINEMATIC_DISABLED'})
     parsed=urlsplit(handler.path)
     if (handler.client_address[0]!='127.0.0.1' or handler.headers.get_all('Host')!=['127.0.0.1:'+str(handler.server.server_port)] or
         handler.headers.get('Origin') is not None or parsed.query or handler.headers.get('Transfer-Encoding') is not None):
         return handler.respond(403,{'error':'WORKFLOW_CINEMATIC_INTERNAL_ONLY'})
     try:
-        if handler.command=='GET' and parsed.path==PATH:
+        if handler.command=='GET' and parsed.path==path:
             if not obj.ready():return handler.respond(503,{'error':'WORKFLOW_CINEMATIC_NOT_READY'})
-            return handler.respond(200,{'enabled':True,'schemaVersion':CAPABILITY})
+            return handler.respond(200,{'enabled':True,'schemaVersion':capability})
         if handler.command!='POST':return handler.respond(404,{'error':'WORKFLOW_CINEMATIC_ROUTE'})
         n=handler.headers.get('Content-Length','')
-        maximum=MAX_BODY if parsed.path==PATH else 4096
+        maximum=(body_limits or {path:MAX_BODY}).get(parsed.path,4096)
         if (handler.headers.get_all('Content-Length')!=[n] or handler.headers.get('Content-Type')!='application/json' or
             not n.isascii() or not n.isdecimal() or len(n)>9 or not 0<int(n)<=maximum):
             return handler.respond(400,{'error':'WORKFLOW_CINEMATIC_BAD_BODY'})
         handler.connection.settimeout(20)
         raw=handler.rfile.read(int(n))
         if len(raw)!=int(n):return handler.respond(400,{'error':'WORKFLOW_CINEMATIC_BAD_BODY'})
-        result=obj.operate('publish' if parsed.path==PATH else parsed.path.rsplit('/',1)[-1],strict_json(raw))
-        if parsed.path==PATH+'/asset':
+        result=obj.operate('publish' if parsed.path==path else parsed.path.rsplit('/',1)[-1],strict_json(raw))
+        if parsed.path==path+'/asset':
             handler.send_response(200);handler.send_header('Content-Type','image/png')
             handler.send_header('Content-Length',str(len(result)));handler.send_header('Cache-Control','no-store')
             handler.send_header('X-Content-Type-Options','nosniff');handler.end_headers();handler.wfile.write(result);return None
         return handler.respond(200,result)
+    except CinematicConflict as exc:return handler.respond(409,{'error':str(exc)})
     except (Denied,ClaimDenied):return handler.respond(403,{'error':'WORKFLOW_CINEMATIC_DENIED'})
     except FileNotFoundError:return handler.respond(404,{'error':'WORKFLOW_CINEMATIC_NOT_FOUND'})
     except (OSError,ValueError):return handler.respond(503,{'error':'WORKFLOW_CINEMATIC_OUTCOME_UNCERTAIN'})

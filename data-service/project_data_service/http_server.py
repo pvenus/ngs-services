@@ -69,6 +69,10 @@ class Handler(DomainHandler):
 
         from .workflow_cinematic import ROUTES as cinematic_routes,serve as workflow_cinematic
         if media_path in cinematic_routes:return workflow_cinematic(self)
+        from .workflow_cinematic_sequence import ROUTES as sequence_routes,serve as cinematic_sequence
+        if media_path in sequence_routes:return cinematic_sequence(self)
+        from .workflow_cinematic_playback import ROUTES as playback_routes,serve as cinematic_playback
+        if media_path in playback_routes:return cinematic_playback(self)
 
         from .workflow_prop_stage import ROUTES as prop_stage_routes,serve as workflow_prop_stage
         if media_path in prop_stage_routes:return workflow_prop_stage(self)
@@ -755,6 +759,10 @@ def serve(storage_root: Path, host: str, port: int):
     if host=='127.0.0.1' and hasattr(server,'workflow_delete'):
         from .workflow_cinematic import WorkflowCinematic
         server.workflow_cinematic=WorkflowCinematic(planner)
+        from .workflow_cinematic_sequence import WorkflowCinematicSequence
+        server.workflow_cinematic_sequence=WorkflowCinematicSequence(planner)
+        from .workflow_cinematic_playback import WorkflowCinematicPlayback
+        server.workflow_cinematic_playback=WorkflowCinematicPlayback(planner)
     from .workflow_prop_image import configured as configure_prop_image
     server.workflow_prop_image=configure_prop_image(host,app.concept,
         planner if hasattr(server,'workflow_delete') else None,getattr(server,'media_artifacts',None))
