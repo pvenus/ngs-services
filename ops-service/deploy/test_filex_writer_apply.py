@@ -116,6 +116,70 @@ class TestApply(unittest.TestCase):
     def apply(self):
         return m.apply_target(SHA, DIGEST, self.home, self.control, host=self.host)
 
+
+
+    def configure_prop(self):
+        directory=self.home/'canonical/props'
+        directory.mkdir(parents=True,mode=0o700)
+        scope={**m.PROP_VOLUME,'source':str(directory)}
+        context=patch.multiple(m,PROP_SOURCE=str(directory),PROP_VOLUME=scope)
+        context.start();self.addCleanup(context.stop)
+        # Existing bridge function embeds the exact approved scope.
+        bridge=self.code/'start-filex.sh';bridge.write_bytes(m.startup_bridge(self.home,self.control))
+        override_slot=self.runtime_doc['registeredFilex']['hashes']
+        override_slot['start-filex.sh']=m.digest(bridge.read_bytes())
+        m.atomic_write(self.runtime,m.json_bytes(self.runtime_doc))
+        self.candidate['startupSha256']=override_slot['start-filex.sh']
+        policy=m.json_load(self.policy.read_bytes())
+        policy['startupSha256']=self.candidate['startupSha256'];m.atomic_write(self.policy,m.json_bytes(policy))
+        self.prepared['capabilitiesSha256']=m.PROP_CAP_DIGEST
+        self.candidate['capabilitiesSha256']=m.PROP_CAP_DIGEST
+        self.host.profiles[NEW]=m.PROP_CAP_DIGEST
+        self.write_candidate()
+        original=self.host.model
+        def model(image,iid,active):
+            row=original(image,iid,active)
+            if active and m.selector(self.control)[1]==m.override_bytes(image,prop=True):
+                row['Config']['Env'].extend(f'{k}={v}' for k,v in m.PROP_ENV.items())
+                row['Mounts'].append({'Destination':'/props','Type':'bind','Source':str(directory),'RW':True,'Propagation':'rprivate'})
+                row['HostConfig']['Mounts']=[{'Type':'bind','Source':str(directory),'Target':'/props','ReadOnly':False}]
+            return row
+        self.host.model=model
+        return directory
+
+    def test_exact_prop_profile_applies_same_writer_and_keeps_other_runtime_controls(self):
+        directory=self.configure_prop()
+        self.assertEqual(self.apply()['state'],'deployed')
+        self.assertEqual(self.host.calls,[(True,NEW)])
+        self.assertEqual(m.selector(self.control),(NEW,m.override_bytes(NEW,prop=True)))
+        self.assertEqual([x for x in self.host.row['Mounts'] if x['Destination']=='/props'][0]['Source'],str(directory))
+        proof=m.json_load((self.directory/'applied'/(SHA+'.json')).read_bytes())
+        self.assertTrue(m.verify_active_candidate(self.home,self.control,proof,host=self.host))
+        self.assertEqual((self.code/'compose.yaml').read_bytes(),b'pinned contents')
+
+    def test_prop_mount_activation_fails_closed_without_extra_host_binding(self):
+        directory=self.configure_prop()
+        directory.rmdir()
+        with self.assertRaises(m.ApplyFailure) as e:self.apply()
+        self.assertEqual(e.exception.phase,'preflight')
+        self.assertEqual(self.host.calls,[])
+        self.assertFalse(m.selector_file(self.control).exists())
+
+    def test_prop_runtime_drift_restores_original_image_and_absence_of_prop_mount(self):
+        self.configure_prop()
+        model=self.host.model
+        def changed(image,iid,active):
+            row=model(image,iid,active)
+            if image==NEW:row['HostConfig']['UnexpectedOption']=True
+            return row
+        self.host.model=changed
+        with patch.object(m.time,'sleep',lambda _x:None),patch.object(m.time,'monotonic',side_effect=(0,21,22)):
+            with self.assertRaises(m.ApplyFailure) as e:self.apply()
+        self.assertEqual(e.exception.rollback,'restored')
+        self.assertEqual(self.host.calls,[(True,NEW),(False,OLD)])
+        self.assertEqual(m.selector(self.control),(None,None))
+        self.assertNotIn('/props',[x['Destination'] for x in self.host.row['Mounts']])
+
     def test_success_changes_only_owned_selector_writer_and_private_receipt(self):
         base = (self.code / "compose.yaml").read_bytes()
         register = self.runtime.read_bytes()

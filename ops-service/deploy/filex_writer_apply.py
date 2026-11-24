@@ -1,6 +1,7 @@
 #!/opt/homebrew/bin/python3.12
 """Fixed owner-click executor for only the registered Filex concept writer."""
 from datetime import UTC, datetime
+from copy import deepcopy
 import fcntl
 import http.client
 import os
@@ -42,6 +43,14 @@ CAPS = {
 SEPARATION_CAPS = {**CAPS, "workflowAudioSeparateV1": True}
 LEGACY_CAP_DIGEST = digest(json_bytes(CAPS))
 SEPARATION_CAP_DIGEST = digest(json_bytes(SEPARATION_CAPS))
+PROP_CAPS = {**SEPARATION_CAPS, "workflowPropPackageV1": True}
+PROP_CAP_DIGEST = digest(json_bytes(PROP_CAPS))
+CAPABILITY_DIGESTS = (LEGACY_CAP_DIGEST, SEPARATION_CAP_DIGEST, PROP_CAP_DIGEST)
+PROP_ENV = {"WRITER_WORKFLOW_PROP_PACKAGES": "1"}
+PROP_SOURCE = str(PROJECT_PATH / "props")
+PROP_VOLUME = {"type": "bind", "source": PROP_SOURCE, "target": "/props",
+               "read_only": False, "bind": {"create_host_path": False}}
+
 
 
 def capabilities_digest(value):
@@ -50,11 +59,12 @@ def capabilities_digest(value):
         payload = json_bytes(value)
         if payload == json_bytes(CAPS):return LEGACY_CAP_DIGEST
         if payload == json_bytes(SEPARATION_CAPS):return SEPARATION_CAP_DIGEST
+        if payload == json_bytes(PROP_CAPS):return PROP_CAP_DIGEST
     return None
 
 
 def capability_markers(record, fields=CAP_FIELDS):
-    return type(record) is dict and all(key not in record or record[key] == SEPARATION_CAP_DIGEST for key in fields)
+    return type(record) is dict and all(key not in record or record[key] in (SEPARATION_CAP_DIGEST, PROP_CAP_DIGEST) for key in fields)
 
 
 def observed_shape(record, mandatory, allowed=CAP_FIELDS):
@@ -100,10 +110,14 @@ def selector_file(control):
     return target_directory(control) / "active.compose.json"
 
 
-def startup_bridge(home, control):
+def startup_bridge(home, control, *, props=True):
     """Owner-provisioned, re-pinned bridge. Never installed by deployment."""
     files = filex_code(home)
     quote = lambda p: shlex.quote(str(p))
+    prop_verify = ("\n        scoped = (json.dumps({'services':{'concept-writer':{'image':image,"
+                   "'environment':" + repr(PROP_ENV) + ",'volumes':[" + repr(PROP_VOLUME) + "]}}},"
+                   "sort_keys=True,separators=(',',':')) + chr(10)).encode()\n"
+                   "        if raw not in (exact,scoped):" if props else "\n        if raw != exact:")
     return f"""#!/bin/sh
 set -eu
 . {quote(files / 'env.sh')}
@@ -136,7 +150,7 @@ try:
         if not re.fullmatch(r'sha256:[0-9a-f]{{64}}', image):
             raise SystemExit(1)
         exact = (json.dumps({{"services":{{"concept-writer":{{"image":image}}}}}}, sort_keys=True, separators=(",", ":")) + chr(10)).encode()
-        if raw != exact:
+        {prop_verify.lstrip()}
             raise SystemExit(1)
         subprocess.run(command + ['up', '-d', *services], check=True)
         subprocess.run(command + ['-f', str(override), 'up', '-d', '--no-deps',
@@ -147,9 +161,10 @@ FILEX_OPS_STARTUP
 """.encode()
 
 
-def override_bytes(image):
+def override_bytes(image, *, prop=False):
     need(matches(IMAGE, image), "TARGET_CANDIDATE_MISMATCH")
-    return json_bytes({"services": {SERVICE: {"image": image}}})
+    scope = {"environment": PROP_ENV, "volumes": [PROP_VOLUME]} if prop else {}
+    return json_bytes({"services": {SERVICE: {"image": image, **scope}}})
 
 
 def selector(control):
@@ -160,13 +175,13 @@ def selector(control):
     raw = p.read_bytes()
     data = json_load(raw)
     need(shape(data, "services") and shape(data["services"], SERVICE)
-         and shape(data["services"][SERVICE], "image"), "TARGET_SELECTOR_CHANGED")
-    image = data["services"][SERVICE]["image"]
-    need(matches(IMAGE, image) and raw == override_bytes(image), "TARGET_SELECTOR_CHANGED")
+         and type(data["services"][SERVICE]) is dict, "TARGET_SELECTOR_CHANGED")
+    image = data["services"][SERVICE].get("image")
+    need(matches(IMAGE, image) and raw in (override_bytes(image), override_bytes(image, prop=True)), "TARGET_SELECTOR_CHANGED")
     return image, raw
 
 
-def runtime_pins(home, control):
+def runtime_pins(home, control, *, prop=False):
     runtime = home / "Workspaces/OPS/runtime/managed-runtime/ops-runtime-config.json"
     private_file(runtime, 0o600)
     registered = json_load(runtime.read_bytes()).get("registeredFilex")
@@ -184,11 +199,13 @@ def runtime_pins(home, control):
         hashes[name] = digest(raw)
         need(registered["hashes"][name] == hashes[name], "TARGET_SELECTOR_CHANGED")
         if name == "start-filex.sh":
-            need(raw == startup_bridge(home, control), "TARGET_SELECTOR_CHANGED")
+            bridges = (startup_bridge(home, control),) if prop else (
+                startup_bridge(home, control, props=False), startup_bridge(home, control))
+            need(raw in bridges, "TARGET_SELECTOR_CHANGED")
     return hashes["compose.yaml"], hashes["start-filex.sh"]
 
 
-def runtime_fingerprint(row):
+def runtime_parts(row, *, prop=False):
     """Pin the writer's security/runtime config, excluding only container/image identity."""
     need(type(row) is dict and row.get("Name") == "/" + CONTAINER
          and matches(CONTAINER_ID, row.get("Id")) and matches(IMAGE, row.get("Image")),
@@ -199,7 +216,7 @@ def runtime_fingerprint(row):
          and labels.get("com.docker.compose.service") == SERVICE, "TARGET_CANDIDATE_MISMATCH")
     pairs = [item.split("=", 1) for item in cfg["Env"] if item.startswith("WRITER_")]
     writer_env = dict(pairs)
-    need(len(writer_env) == len(pairs) and writer_env == WRITER_ENV
+    need(len(writer_env) == len(pairs) and writer_env == {**WRITER_ENV, **(PROP_ENV if prop else {})}
          and cfg.get("User") == "501:20" and cfg.get("Entrypoint") in (None, [])
          and cfg.get("Cmd") == ["python", "-B", "/app/server.py"] and cfg.get("WorkingDir") == "/app"
          and host.get("Privileged") is False and host.get("ReadonlyRootfs") is True
@@ -211,19 +228,57 @@ def runtime_fingerprint(row):
          and set(row["NetworkSettings"]["Networks"]) == {PROJECT + "_writer_loopback"},
          "TARGET_PRIVATE_INPUT_INVALID")
     mounts = {x["Destination"]: x for x in row["Mounts"]}
-    need(len(row["Mounts"]) == len(mounts) == 3 and set(mounts) == {"/audio", "/canonical", "/run/secrets"},
+    expected_mounts = {"/audio", "/canonical", "/run/secrets"} | ({"/props"} if prop else set())
+    need(len(row["Mounts"]) == len(mounts) and set(mounts) == expected_mounts,
          "TARGET_PRIVATE_INPUT_INVALID")
     for dest, item in (("/canonical", "concept"), ("/audio", "audio")):
         v = mounts[dest]
         need(v.get("Type") == "bind" and v.get("Source") == str(PROJECT_PATH / item) and v.get("RW") is True,
              "TARGET_PRIVATE_INPUT_INVALID")
+    if prop:
+        v = mounts["/props"]
+        need(v.get("Type") == "bind" and v.get("Source") == PROP_SOURCE and v.get("RW") is True
+             and v.get("Propagation", "rprivate") == "rprivate", "TARGET_PRIVATE_INPUT_INVALID")
     secret = mounts["/run/secrets"]
     need(secret.get("Type") == "volume" and secret.get("Name") == "ngs-concept-writer-secret"
          and secret.get("RW") is False, "TARGET_PRIVATE_INPUT_INVALID")
     # Include Docker-wide mapped runtime controls without dynamic/image labels
     # and with no public payload except this digest.
-    return digest(json_bytes({"host": host, "mounts": mounts, "writer": writer_env,
-                              "ports": cfg.get("ExposedPorts"), "health": cfg.get("Healthcheck")}))
+    return {"host": host, "mounts": mounts, "writer": writer_env,
+            "ports": cfg.get("ExposedPorts"), "health": cfg.get("Healthcheck")}
+
+
+def stable_parts(parts):
+    """Compare transitions while ignoring only the exact reviewed prop addition."""
+    p = deepcopy(parts)
+    enabled = "/props" in p["mounts"]
+    p["mounts"].pop("/props", None)
+    p["writer"].pop(next(iter(PROP_ENV)), None)
+    mounts = p["host"].get("Mounts") or []
+    if enabled:
+        scoped = [v for v in mounts if v.get("Target") == "/props"]
+        need(len(scoped) == 1 and scoped[0].get("Type") == "bind"
+             and scoped[0].get("Source") == PROP_SOURCE
+             and scoped[0].get("ReadOnly", False) is False
+             and scoped[0].get("BindOptions", {}).get("CreateMountpoint", False) is False,
+             "TARGET_PRIVATE_INPUT_INVALID")
+        for k,v in scoped[0].items():
+            need(k in {"Type","Source","Target","ReadOnly","BindOptions"} or not v, "TARGET_PRIVATE_INPUT_INVALID")
+        need(not any(x for k,x in scoped[0].get("BindOptions", {}).items()
+                     if k not in {"CreateMountpoint","Propagation"}), "TARGET_PRIVATE_INPUT_INVALID")
+        need(scoped[0].get("BindOptions", {}).get("Propagation", "rprivate") in ("", "rprivate"),
+             "TARGET_PRIVATE_INPUT_INVALID")
+        mounts = [v for v in mounts if v is not scoped[0]]
+    need(not any(v.get("Target") == "/props" for v in mounts), "TARGET_PRIVATE_INPUT_INVALID")
+    if mounts:
+        p["host"]["Mounts"] = mounts
+    elif "Mounts" in p["host"]:
+        del p["host"]["Mounts"]
+    return p
+
+
+def runtime_fingerprint(row, *, prop=False):
+    return digest(json_bytes(runtime_parts(row, prop=prop)))
 
 
 class DockerHost:
@@ -301,9 +356,15 @@ class DockerHost:
                   code="TARGET_START_FAILED")
 
 
-def check_current(host, home, control, active, expected, fingerprint=None, old_id=None, *, capability=None):
+def check_current(host, home, control, active, expected, fingerprint=None, old_id=None, *, capability=None, invariant=None):
     row = host.current()
-    observed = runtime_fingerprint(row)
+    _, raw = selector(control) if active else (None,None)
+    prop = raw == override_bytes(expected, prop=True) if raw is not None else False
+    parts = runtime_parts(row, prop=prop)
+    observed = digest(json_bytes(parts))
+    current_invariant = stable_parts(parts) if prop or invariant is not None else None
+    if invariant is not None:
+        need(current_invariant == invariant, "TARGET_PRIVATE_INPUT_INVALID")
     need(row.get("Image") == expected and row.get("Id") != old_id
          and (fingerprint is None or fingerprint == observed), "TARGET_CANDIDATE_MISMATCH")
     labels = row["Config"]["Labels"]
@@ -312,7 +373,7 @@ def check_current(host, home, control, active, expected, fingerprint=None, old_i
     need(labels.get("com.docker.compose.project.config_files") == expected_files,
          "TARGET_SELECTOR_CHANGED")
     live_capability = host.healthy(row)
-    need(live_capability in (LEGACY_CAP_DIGEST, SEPARATION_CAP_DIGEST)
+    need(live_capability in CAPABILITY_DIGESTS and prop == (live_capability == PROP_CAP_DIGEST)
          and (capability is None or live_capability==capability), "TARGET_HEALTH_HTTP")
     # Avoid accepting health from a vanished/replaced container.
     again = host.current()
@@ -327,13 +388,15 @@ def filex_prior(home, control, *, host=None):
     host = host if host is not None else DockerHost(home, control)
     need(not os.path.lexists(target_directory(control) / "in-progress.json"), "TARGET_SELECTOR_CHANGED")
     base, startup = runtime_pins(home, control)
-    active, _ = selector(control)
+    active, raw = selector(control)
+    if active and raw == override_bytes(active, prop=True):
+        need(runtime_pins(home, control, prop=True) == (base,startup), "TARGET_SELECTOR_CHANGED")
     pinned = host.selected_image(active is not None)
     need(active is None or pinned == active, "TARGET_SELECTOR_CHANGED")
     _, fingerprint, capability = check_current(host, home, control, active is not None, pinned)
     return {"priorImageId": pinned, "composeSha256": base, "startupSha256": startup,
             "runtimeFingerprint": fingerprint,
-            **({"priorCapabilitiesSha256": capability} if capability == SEPARATION_CAP_DIGEST else {})}
+            **({"priorCapabilitiesSha256": capability} if capability != LEGACY_CAP_DIGEST else {})}
 
 
 def verify_active_candidate(home, control, applied, *, host=None):
@@ -360,7 +423,9 @@ def verified_candidate(directory, control, sha, artifact):
     need(bound.read_bytes() == raw, "TARGET_CANDIDATE_MISMATCH")
     c = json_load(raw)
     need(observed_shape(c, CANDIDATE_KEYS) and c["schemaVersion"] == CANDIDATE and c["target"] == TARGET
-         and c["sha"] == sha and c["artifactSha256"] == artifact and c["imageId"] != c["priorImageId"]
+         and c["sha"] == sha and c["artifactSha256"] == artifact
+         and (c["imageId"] != c["priorImageId"] or (c.get("capabilitiesSha256") == PROP_CAP_DIGEST
+              and c.get("priorCapabilitiesSha256") != PROP_CAP_DIGEST))
          and all(matches(IMAGE, c[k]) for k in ("imageId", "priorImageId"))
          and all(matches(DIGEST, c[k]) for k in ("composeSha256", "startupSha256", "runtimeFingerprint")),
          "TARGET_CANDIDATE_MISMATCH")
@@ -403,12 +468,11 @@ def diagnostic(error):
     return code if type(code) is str and code in CODES else "TARGET_APPLY_REFUSED"
 
 
-def bounded_health(host, home, control, active, expected, fingerprint, old_id=None, *, capability):
+def bounded_health(host, home, control, active, expected, fingerprint, old_id=None, *, capability, invariant=None):
     end = time.monotonic() + 20
     while True:
         try:
-            check_current(host, home, control, active, expected, fingerprint, old_id, capability=capability)
-            return
+            return check_current(host, home, control, active, expected, fingerprint, old_id, capability=capability, invariant=invariant)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, http.client.HTTPException) as error:
             if time.monotonic() >= end:
                 raise ApplyFailure("health", diagnostic(error)) from None
@@ -458,7 +522,16 @@ def apply_target(sha, artifact, home, control, *, host=None):
         active, old = selector(control)
         row, _, _ = check_current(host, home, control, active is not None, prior,
                                   candidate["runtimeFingerprint"], capability=prior_cap)
+        prop = next_cap == PROP_CAP_DIGEST
+        prior_prop = prior_cap == PROP_CAP_DIGEST
+        need(not prior_prop or prop, "TARGET_PRIVATE_INPUT_INVALID")
+        if prop:
+            root = Path(PROP_SOURCE)
+            need(root.resolve(strict=True) == root and root.is_dir() and root.stat().st_uid == os.getuid()
+                 and runtime_pins(home, control, prop=True) == (candidate["composeSha256"], candidate["startupSha256"]),
+                 "TARGET_PRIVATE_INPUT_INVALID")
         before_id = row["Id"]
+        invariant = stable_parts(runtime_parts(row,prop=prior_prop)) if prop else None
         fingerprint = candidate["runtimeFingerprint"]
         armed = directory / "in-progress.json"
         need(not os.path.lexists(armed), "TARGET_SELECTOR_CHANGED")
@@ -467,7 +540,7 @@ def apply_target(sha, artifact, home, control, *, host=None):
         private_directory(applied)
         proof = applied / (sha + ".json")
         need(not os.path.lexists(proof), "TARGET_SELECTOR_CHANGED")
-        new = override_bytes(image)
+        new = override_bytes(image, prop=prop)
         # Arm durably before first mutation. A hard interruption blocks retries.
         atomic_write(armed, json_bytes({"sha": sha, "priorImageId": prior, "imageId": image,
                                         "priorOverridePresent": active is not None}))
@@ -478,7 +551,8 @@ def apply_target(sha, artifact, home, control, *, host=None):
             phase = "start"
             host.recreate(True)
             phase = "health"
-            bounded_health(host, home, control, True, image, fingerprint, before_id, capability=next_cap)
+            _, live_fp, _ = bounded_health(host, home, control, True, image, None if prop else fingerprint, before_id,
+                                           capability=next_cap,invariant=invariant)
             need(runtime_pins(home, control) == (candidate["composeSha256"], candidate["startupSha256"])
                  and selector(control) == (image, new), "TARGET_SELECTOR_CHANGED")
         except Exception as error:
@@ -498,7 +572,7 @@ def apply_target(sha, artifact, home, control, *, host=None):
                 pass
             raise ApplyFailure(phase, diagnostic(error), rollback) from None
         now = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
-        atomic_write(proof, json_bytes({**candidate, "schemaVersion": APPLIED, "deployedAt": now}))
+        atomic_write(proof, json_bytes({**candidate, "runtimeFingerprint": live_fp, "schemaVersion": APPLIED, "deployedAt": now}))
         armed.unlink()
         return {"schemaVersion": "ops.deploy-target-receipt.v1", "target": TARGET, "sha": sha,
                 "deployedAt": now, "state": "deployed", "health": "verified"}

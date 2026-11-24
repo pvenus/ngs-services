@@ -19,7 +19,7 @@ from prepare_ngs_release import (
     number, private_directory, private_file,
 )
 
-from filex_writer_apply import CAPS, LEGACY_CAP_DIGEST, SEPARATION_CAPS, SEPARATION_CAP_DIGEST, capability_markers
+from filex_writer_apply import CAPS, LEGACY_CAP_DIGEST, SEPARATION_CAPS, SEPARATION_CAP_DIGEST, PROP_CAPS, PROP_CAP_DIGEST, CAPABILITY_DIGESTS, PROP_ENV, capability_markers
 
 REPO = "pvenus/ngs-services"
 WORKFLOW = ".github/workflows/prepare-filex-writer.yml"
@@ -39,6 +39,8 @@ FILES = (
     "workflow_native_media.py", "workflow_audio_store.py",
 )
 CLOSURE = {"Dockerfile", *FILES}
+PROP_FILES = ("prop_package_contract.py", "prop_package_store.py")
+PROP_CLOSURE = CLOSURE | set(PROP_FILES)
 SCHEMA = "ops.filex-writer-source.v1"
 
 
@@ -61,31 +63,33 @@ def closure(repo, head):
         path = path.decode()
         need(path.startswith(PREFIX), "FILEX_SOURCE_SCOPE_INVALID")
         name = path.removeprefix(PREFIX)
-        if name not in CLOSURE:
+        if name not in PROP_CLOSURE:
             continue
         mode, kind, oid = flags.decode().split()
         need(mode == "100644" and kind == "blob" and matches(SHA, oid)
              and name not in names, "FILEX_SOURCE_SCOPE_INVALID")
         names[name] = oid
-    need(set(names) == CLOSURE, "FILEX_SOURCE_MISSING")
+    need(set(names) in (CLOSURE, PROP_CLOSURE), "FILEX_SOURCE_MISSING")
     blobs = {}
     for name, oid in names.items():
         size = int(git(repo, "cat-file", "-s", oid))
         need(0 < size <= MAX_SOURCE, "FILEX_SOURCE_SIZE_INVALID")
         blobs[name] = git(repo, "cat-file", "blob", oid)
         need(len(blobs[name]) == size, "FILEX_SOURCE_SIZE_INVALID")
-        if name in FILES:
+        if name != "Dockerfile":
             compile(blobs[name], name, "exec", dont_inherit=True)
     # A changed Dockerfile, privilege assumption, or runtime file requires source review.
-    need(blobs["Dockerfile"] == dockerfile("python:3.12-slim"), "FILEX_DOCKERFILE_DRIFT")
+    scoped = set(blobs) == PROP_CLOSURE
+    need(scoped == (declared_capabilities(blobs["server.py"]) == PROP_CAP_DIGEST), "FILEX_SOURCE_CAPABILITIES_INVALID")
+    need(blobs["Dockerfile"] == dockerfile("python:3.12-slim", prop=scoped), "FILEX_DOCKERFILE_DRIFT")
     return root, blobs
 
 
-def dockerfile(base):
+def dockerfile(base, *, prop=False):
     return (
         f"FROM {base}\n"
         "WORKDIR /app\n"
-        f"COPY {' '.join(FILES)} /app/\n"
+        f"COPY {' '.join(FILES + (PROP_FILES if prop else ()))} /app/\n"
         "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 WRITER_BIND=0.0.0.0 "
         "WRITER_ROOT=/canonical WRITER_TOKEN_FILE=/run/secrets/writer_token\n"
         "USER 1000:1000\n"
@@ -165,13 +169,20 @@ def acquire(github, repo):
 
 def declared_capabilities(server):
     """Read the exact new capability declaration in the verified immutable source."""
-    matches = [(k,v) for node in ast.walk(ast.parse(server)) if isinstance(node, ast.Dict)
-               for k,v in zip(node.keys,node.values)
-               if isinstance(k,ast.Constant) and k.value=="workflowAudioSeparateV1"]
-    if not matches:return LEGACY_CAP_DIGEST
-    need(len(matches)==1 and isinstance(matches[0][1],ast.Constant) and matches[0][1].value is True,
-         "FILEX_SOURCE_CAPABILITIES_INVALID")
-    return SEPARATION_CAP_DIGEST
+    declarations = {}
+    for node in ast.walk(ast.parse(server)):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys,node.values):
+            if isinstance(key,ast.Constant) and key.value in ("workflowAudioSeparateV1","workflowPropPackageV1"):
+                need(key.value not in declarations and isinstance(value,ast.Constant) and value.value is True,
+                     "FILEX_SOURCE_CAPABILITIES_INVALID")
+                declarations[key.value] = True
+    if "workflowPropPackageV1" in declarations:
+        need("workflowAudioSeparateV1" in declarations, "FILEX_SOURCE_CAPABILITIES_INVALID")
+        return PROP_CAP_DIGEST
+    return SEPARATION_CAP_DIGEST if declarations else LEGACY_CAP_DIGEST
+
 
 
 # No external dependency/source mounts; scratch volumes exist only in this invocation.
@@ -186,7 +197,7 @@ Path('/tmp/fixture-token').write_text(token)
 child = subprocess.Popen(['/usr/local/bin/python', '-B', '/app/server.py'], env={
     **os.environ, 'WRITER_TOKEN_FILE': '/tmp/fixture-token', 'WRITER_ROOT': '/canonical',
     'WRITER_SCOPE': 'concept', 'WRITER_WORKFLOW_BGM': '1', 'WRITER_WORKFLOW_AUDIO_DELETE': '1',
-    'WRITER_PORT': '8093', 'WRITER_BIND': '127.0.0.1',
+    'WRITER_PORT': '8093', 'WRITER_BIND': '127.0.0.1', **PROFILE_ENV,
 }, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 def get(header):
     try:
@@ -215,9 +226,10 @@ finally:
 
 
 def capability_smoke(profile):
-    need(profile in (LEGACY_CAP_DIGEST, SEPARATION_CAP_DIGEST), "FILEX_SOURCE_CAPABILITIES_INVALID")
-    expected = SEPARATION_CAPS if profile == SEPARATION_CAP_DIGEST else CAPS
-    return ("EXPECTED_CAPS = " + repr(expected) + "\n").encode() + SMOKE
+    need(profile in CAPABILITY_DIGESTS, "FILEX_SOURCE_CAPABILITIES_INVALID")
+    expected = {LEGACY_CAP_DIGEST:CAPS, SEPARATION_CAP_DIGEST:SEPARATION_CAPS, PROP_CAP_DIGEST:PROP_CAPS}[profile]
+    return ("EXPECTED_CAPS = " + repr(expected) + "\nPROFILE_ENV = " +
+            repr(PROP_ENV if profile == PROP_CAP_DIGEST else {}) + "\n").encode() + SMOKE
 
 
 class IsolatedDocker:
@@ -271,7 +283,7 @@ class IsolatedDocker:
                       "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                       "--user=501:20", "--memory=256m", "--pids-limit=32",
                       *sum((("--tmpfs", f"/{path}:rw,noexec,nosuid,nodev,uid=501,gid=20,mode=0700,size=16m")
-                            for path in ("canonical", "audio", "tmp")), ()),
+                            for path in (("canonical", "audio", "tmp", "props") if capability == PROP_CAP_DIGEST else ("canonical", "audio", "tmp"))), ()),
                       "-i", "--entrypoint=/usr/local/bin/python", image, "-B", "-",
                       data=capability_smoke(capability), timeout=25)
         except (OSError, ValueError, subprocess.SubprocessError):
@@ -316,7 +328,7 @@ def stage(github, repo, control, base, docker):
         need(tree == proof["rootTree"] and {k: digest(v) for k, v in sources.items()} == proof["files"],
              "FILEX_GIT_PROOF_MISMATCH")
         profile = declared_capabilities(sources["server.py"])
-        mark = {"capabilitiesSha256": profile} if profile == SEPARATION_CAP_DIGEST else {}
+        mark = {"capabilitiesSha256": profile} if profile != LEGACY_CAP_DIGEST else {}
         record_file = root / (head + ".json")
         if os.path.lexists(record_file):
             private_file(record_file, 0o600)
@@ -329,7 +341,7 @@ def stage(github, repo, control, base, docker):
         with tempfile.TemporaryDirectory(prefix=".filex-source-", dir=root) as temp:
             context = Path(temp) / "context"
             context.mkdir(mode=0o700)
-            sources["Dockerfile"] = dockerfile(base)
+            sources["Dockerfile"] = dockerfile(base, prop=profile==PROP_CAP_DIGEST)
             for name, data in sources.items():
                 p = context / name
                 p.write_bytes(data)

@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import os
 import re
 
-from prepare_filex_writer import BASE, CLOSURE, IMAGE_ID, REPO, SCHEMA, TARGET as BUILD_TARGET, prepare
+from prepare_filex_writer import BASE, CLOSURE, PROP_CLOSURE, PROP_CAP_DIGEST, IMAGE_ID, REPO, SCHEMA, TARGET as BUILD_TARGET, prepare
 from filex_writer_apply import observed_shape
 from prepare_ngs_local_once import lock, read_optional, read_private, runner_digest
 from prepare_ngs_release import (
@@ -56,7 +56,7 @@ def image_evidence(value, head, policy):
     need(shape(source,SOURCE_FIELDS) and source['schemaVersion']==SCHEMA and source['repository']==REPO
          and source['ref']==REF and source['headSha']==head and matches(SHA,source['rootTree'])
          and matches(NUMBER,source['runId']) and matches(NUMBER,source['runAttempt'])
-         and type(source['files']) is dict and set(source['files'])==CLOSURE
+         and type(source['files']) is dict and set(source['files'])==(PROP_CLOSURE if value.get("capabilitiesSha256")==PROP_CAP_DIGEST else CLOSURE)
          and all(matches(DIGEST,item) for item in source['files'].values())
          and shape(proof,'artifactId artifactSha256') and matches(NUMBER,proof['artifactId'])
          and matches(DIGEST,proof['artifactSha256']), 'FILEX_BUILD_PROOF_INVALID')
@@ -95,7 +95,7 @@ def prepare_filex_candidate(github, repo, home, control, head, *, assert_current
         private_directory(bound.parent)
         proof_file = bound.parent/(head+'.json')
         need(json_load(read_private(proof_file,64*1024,mode=0o600))==proof,'FILEX_BUILD_PROOF_INVALID')
-        if image==prior['priorImageId']:
+        if image==prior['priorImageId'] and next_capability.get('capabilitiesSha256')==prior.get('priorCapabilitiesSha256'):
             return {'target':TARGET,'sha':head,'state':'current'}
         last = read_optional(directory/'last-result.json')
         need(not (last and last.get('attemptedSha')==head and last.get('state')=='failed'),
