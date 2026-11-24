@@ -3,7 +3,7 @@ import json
 import unittest
 
 from filex_unified_runtime import (NAME, PROJECT, VOLUMES, CutoverFailure, compose,
-                                   cutover, guard_mounts, registry, render_pds)
+                                   cutover, guard_mounts, registry, render_pds, loaded_backend_selector)
 from prepare_ngs_release import Refused
 
 IMAGE = 'sha256:' + 'f'*64
@@ -80,6 +80,20 @@ class UnifiedFilex(unittest.TestCase):
         self.assertEqual(config['scopes'][-1],{'id':'new-motion','tokenFile':'/tmp/private/motion'})
         targets=[x['target'] for x in compose(IMAGE,raw)['services'][NAME]['volumes']]
         self.assertIn('/canonical/new-motion',targets)
+
+    def test_backend_selector_matches_configured_workdir_or_exact_absence(self):
+        path='/private/registered.plist'
+        original={'ProgramArguments':['/usr/python','/project/runtime/stack.py','--storage-root','/project/data']}
+        args='\n'.join('\t\t'+a for a in original['ProgramArguments'])
+        raw='\tpath = '+path+'\n\targuments = {\n'+args+'\n\t}\n'
+        cwd='\tworking directory = /project/runtime\n'
+        self.assertTrue(loaded_backend_selector(raw,original,path))
+        self.assertFalse(loaded_backend_selector(raw+cwd,original,path))
+        self.assertFalse(loaded_backend_selector(raw,original,'/not-registered.plist'))
+        original['WorkingDirectory']='/project/runtime'
+        self.assertTrue(loaded_backend_selector(raw+cwd,original,path))
+        self.assertFalse(loaded_backend_selector(raw,original,path))
+        self.assertFalse(loaded_backend_selector(raw+cwd+cwd,original,path))
 
     def test_scope_path_ambiguity_rejected(self):
         r=json.loads(REGISTRY)

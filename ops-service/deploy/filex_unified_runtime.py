@@ -132,6 +132,21 @@ def backend_selector(prior, release, home, pds_path, pds_raw, registry_raw):
     return plistlib.dumps(result)
 
 
+def loaded_backend_selector(report, original, path):
+    """Match loaded args/path and either exact declared CWD or exact absence."""
+    lines=report.splitlines()
+    try:
+        start=lines.index('\targuments = {')+1
+        end=lines.index('\t}',start)
+    except ValueError:
+        return False
+    directories=[line.removeprefix('\tworking directory = ') for line in lines if line.startswith('\tworking directory = ')]
+    expected=[original['WorkingDirectory']] if 'WorkingDirectory' in original else []
+    return (lines.count('\tpath = '+str(path))==1
+            and lines[start:end]==['\t\t'+arg for arg in original['ProgramArguments']]
+            and directories==expected)
+
+
 def managed_overlay(image, raw):
     return json_bytes(compose(image, raw))
 
@@ -313,8 +328,7 @@ class ManagedHost:
             self._legacy_proof(rows)
         pid, report=self.launch.launch_report(LABEL)
         original=plistlib.loads(prior)
-        from planner_cutover import loaded_selector
-        need(pid is not None and loaded_selector(report,original['ProgramArguments'],original['WorkingDirectory']), 'FILEX_PDS_NOT_LOADED')
+        need(pid is not None and loaded_backend_selector(report,original,self.selector), 'FILEX_PDS_NOT_LOADED')
         return {'ids':{x:r['Id'] for x,r in rows.items() if r is not None},
                 'images':{x:r['Image'] for x,r in rows.items() if r is not None},
                 'pid':pid, 'old':prior, 'new':successor,**active}
