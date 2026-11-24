@@ -73,6 +73,10 @@ class Handler(DomainHandler):
         if media_path in sequence_routes:return cinematic_sequence(self)
         from .workflow_cinematic_playback import ROUTES as playback_routes,serve as cinematic_playback
         if media_path in playback_routes:return cinematic_playback(self)
+        from .workflow_cinematic_project import ROUTES as cinematic_project_routes,serve as cinematic_project
+        if media_path in cinematic_project_routes:return cinematic_project(self)
+        from .workflow_prop_animation_remove import ROUTES as animation_remove_routes,serve as prop_animation_remove
+        if media_path in animation_remove_routes:return prop_animation_remove(self)
 
         from .workflow_prop_stage import ROUTES as prop_stage_routes,serve as workflow_prop_stage
         if media_path in prop_stage_routes:return workflow_prop_stage(self)
@@ -763,6 +767,11 @@ def serve(storage_root: Path, host: str, port: int):
         server.workflow_cinematic_sequence=WorkflowCinematicSequence(planner)
         from .workflow_cinematic_playback import WorkflowCinematicPlayback
         server.workflow_cinematic_playback=WorkflowCinematicPlayback(planner)
+        from .workflow_cinematic_project import WorkflowCinematicProject,SOURCE,ARCHIVE
+        server.workflow_cinematic_source=WorkflowCinematicProject(planner,SOURCE)
+        server.workflow_cinematic_sequence_remove=WorkflowCinematicProject(planner,ARCHIVE)
+        from .workflow_prop_animation_remove import WorkflowPropAnimationRemove
+        server.workflow_prop_animation_remove=WorkflowPropAnimationRemove(planner)
     from .workflow_prop_image import configured as configure_prop_image
     server.workflow_prop_image=configure_prop_image(host,app.concept,
         planner if hasattr(server,'workflow_delete') else None,getattr(server,'media_artifacts',None))

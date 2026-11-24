@@ -85,3 +85,44 @@ export function validateCinematicPlaybackUpdate(p,projectId){
  return JSON.stringify(sortValue(p));
 }
 export const cinematicPlaybackResultRef=id=>'binari/cinematics/sequences/'+id+'/timeline.json';
+
+export const cinematicSourceType='cinematic.source.generate',cinematicSourceRequestSchema='ngs.cinematic-source-generate.v1';
+export const cinematicArchiveType='cinematic.sequences.remove',cinematicArchiveRequestSchema='ngs.cinematic-sequences-remove.v1';
+export const propAnimationRemoveType='prop.animation.remove',propAnimationRemoveRequestSchema='ngs.prop-animation-remove.v1';
+const familyBase={projectId:{const:'binari'}}, hashSchema={type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64};
+const slugRE=/^[a-z0-9]+(?:[-._][a-z0-9]+)*$/u;
+const slugSchema={type:'string',minLength:2,maxLength:80,pattern:slugRE.source};
+const validSlug=s=>typeof s==='string'&&s.length>=2&&s.length<=80&&s.trim()===s&&slugRE.test(s);
+const validHash=s=>typeof s==='string'&&s.length===64&&digest.test(s);
+const cleanText=(s,chars,bytes)=>typeof s==='string'&&s.isWellFormed()&&s===s.trim()&&
+ [...s].length>=1&&[...s].length<=chars&&Buffer.byteLength(s)<=bytes&&
+ !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]|\bembedding:/iu.test(s);
+const selection=items=>({type:'array',items,minItems:1,maxItems:30,uniqueItems:true});
+const validSelection=(a,check)=>Array.isArray(a)&&a.length>=1&&a.length<=30&&a.every(check)&&new Set(a).size===a.length;
+const req=(schema,fields)=>{const properties={...familyBase,schemaVersion:{const:schema},...fields};return {
+ type:'object',additionalProperties:false,required:Object.keys(properties),properties,
+};};
+export const extraCinematicRequests=Object.freeze({
+ [cinematicSourceType]:{schema:cinematicSourceRequestSchema,key:'cinematic_source_generate',worker:'image',route:'/v1/cinematics/ownership/workflow-source',
+  capability:'workflow.cinematic-source-write.v1',
+  payload:req(cinematicSourceRequestSchema,{title:{type:'string',minLength:1,maxLength:120},prompt:{type:'string',minLength:1,maxLength:2000}}),
+  fields:['title','prompt'],valid:v=>cleanText(v.title,120,480)&&cleanText(v.prompt,2000,4000)},
+ [cinematicArchiveType]:{schema:cinematicArchiveRequestSchema,key:'cinematic_sequences_remove',worker:'file',route:'/v1/cinematics/ownership/workflow-sequence-remove',
+  capability:'workflow.cinematic-sequence-remove.v1',
+  payload:req(cinematicArchiveRequestSchema,{sequenceIds:selection({type:'string',minLength:81,maxLength:81,pattern:sequenceId.source})}),
+  fields:['sequenceIds'],valid:v=>validSelection(v.sequenceIds,s=>typeof s==='string'&&s.length===81&&sequenceId.test(s))},
+ [propAnimationRemoveType]:{schema:propAnimationRemoveRequestSchema,key:'prop_animation_remove',worker:'file',route:'/v1/props/ownership/workflow-animation-remove',
+  capability:'workflow.prop-animation-remove.v1',
+  payload:req(propAnimationRemoveRequestSchema,{propId:slugSchema,motionIds:selection(slugSchema),source:{type:'object',additionalProperties:false,
+   required:['revision','sha256'],properties:{revision:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER-2},sha256:hashSchema}}}),
+  fields:['propId','source','motionIds'],valid:v=>validSlug(v.propId)&&exact(v.source,['revision','sha256'])&&
+   integer(v.source.revision,1,Number.MAX_SAFE_INTEGER-2)&&validHash(v.source.sha256)&&validSelection(v.motionIds,validSlug)},
+});
+export const extraCinematicTypes=Object.freeze(Object.keys(extraCinematicRequests));
+export const allCinematicTypes=Object.freeze([cinematicType,cinematicSequenceType,cinematicPlaybackType,...extraCinematicTypes]);
+export function validateExtraCinematic(payload,projectId,type){
+ const cfg=Object.hasOwn(extraCinematicRequests,type)?extraCinematicRequests[type]:null;
+ if(!cfg||!exact(payload,cfg.payload.required)||projectId!=='binari'||payload.projectId!==projectId||payload.schemaVersion!==cfg.schema||!cfg.valid(payload))
+  throw Error(cinematicInvalid);
+ return JSON.stringify(sortValue(payload));
+}

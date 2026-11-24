@@ -1,3 +1,4 @@
+import {extraCinematicRequests} from './cinematic-envelope.mjs';
 const origin='http://127.0.0.1:8030/v1/cinematics/ownership/workflow';
 const sequenceOrigin=origin+'-sequence',playbackOrigin=origin+'-playback';
 async function probe(path,body,fetcher,base=origin){
@@ -51,5 +52,14 @@ export async function cinematicPlaybackTargetReady(sequenceId,expectedRevision,f
   if(v===null||v==='stale')return v;
   return v&&Object.keys(v).sort().join(',')==='ok,revision,sequenceId'&&v.ok===true&&
    v.sequenceId===sequenceId&&v.revision===expectedRevision;
+ }catch{return false;}
+}
+
+export async function cinematicOperationReady(type,fetcher=fetch){
+ try{
+  if(!Object.hasOwn(extraCinematicRequests,type))return false;
+  const {route,capability}=extraCinematicRequests[type];
+  const v=await probe('',undefined,fetcher,'http://127.0.0.1:8030'+route);
+  return v&&Object.keys(v).sort().join(',')==='enabled,schemaVersion'&&v.enabled===true&&v.schemaVersion===capability;
  }catch{return false;}
 }

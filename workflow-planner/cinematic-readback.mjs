@@ -1,9 +1,10 @@
-import {validCinematicPlayback} from './cinematic-envelope.mjs';
+import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
 import {canonical} from './envelope.mjs';
 
 export async function readCinematicPublication({officialRequestId,family}){
  const route=family==='cinematic-sequence'?'workflow-sequence':family==='cinematic-playback'?'workflow-playback':'workflow';
- const r=await fetch('http://127.0.0.1:8030/v1/cinematics/ownership/'+route+'/result',{
+ const path=Object.hasOwn(extraCinematicRequests,family)?extraCinematicRequests[family].route:'/v1/cinematics/ownership/'+route;
+ const r=await fetch('http://127.0.0.1:8030'+path+'/result',{
   method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({officialRequestId}),
   signal:AbortSignal.timeout(5000),redirect:'error',cache:'no-store',
  });
@@ -48,4 +49,24 @@ export function verifyCinematicPlaybackReadback(candidate,value){
  return s&&Object.keys(s).sort().join(',')==='playback,projectId,revision,schemaVersion,sequenceId'&&
   s.schemaVersion==='ngs.cinematic-playback-state.v1'&&s.projectId==='binari'&&s.sequenceId===candidate.sequenceId&&
   s.revision===candidate.expectedRevision+1&&validCinematicPlayback(s.playback)&&canonical(s.playback)===canonical(candidate.playback);
+}
+
+export function verifyExtraCinematicReadback(candidate,value){
+ if(!value||value.ok!==true||value.resultRef!==candidate.resultRef)return false;
+ const keys=Object.keys(value).sort().join(',');
+ if(candidate.family===cinematicSourceType){
+  const m=value.manifest;
+  return keys==='manifest,ok,resultRef'&&m&&
+   Object.keys(m).sort().join(',')==='bytes,height,officialRequestId,projectId,schemaVersion,sha256,title,width'&&
+   m.schemaVersion==='ngs.cinematic-source-result.v1'&&m.projectId==='binari'&&m.officialRequestId===candidate.officialRequestId&&
+   m.title===candidate.title&&m.width===1536&&m.height===1024&&Number.isInteger(m.bytes)&&m.bytes>0&&m.bytes<=8*1024*1024&&
+   typeof m.sha256==='string'&&m.sha256.length===64&&/^[a-f0-9]{64}$/u.test(m.sha256)&&
+   candidate.resultRef==='binari/cinematics/sources/'+m.sha256+'.json';
+ }
+ if(candidate.family===cinematicArchiveType)return keys==='ok,resultRef,sequenceIds'&&
+    Array.isArray(value.sequenceIds)&&canonical(value.sequenceIds)===canonical(candidate.sequenceIds);
+ if(candidate.family===propAnimationRemoveType)return keys==='motionIds,ok,propId,resultRef,revision'&&
+    value.propId===candidate.propId&&value.revision===candidate.source.revision+1&&Array.isArray(value.motionIds)&&
+    canonical(value.motionIds)===canonical(candidate.motionIds);
+ return false;
 }

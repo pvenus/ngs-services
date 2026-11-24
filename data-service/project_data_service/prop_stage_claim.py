@@ -120,10 +120,16 @@ class PropClaimAuthority:
             with self.claim.snapshot() as db:
                 # This reader is only for committed task evidence/canonical worker source.
                 # Actual immutable files and metadata are independently checked by Filex.
-                rs=db.execute("SELECT official_request_id FROM workflow_tasks WHERE task_key=? AND status='completed' AND result_ref=? LIMIT 2",
-                    (PUBLISH,ref_name(PUBLISH,q['sha256']))).fetchall()
+                from .workflow_prop_animation_remove import KEY as REMOVE,graph as remove_graph
+                rs=db.execute("SELECT task_key,official_request_id FROM workflow_tasks WHERE task_key IN (?,?) AND status='completed' AND result_ref=? LIMIT 2",
+                    (PUBLISH,REMOVE,ref_name(PUBLISH,q['sha256']))).fetchall()
                 need(len(rs)==1)
-                run=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(rs[0][0],)).fetchone()
+                if rs[0]['task_key']==REMOVE:
+                    _,t,inp=remove_graph(db,rs[0]['official_request_id'])
+                    need(t['result_ref']==ref_name(PUBLISH,q['sha256']) and inp['propId']==q['propId'] and
+                         q['revision']==inp['source']['revision']+1)
+                    return
+                run=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(rs[0]['official_request_id'],)).fetchone()
                 p,rows=from_run(db,run)
                 need(rows[PUBLISH]['result_ref']==ref_name(PUBLISH,q['sha256']) and p['propId']==q['propId'] and
                     q['revision']==(1 if run['request_type']==GENERATE else p['source']['revision']+1))

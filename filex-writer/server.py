@@ -369,7 +369,7 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         return self.reply(200,store.portrait_asset(aid))
                     return self.reply(404,{'error':'NOT_FOUND'})
                 if hasattr(store,'cinematic_publish'):
-                    from media_store import CINEMATIC_ROUTE,CINEMATIC_BODY,SEQUENCE_ROUTE,PLAYBACK_ROUTE
+                    from media_store import CINEMATIC_ROUTE,CINEMATIC_BODY,SEQUENCE_ROUTE,PLAYBACK_ROUTE,SOURCE_ROUTE,ARCHIVE_ROUTE
                     routes={CINEMATIC_ROUTE:store.cinematic_publish,
                             CINEMATIC_ROUTE+'/asset':store.cinematic_source,
                             CINEMATIC_ROUTE+'/source-status':lambda v:store.cinematic_source(v,status=True),
@@ -382,12 +382,15 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         routes.update({PLAYBACK_ROUTE:store.cinematic_playback_update,
                                        PLAYBACK_ROUTE+'/target-status':store.cinematic_playback_target,
                                        PLAYBACK_ROUTE+'/result':store.cinematic_playback_result})
+                    if hasattr(store,'cinematic_source_generate'):
+                        routes.update({SOURCE_ROUTE:store.cinematic_source_generate,SOURCE_ROUTE+'/result':store.cinematic_source_result,
+                                       ARCHIVE_ROUTE:store.cinematic_sequences_archive,ARCHIVE_ROUTE+'/result':store.cinematic_sequences_archive_result})
                     action=routes.get(url.path)
                     if self.command!='POST' or action is None:return self.reply(404,{'error':'NOT_FOUND'})
                     n=self.headers.get('Content-Length','')
                     if (url.query or self.headers.get('Origin') is not None or self.headers.get('Transfer-Encoding') is not None or
                         self.headers.get('Content-Type')!='application/json' or not n.isascii() or not n.isdecimal() or
-                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path==CINEMATIC_ROUTE else 6*1024*1024 if url.path==SEQUENCE_ROUTE+'/frame' else 64*1024 if url.path in (SEQUENCE_ROUTE,PLAYBACK_ROUTE,PLAYBACK_ROUTE+'/result') else 4096)):
+                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path in (CINEMATIC_ROUTE,SOURCE_ROUTE) else 6*1024*1024 if url.path==SEQUENCE_ROUTE+'/frame' else 64*1024 if url.path in (SEQUENCE_ROUTE,PLAYBACK_ROUTE,PLAYBACK_ROUTE+'/result') else 4096)):
                         raise ValueError('cinematic transport')
                     def distinct(values):
                         out=dict(values)

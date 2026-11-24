@@ -379,3 +379,100 @@ class CinematicPlaybackStore(CinematicSequenceStore):
     (current['revision']>state['revision'] or current==state) and
     self._read(entry,PLAYBACK_LIMIT)==wire(receipt),'playback result evidence')
    return state
+
+SOURCE_ROUTE='/v1/workflow/cinematics-source'
+ARCHIVE_ROUTE='/v1/workflow/cinematics-sequence-remove'
+SOURCE_SCHEMA='ngs.cinematic-source-result.v1'
+ARCHIVE_SCHEMA='ngs.cinematic-sequence-archive.v1'
+ARCHIVE_LIMIT=1024*1024
+MAX_ARCHIVED=4096
+
+def source_entry(m):
+ require(type(m)is dict and set(m)=={'schemaVersion','projectId','officialRequestId','title','sha256','bytes','width','height'} and
+  m['schemaVersion']==SOURCE_SCHEMA and m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
+  cinematic_match(m['sha256'],CINEMATIC_DIGEST) and type(m['bytes'])is int and 0<m['bytes']<=CINEMATIC_MAX and
+  type(m['title'])is str and 1<=len(m['title'])<=120 and m['title']==m['title'].strip() and
+  type(m['width'])is int and type(m['height'])is int and m['width']==1536 and m['height']==1024,'source metadata')
+ return m
+
+def source_image(raw,m):
+ require(len(raw)==m['bytes'] and sha(raw)==m['sha256'] and len(raw)>=57 and
+  raw[:16]==b'\x89PNG\r\n\x1a\n\0\0\0\rIHDR' and
+  struct.unpack_from('>II',raw,16)==(m['width'],m['height']),'source image digest/size')
+ png(raw)
+ at=8
+ while at<len(raw):
+  n,k=struct.unpack_from('>I4s',raw,at)
+  require(k not in (b'acTL',b'fcTL',b'fdAT'),'source image still')
+  at+=12+n
+
+def archive_ids(ids,limit=30):
+ require(type(ids)is list and 1<=len(ids)<=limit and all(cinematic_match(p,CINEMATIC_ID) for p in ids) and
+  len(set(ids))==len(ids),'archive selection')
+ return ids
+
+class CinematicProjectStore(CinematicPlaybackStore):
+ def _private_result(self,folder,oid):
+  require(cinematic_match(oid,CINEMATIC_ID) and folder in ('.source-receipts','.archive-receipts'),'cinematic receipt')
+  directory=self.root/folder;require(not directory.is_symlink(),'cinematic receipt folder')
+  return directory/(oid+'.json')
+ def _result_source(self,oid):
+  receipt=self._private_result('.source-receipts',oid)
+  raw=self._read(receipt,8192);m=source_entry(json.loads(raw))
+  require(wire(m)==raw and m['officialRequestId']==oid,'source receipt integrity')
+  p=self._path('sources',m['sha256']+'.png')
+  source_image(self._read(p,CINEMATIC_MAX),m)
+  public=self._read(self._path('sources',m['sha256']+'.json'),8192)
+  alias=source_entry(json.loads(public))
+  require(wire(alias)==public and all(alias[k]==m[k] for k in ('sha256','bytes','width','height')),'source alias integrity')
+  return m
+ def cinematic_source_generate(self,p):
+  require(type(p)is dict and set(p)=={'manifest','base64'} and type(p['base64'])is str and
+   len(p['base64'])<=4*((CINEMATIC_MAX+2)//3),'source generation packet')
+  m=source_entry(p['manifest']); raw=base64.b64decode(p['base64'],validate=True);source_image(raw,m)
+  oid=m['officialRequestId'];s=m['sha256'];frozen=wire(m)
+  with self.lock():
+   receipt=self._private_result('.source-receipts',oid)
+   if receipt.exists() or receipt.is_symlink():
+    if self._read(receipt,8192)!=frozen:raise Conflict('source image request reused')
+   else:self.write(receipt,frozen)
+   image=self._path('sources',s+'.png'); meta=self._path('sources',s+'.json')
+   if image.exists():
+    require(self._read(image,CINEMATIC_MAX)==raw,'source bytes collision')
+   else:self.write(image,raw)
+   require(self._read(image,CINEMATIC_MAX)==raw,'source bytes readback')
+   if not meta.exists():self.write(meta,frozen)
+   return self._result_source(oid)
+ def cinematic_source_result(self,p):
+  require(type(p)is dict and set(p)=={'officialRequestId'},'source result packet')
+  with self.lock():return self._result_source(p['officialRequestId'])
+ def _archived(self):
+  path=self.root/'sequence-archive.json'
+  try:raw=self._read(path,ARCHIVE_LIMIT)
+  except FileNotFoundError:return set()
+  m=json.loads(raw)
+  require(type(m)is dict and set(m)=={'schemaVersion','projectId','sequenceIds'} and m['schemaVersion']==ARCHIVE_SCHEMA and
+   m['projectId']=='binari' and wire(m)==raw and m['sequenceIds']==sorted(archive_ids(m['sequenceIds'],MAX_ARCHIVED)),'archive state')
+  return set(m['sequenceIds'])
+ def _archive_packet(self,p):
+  require(type(p)is dict and set(p)=={'officialRequestId','sequenceIds'} and cinematic_match(p['officialRequestId'],CINEMATIC_ID),'archive packet')
+  archive_ids(p['sequenceIds'])
+  return self._private_result('.archive-receipts',p['officialRequestId'])
+ def _archive_result(self,p):
+  receipt=self._archive_packet(p)
+  require(self._read(receipt,8192)==wire(p) and set(p['sequenceIds'])<=self._archived(),'archive not committed')
+  return p
+ def cinematic_sequences_archive_result(self,p):
+  with self.lock():return self._archive_result(p)
+ def cinematic_sequences_archive(self,p):
+  receipt=self._archive_packet(p)
+  with self.lock():
+   existing=self._archived();selection=set(p['sequenceIds']);new=existing|selection
+   require(len(new)<=MAX_ARCHIVED,'archive bound')
+   for oid in selection:self._playback_base(oid)
+   if receipt.exists() or receipt.is_symlink():
+    if self._read(receipt,8192)!=wire(p):raise Conflict('archive request reused')
+   else:self.write(receipt,wire(p))
+   if existing!=new:
+    self.write(self.root/'sequence-archive.json',wire({'schemaVersion':ARCHIVE_SCHEMA,'projectId':'binari','sequenceIds':sorted(new)}))
+   return self._archive_result(p)

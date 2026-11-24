@@ -48,9 +48,10 @@ def validate_candidate(c,m):
          c['resultRef']=='prop.package.'+c['manifestSha256'])
     scope=c['scope'];op=scope.get('operation') if type(scope) is dict else False
     base=('officialRequestId','projectId','propId','requestSha256')
-    need(op in (None,'regenerate','append-animation') and keys(scope,base+(
+    need(op in (None,'regenerate','append-animation','remove-animation') and keys(scope,base+(
         ('designContextSha256','motion') if op is None else
-        ('operation','source','motion','designContextSha256') if op=='regenerate' else ('operation','source','animationId'))) and
+        ('operation','source','motion','designContextSha256') if op=='regenerate' else
+        ('operation','source','motionIds') if op=='remove-animation' else ('operation','source','animationId'))) and
         all(scope[k]==m[k] for k in base))
     if op is None:
         need(scope['motion'] in ('still','subtle') and m['revision']==1 and m['parentSha256'] is None)
@@ -65,10 +66,14 @@ def validate_candidate(c,m):
             expected=['prop_design','prop_base','prop_detail','prop_pixel']
             initial=scope['motion']=='subtle';need(len(m['animations'])==int(initial))
             if initial:need(m['animations'][0]['id']=='initial')
-        else:
+        elif op=='append-animation':
             need(prop_id(scope['animationId']));expected=[];initial=True
             need(m['animations'] and m['animations'][-1]['id']==scope['animationId'])
-    if op!='append-animation':need(scope['designContextSha256']==m['designContextSha256'])
+        else:
+            ids=scope['motionIds']
+            need(type(ids)is list and 1<=len(ids)<=30 and all(prop_id(i) for i in ids) and len(set(ids))==len(ids))
+            expected=[];initial=False
+    if op not in ('append-animation','remove-animation'):need(scope['designContextSha256']==m['designContextSha256'])
     if initial:
         expected+=['prop_motion','prop_animation_detail','prop_animation_pixel']
         clip=m['animations'][-1]
@@ -86,6 +91,11 @@ def successor(a,b,scope):
          digest(a)==scope['source']['sha256'] and a['revision']==scope['source']['revision'])
     if scope['operation']=='append-animation':
         n=len(a['animations']);need(b['animations'][:n]==a['animations'] and len(b['animations'])==n+1 and
+             all(a[k]==b[k] for k in ('media','title','interaction','designContextSha256')))
+    if scope['operation']=='remove-animation':
+        ids=set(scope['motionIds'])
+        need(ids<={i['id'] for i in a['animations']} and
+             b['animations']==[i for i in a['animations'] if i['id'] not in ids] and
              all(a[k]==b[k] for k in ('media','title','interaction','designContextSha256')))
 
 class PropPackageStore(Store):
@@ -179,7 +189,7 @@ class PropPackageStore(Store):
                 raise Conflict('prop head changed')
             if expected:
                 a=self.release_locked({'propId':prop,**expected},head);successor(a,m,scope)
-                prior=all_media(a) if scope['operation']=='append-animation' else {}
+                prior=all_media(a) if scope['operation'] in ('append-animation','remove-animation') else {}
             else:prior={}
             need(set(decoded)==set(all_next)-set(prior) and all(prior[k]==all_next[k] for k in set(prior)&set(all_next)))
             if rel.exists():
