@@ -192,3 +192,12 @@ through its existing geometry asset route. Finish and publish through the
 normal append flow, preserving the static PNGs and all prior animations.
 Enable append only with the reviewed matching Animation and Postprocess
 workers; this is not a separate request lane or a direct Filex write.
+
+### Removing selected animations
+
+`prop.animation.remove` is a file-worker request accepting a prop ID, its
+current revision and SHA-256 pin, and 1–30 distinct motion IDs. Filex publishes
+a new immutable revision with just those clips omitted, retaining the base
+images, design, and interactions. A conflicting revision returns a conflict
+instead of overwriting newer work. Prior revisions and their files are not
+deleted. Further prop work must use the newly published head and its pin.

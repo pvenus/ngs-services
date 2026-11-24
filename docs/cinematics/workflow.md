@@ -63,3 +63,15 @@ approved edit. Already-committed idempotent retries read their immutable
 receipt, and stale/competing edits return an explicit conflict. A downloaded
 JSON file edited by the user is submitted via the same typed request rather
 than written directly to canonical storage.
+
+`cinematic.source.generate` is a separate official image-worker request that
+accepts a title and prompt, publishes a 1536×1024 PNG at
+`cinematics/sources/<sha256>.png`, and publishes the title and provenance in a
+sibling JSON. It does not queue a cinematic sequence; the author selects a
+source explicitly when submitting the animation request.
+
+`cinematic.sequences.remove` is a scoped file-worker request and accepts up to
+30 distinct committed sequence IDs. It updates the catalog exclusion index
+`cinematics/sequence-archive.json`; it does not delete published frames,
+manifests, timeline metadata, or legacy MP4 files. All normal catalog views
+must honor the archive index.
