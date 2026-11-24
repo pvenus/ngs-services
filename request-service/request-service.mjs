@@ -12,11 +12,11 @@ export function configuration(env){
  const readSpaceRequest=configureSpaceMachineReader(env);
  return {directory,...(readSpaceRequest?{readSpaceRequest}:{})};
 }
-export function createRequestService({directory,readSpaceRequest,propImageEnabled=false,propImageReadiness}){
+export function createRequestService({directory,readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false}){
  if(readSpaceRequest!==undefined&&typeof readSpaceRequest!=='function')throw Error('REQUEST_SPACE_INVALID');
- const inbox=openOfficialInbox(directory,{readSpaceRequest,propImageEnabled});
+ const inbox=openOfficialInbox(directory,{readSpaceRequest,propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled});
  const server=createServer({headersTimeout:15000,requestTimeout:15000},(req,res)=>{
-  void requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled,propImageReadiness}).catch(()=>{
+  void requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled,propImageReadiness,propGenerateEnabled}).catch(()=>{
    if(res.headersSent)return res.destroy();
    const raw=JSON.stringify({error:'OFFICIAL_REQUEST_REGISTER_FAILED'});
    res.writeHead(503,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}).end(raw);

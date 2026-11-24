@@ -15,11 +15,13 @@ import {spaceQueueIdPattern,verifiedSpaceRequest} from './space-intake.mjs';
 
 import {unsupportedReason} from './pending-unsupported.mjs';
 
+import {propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable} from './prop-generate-envelope.mjs';
 import {propImageType,propImagePayloadSchema,propImageInvalid,propImageUnavailable} from './prop-image-envelope.mjs';
 
 const version='2025-06-18';
 const maxBody=96*1024;
 const known={
+ [propGenerateInvalid]:400,[propGenerateUnavailable]:503,[propGenerateMotionUnavailable]:503,
  [propImageInvalid]:400,[propImageUnavailable]:503,
  REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
  NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID:400,NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID:400,NGS_AUDIO_GENERATE_PAYLOAD_INVALID:400,NGS_AUDIO_DELETE_PAYLOAD_INVALID:400,
@@ -206,7 +208,12 @@ async function body(req){
  if(size!==Number(len))throw Error();
  return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,size)));
 }
-export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness}={}){
+function addPropGenerate(tool){
+ return {...tool,inputSchema:{...tool.inputSchema,properties:{...tool.inputSchema.properties,
+  requestType:{enum:[...tool.inputSchema.properties.requestType.enum,propGenerateType]}},
+  oneOf:[...tool.inputSchema.oneOf,{properties:{requestType:{const:propGenerateType},payload:propGeneratePayloadSchema}}]}};
+}
+export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false}={}){
  if(!allowed(req,req.socket.localPort))return send(res,403,{error:'REQUEST_MCP_LOOPBACK_REQUIRED'});
  if(req.url!=='/mcp')return send(res,404,{error:'NOT_FOUND'});
  if(req.method!=='POST')return send(res,405,{error:'REQUEST_MCP_POST_ONLY'},{Allow:'POST'});
@@ -232,7 +239,10 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
  }
  if(method==='ping'&&!Object.keys(params).length)return result(res,id,{});
  const ready=async()=>propImageEnabled===true&&(!propImageReadiness||await propImageReadiness()===true);
- if(method==='tools/list'&&!Object.keys(params).length)return result(res,id,{tools:[await ready()?addPropImage(tool):tool,cancel,list,workflowList,updateStatus,...(readSpaceRequest?[siteToolSchema]:[])]});
+ if(method==='tools/list'&&!Object.keys(params).length){
+  const submit=await ready()?addPropImage(tool):tool;
+  return result(res,id,{tools:[propGenerateEnabled===true?addPropGenerate(submit):submit,cancel,list,workflowList,updateStatus,...(readSpaceRequest?[siteToolSchema]:[])]});
+ }
  if(method!=='tools/call')return rpcError(res,id,-32601,'Method not found');
  const site=readSpaceRequest&&params.name===siteToolSchema.name;
  const binding=site?['registerSpace','OFFICIAL_REQUEST_SPACE_FAILED']:toolBindings.get(params.name);

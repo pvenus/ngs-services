@@ -16,6 +16,7 @@ import {allowedWorkflowSourceSql,officialIdFor} from './space-intake.mjs';
 
 import {ensurePendingReasonTable,unsupportedPlannerPolicy} from './pending-unsupported.mjs';
 
+import {propGenerateType,propGenerateUnavailable,propGenerateMotionUnavailable} from './prop-generate-envelope.mjs';
 import {propImageType,propImageUnavailable} from './prop-image-envelope.mjs';
 
 const error=()=>Error('OFFICIAL_REQUEST_INBOX_PRIVATE_REQUIRED');
@@ -24,7 +25,7 @@ export function validateInboxPath(directory){
   throw error();
  return directory;
 }
-export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propImageEnabled=false}={}){
+export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false}={}){
  validateInboxPath(directory);
  if(realpathSync(dirname(directory))!==dirname(directory))throw error();
  try{mkdirSync(directory,{mode:0o700});}catch(e){if(e.code!=='EEXIST')throw e;}
@@ -65,6 +66,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
   payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,?,?)`);
  const ownedStatus=db.prepare(`SELECT state FROM official_requests
   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
+  AND ${propGenerateEnabled===true?'1=1':`request_type<>'${propGenerateType}'`}
   AND ${propImageEnabled===true?'1=1':`request_type<>'${propImageType}'`}
   AND ${workflowScopeSql}`);
  const localOwnedStatus=db.prepare(`SELECT state FROM official_requests
@@ -85,6 +87,10 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  function register(request,isSite=false,raw){
    const {sourceId,projectId,requestType:kind,idempotencyKey,payload,payloadSha256,schemaVersion,npcId,npcSlug,categoryId}=request;
+   if(kind===propGenerateType){
+    if(propGenerateEnabled!==true)throw Error(propGenerateUnavailable);
+    if(JSON.parse(payload).motion==='subtle'&&propGenerateMotionEnabled!==true)throw Error(propGenerateMotionUnavailable);
+   }
    if(kind===propImageType&&propImageEnabled!==true)throw Error(propImageUnavailable);
    const officialRequestId=officialIdFor(request);
    let evidence;
@@ -130,7 +136,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  return {
   list:createRequestList(db),
-  workflowList:createWorkflowList(db,{propImageEnabled}),
+  workflowList:createWorkflowList(db,{propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled}),
   register:value=>register(validateOfficialSubmit(value),false,value),
   registerSpace:typeof readSpaceRequest==='function'?request=>register(request,true):undefined,
   cancel(value){

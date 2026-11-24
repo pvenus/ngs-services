@@ -17,6 +17,9 @@ import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit}
 
 import {npcAnimationRegenerateType,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
+import {propGenerateType,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,validatePropGenerate} from './prop-generate-envelope.mjs';
+import {buildPropGeneratePlan,exactPropTask,isPropRef,propCompletionLimit} from './prop-generate-plan.mjs';
+import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
 
 export const portraitPixelTaskType='npc.portrait-pixel';
@@ -31,10 +34,10 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,propGenerateType].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
- const payload=(row.requestType===propImageType?validatePropImage:
+ const payload=(row.requestType===propGenerateType?validatePropGenerate:row.requestType===propImageType?validatePropImage:
   row.requestType===npcAnimationRegenerateType?validateNpcAnimationRegenerate:
   row.requestType===motion2DRequestType?validateMotion2D:
   row.requestType===audioDeleteType?validateAudioDelete:
@@ -52,6 +55,7 @@ export function buildPlan(row,{pixelPortraits=true}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true){
+ if(row.requestType===propGenerateType)return {payload,tasks:buildPropGeneratePlan(row)};
  if(row.requestType===propImageType)return {payload,tasks:[{
   id:'workflow.task.'+sha(canonical([row.officialRequestId,propImageKey])),key:propImageKey,type:propImageType,
   workerType:'image',dependsOn:null,input:JSON.parse(payload),
@@ -214,17 +218,40 @@ function hasExhaustedSingleTask(run,readTasks){
   exhausted(rows[0])&&rows[0].result_ref===null;
 }
 
+function hasExhaustedPropGraph(run,readTasks){
+ const plan=restoreStoredPlan(run);
+ if(!plan)return false;
+ const rows=readTasks.all(run.official_request_id,propCompletionLimit);
+ if(rows.length!==plan.tasks.length||!rows.some(exhausted))return false;
+ const byId=new Map(rows.map(row=>[row.task_id,row])),blocked=new Set();
+ return plan.tasks.every(task=>{
+  const row=byId.get(task.id);
+  if(!exactPropTask(row,task))return false;
+  if(row.status==='completed')return !blocked.has(task.dependsOn)&&isPropRef(task.key,row.result_ref);
+  if(row.result_ref!==null||!(exhausted(row)||row.status==='pending'&&blocked.has(task.dependsOn)))return false;
+  blocked.add(row.task_id);return true;
+ });
+}
+
 // Only these families opt in. In particular, failed audio.generate tasks
 // continue to use their existing status behavior.
 const failurePolicies=new Map([
  [npcAnimationRegenerateType,hasExhaustedRegenerationGraph],
  [audioSeparateType,hasExhaustedSingleTask],
  [propImageType,hasExhaustedSingleTask],
+ [propGenerateType,hasExhaustedPropGraph],
 ]);
 
 export class PlannerStore{
  #propImageEnabled;
- constructor(path,{propImageEnabled=false}={}){
+ #propGenerateEnabled;
+ #propGenerateMotionEnabled;
+ #readPropPublication;
+ constructor(path,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,readPropPublication}={}){
+  if(propGenerateEnabled===true&&typeof readPropPublication!=='function')throw Error(propGenerateUnavailable);
+  this.#propGenerateEnabled=propGenerateEnabled===true;
+  this.#propGenerateMotionEnabled=propGenerateMotionEnabled===true;
+  this.#readPropPublication=readPropPublication;
   this.#propImageEnabled=propImageEnabled===true;
   this.db=new DatabaseSync(path);
   const names=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
@@ -242,6 +269,10 @@ export class PlannerStore{
  }
  stage(row){
   const payload=checkRow(row);
+  if(row.requestType===propGenerateType){
+   if(!this.#propGenerateEnabled)throw Error(propGenerateUnavailable);
+   if(row.payload.motion==='subtle'&&!this.#propGenerateMotionEnabled)throw Error(propGenerateMotionUnavailable);
+  }
   if(row.requestType===propImageType&&!this.#propImageEnabled)throw Error(propImageUnavailable);
   this.db.exec('BEGIN IMMEDIATE');
   try{
@@ -261,8 +292,8 @@ export class PlannerStore{
    this.db.exec('COMMIT');return prior===undefined;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
- pending(){return this.db.prepare("SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) ORDER BY registered_at,official_request_id")
-  .all(Number(this.#propImageEnabled),propImageType);}
+ pending(){return this.db.prepare("SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) AND (request_type<>? OR (?=1 AND (?=1 OR json_extract(payload,'$.motion') IS NOT 'subtle'))) ORDER BY registered_at,official_request_id")
+  .all(Number(this.#propImageEnabled),propImageType,propGenerateType,Number(this.#propGenerateEnabled),Number(this.#propGenerateMotionEnabled));}
  acknowledge(id){return this.db.prepare("UPDATE workflow_runs SET state='planned',updated_at=? WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id).changes;}
  conflict(id){this.db.prepare("UPDATE workflow_runs SET state='not_claimable',updated_at=?,reason='WORKFLOW_RS_STATUS_CONFLICT' WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id);}
  terminalReady(){
@@ -277,6 +308,15 @@ export class PlannerStore{
     ORDER BY r.registered_at,r.official_request_id`).all();
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    for(const row of candidates){
+    if(row.request_type===propGenerateType){
+     if(!this.#propGenerateEnabled||!restoreStoredPlan(row))continue;
+     const payload=JSON.parse(row.payload);
+     if(payload.motion==='subtle'&&!this.#propGenerateMotionEnabled)continue;
+     const publication=propCompletionCandidate({officialRequestId:row.official_request_id,projectId:row.project_id,
+      requestType:row.request_type,payload,payloadSha256:row.payload_sha256},evidence.all(row.official_request_id,propCompletionLimit));
+     if(publication)result.push({official_request_id:row.official_request_id,publication});
+     continue;
+    }
     if(row.request_type===propImageType){
      if(!this.#propImageEnabled)continue;
      const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,2);
@@ -297,6 +337,13 @@ export class PlannerStore{
   }catch(error){this.db.exec('ROLLBACK');throw error;}
   return result;
  }
+ async verifyCompletion({publication}){
+  if(!publication)return true;
+  if(!this.#propGenerateEnabled)return false;
+  // Independent authenticated read; the immutable receipt/manifests are
+  // required even if completed rows and hash-shaped references look valid.
+  try{return verifyPropPublicationProof(publication,await this.#readPropPublication(publication));}catch{return false;}
+ }
  terminalAcknowledged(id){
   return this.db.prepare("UPDATE workflow_runs SET reason='RS_COMPLETED',updated_at=? WHERE official_request_id=? AND state='planned' AND reason IS NULL")
    .run(Date.now(),id).changes;
@@ -305,11 +352,12 @@ export class PlannerStore{
   this.db.exec('BEGIN');
   try{
    const candidates=this.db.prepare(`SELECT r.* FROM workflow_runs r
-    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?,?)
+    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?,?,?)
       AND (?=1 OR r.request_type<>?)
+      AND (r.request_type<>? OR (?=1 AND (?=1 OR json_extract(r.payload,'$.motion') IS NOT 'subtle')))
       AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id
         AND t.status='failed' AND t.retry_count=?)
-    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,propImageType,Number(this.#propImageEnabled),propImageType,WORKFLOW_TASK_MAX_RETRIES);
+    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,propImageType,propGenerateType,Number(this.#propImageEnabled),propImageType,propGenerateType,Number(this.#propGenerateEnabled),Number(this.#propGenerateMotionEnabled),WORKFLOW_TASK_MAX_RETRIES);
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    const ready=candidates.filter(run=>failurePolicies.get(run.request_type)(run,evidence))
     .map(({official_request_id,request_type})=>({official_request_id,request_type}));
@@ -317,7 +365,7 @@ export class PlannerStore{
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  terminalFailureAcknowledged(id,requestType){
-  if(!failurePolicies.has(requestType)||requestType===propImageType&&!this.#propImageEnabled)return 0;
+  if(!failurePolicies.has(requestType)||requestType===propGenerateType&&!this.#propGenerateEnabled||requestType===propImageType&&!this.#propImageEnabled)return 0;
   return this.db.prepare(`UPDATE workflow_runs SET state='failed',reason='WORKFLOW_TASK_RETRIES_EXHAUSTED',updated_at=?
     WHERE official_request_id=? AND request_type=? AND state='planned' AND reason IS NULL`)
    .run(Date.now(),id,requestType).changes;
@@ -336,8 +384,8 @@ export async function pollOnce(store,rs){
    for(const row of page.requests){
     try{staged+=Number(store.stage(row));}
     catch(e){
-     if(['WORKFLOW_COMBAT_NOT_SUPPORTED',propImageUnavailable].includes(e.message)){unsupported++;continue;}
-     if(![propImageInvalid,'WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_AUDIO_SEPARATE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
+     if(['WORKFLOW_COMBAT_NOT_SUPPORTED',propImageUnavailable,propGenerateUnavailable,propGenerateMotionUnavailable].includes(e.message)){unsupported++;continue;}
+     if(![propImageInvalid,propGenerateInvalid,'WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_AUDIO_SEPARATE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
      invalid++;
     }
    }
@@ -357,8 +405,10 @@ export async function pollOnce(store,rs){
   }
  }
  // Terminal notification changes only RS. Workers never write the official request.
- for(const {official_request_id:id} of store.terminalReady()){
+ for(const candidate of store.terminalReady()){
+  const {official_request_id:id}=candidate;
   try{
+   if(candidate.publication&&!await store.verifyCompletion(candidate)){pollError=true;continue;}
    const status='completed',ack=await rs.call('request_update_status',{officialRequestId:id,status});
    ensure(exact(ack,['officialRequestId','status'])&&ack.officialRequestId===id&&ack.status===status,'WORKFLOW_RS_ACK_INVALID');
    completed+=store.terminalAcknowledged(id);
