@@ -77,7 +77,7 @@ function workflowProjection(r){
  }catch{throw Error('OFFICIAL_REQUEST_WORKFLOW_LIST_FAILED');}
 }
 
-function createPage(db,workflow,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propMutationsEnabled=false}={}){
+function createPage(db,workflow,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propMutationsEnabled=false}={}){
  const highest=db.prepare('SELECT coalesce(MAX(rowid),0) AS horizon FROM official_requests');
  const page=db.prepare(`SELECT ${workflow?workflowFields:operatorFields}
   FROM official_requests
@@ -112,7 +112,8 @@ function createPage(db,workflow,{propImageEnabled=false,propGenerateEnabled=fals
    requests=rows.filter(row=>!retired.has(row.internalRowId)&&knownWorkflowSchema(row.requestType,row.schemaVersion))
     .filter(row=>!propTypes.includes(row.requestType)||propGenerateEnabled===true&&
      (row.requestType===propGenerateType||propMutationsEnabled===true)&&
-     (row.requestType!==propAnimationType&&JSON.parse(row.payloadJson).motion!=='subtle'||propGenerateMotionEnabled===true))
+     (row.requestType===propAnimationType?propAnimationEnabled===true:
+      JSON.parse(row.payloadJson).motion!=='subtle'||propGenerateMotionEnabled===true))
     .filter(row=>row.requestType!==propImageType||propImageEnabled===true)
     .map(({internalRowId,...row})=>workflowProjection(row));
   }else requests=rows.map(({internalRowId,failureReason,...row})=>

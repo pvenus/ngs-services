@@ -218,3 +218,36 @@ test('normal RS capability gate pauses current prop intake and refuses to admit 
  ready=true;
  assert.equal((await rs.call('request_workflow_list',{})).requests[0].officialRequestId,accepted.officialRequestId);
 });
+
+test('append advertised/submitted/fed only with renderer capability; initial still remains independent',async t=>{
+ const {propPackageReady}=await import('../request-service/prop-package-readiness.mjs');
+ const pds=modes=>async(url)=>{
+  assert.equal(url,'http://127.0.0.1:8030/v1/props/ownership/workflow-package');
+  return Response.json({enabled:true,schemaVersion:'workflow.prop-package-write.v1',modes});
+ };
+ let modes=['still'];
+ const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true,propAnimationEnabled:true,
+  propPackageReadiness:()=>propPackageReady(pds(modes)),
+  propAnimationReadiness:()=>propPackageReady(pds(modes),'append-animation')});
+ const schema=async()=>(await rs.rpc('tools/list',{})).tools.find(x=>x.name==='request_submit').inputSchema.properties.requestType.enum;
+ const submit=()=>rs.call('request_submit',{sourceId:'local',idempotencyKey:'signed-motion',requestType:'prop.animation.generate',payload:animPayload});
+ assert(!(await schema()).includes('prop.animation.generate'));
+ await assert.rejects(submit(),/PROP_GENERATE_MOTION_UNAVAILABLE/);
+ modes=['still','append-animation'];
+ assert((await schema()).includes('prop.animation.generate'));
+ const accepted=await submit();
+ await assert.rejects(rs.call('request_submit',command({...p,motion:'subtle'})),/PROP_GENERATE_MOTION_UNAVAILABLE/);
+ const staticResult=await rs.call('request_submit',command());
+ const listed=async()=>(await rs.call('request_workflow_list',{})).requests.map(r=>r.officialRequestId);
+ assert((await listed()).includes(accepted.officialRequestId));
+ modes=['still'];
+ assert.deepEqual(await listed(),[staticResult.officialRequestId]);
+ const store=new PlannerStore(':memory:',{propGenerateEnabled:true,propMutationsEnabled:true,propAnimationEnabled:true,readPropPublication:async()=>null});
+ t.after(()=>store.close());
+ modes=['still','append-animation'];
+ assert.equal((await pollOnce(store,rs)).acknowledged,2);
+ const tasks=store.db.prepare('SELECT task_key,worker_type FROM workflow_tasks WHERE official_request_id=? ORDER BY rowid').all(accepted.officialRequestId);
+ assert.deepEqual(tasks.map(t=>[t.task_key,t.worker_type]),[[propKeys.motion,'animation'],[propKeys.animDetail,'postprocess'],[propKeys.animPixel,'postprocess'],[propKeys.publish,'postprocess']]);
+ for(const invalid of [['append-animation'],['still','subtle'],['still','append-animation','still']])
+  assert.equal(await propPackageReady(pds(invalid)),false);
+});

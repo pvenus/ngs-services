@@ -1,4 +1,4 @@
-# Formal prop creation (staged, not an operational worker)
+# Formal prop creation and append-only animation
 
 One official `prop.generate` request asks for one independent prop/package
 and interaction behavior. It is not the historical `prop.image-generate`
@@ -143,31 +143,35 @@ The real stage fixture injects deterministic design context and PNG bytes,
 not a production model, and drives genuine Node-created Planner state,
 the real snapshot and both HTTP servers.
 
-### Normal release activation (static only)
+### Normal release and runtime capability
 
-1. In the existing Filex concept writer role add only the canonical project
-   props child bind mount to exactly /props and
-   WRITER_WORKFLOW_PROP_PACKAGES=1. The container requires a verified
-   writable /props mount in Linux mountinfo and refuses activation in
-   any other writer role. It keeps the existing mounts and auth; never
-   mount the project root writable. Its existing token-gated capability
-   probe adds workflowPropPackageV1:true.
-2. Provision one owner-private 0700 stage root; do not put it in a replica
-   or canonical data path. Existing PDS can bind it with
-   PDS_WORKFLOW_PROP_STATIC=1 and PDS_WORKFLOW_PROP_STAGE_ROOT pointing
-   to that exact directory, using the already provisioned private Planner
-   inode and trusted concept Filex transport. Only opt in after the exact
-   document, image, and postprocess workers are verified for this route.
-3. Existing RS uses GET /v1/props/ownership/workflow-package. Only the
-   exact {"enabled":true,"schemaVersion":"workflow.prop-package-write.v1","modes":["still"]}
-   capability enables static create and regenerate; a transient failure
-   leaves already registered rows intact and pauses their handoff. The
-   existing Planner independently reads completion proof over fixed local
-   PDS. The postprocess finalizer may call /prepare {claim} for the static manifest.
-4. This release never advertises or admits individual animation or
-   subtle motion; the production stage and publish authority refuse
-   both as well. Verify a real motion provider and dedicated worker
-   integration separately before opening that route.
+1. The unified Filex writer owns the configured canonical prop child mount
+   and exposes the token-gated `props` scope. Reuse its existing protected
+   setup; don't start a second writer or remount the whole canonical root.
+2. The existing PDS package composition uses `PDS_WORKFLOW_PROP_STATIC=1`
+   and the dedicated owner-private stage root together with the exact
+   Planner authority. No caller can select or activate that setup.
+3. The animated worker itself renews a private, local Wan TI2V Q8_0 lease
+   only while its exact runtime verification succeeds. The default path is
+   `~/Workspaces/Workers/runtime/prop-animation/prop-animation-ready.json`.
+   Its parent must be an owner-only directory and the file must be a
+   single-link, owner-only 0600 regular file. PDS checks the exact v1 schema,
+   provider identity, and nonfuture timestamp no older than 120 seconds.
+   Missing, stale or malformed proof leaves only `["still"]` enabled.
+4. The exact readiness response remains `workflow.prop-package-write.v1`;
+   a current verified worker adds `"append-animation"` after `"still"`.
+   RS advertises and registers only that individual animation operation,
+   and pauses its registered handoff if readiness is lost. Static create
+   and regenerate remain independent; `motion:"subtle"` is still not
+   admitted by the standard launcher. A later readiness lapse does not
+   make already-staged bytes unverifiable, so admitted runs can complete
+   valid CPU derivatives and publication.
+5. Postprocess obtains the claim-bound manifest from `/prepare` for both
+   static and append. Append pins the current revision, carries over every
+   prior field, base lane and existing clip, then appends the two verified
+   new media lanes. A conflicting head is stale. The same prior append can
+   replay only when the exact immutable release already exists.
 
-OPS selector/mount changes are ordinary release settings, not alternate
-product paths or separate deployment scripts.
+Use normal GitHub release evidence and ordinary OPS targets, never a
+separate deployment script. Fixtures verify readiness denials, real
+claim-bound paths, CAS and readback with no model invocation.

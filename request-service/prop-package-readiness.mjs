@@ -1,5 +1,5 @@
 // Same-Mac PDS service route, no caller-controlled origin, URL, redirect or header.
-export async function propPackageReady(fetcher=fetch){
+export async function propPackageReady(fetcher=fetch, mode='still'){
  try{
   const result=await fetcher('http://127.0.0.1:8030/v1/props/ownership/workflow-package',{
     redirect:'error',cache:'no-store',signal:AbortSignal.timeout(3000),
@@ -13,6 +13,10 @@ export async function propPackageReady(fetcher=fetch){
   }
   const v=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(parts,bytes)));
   return v&&Object.keys(v).sort().join(',')==='enabled,modes,schemaVersion'&&v.enabled===true&&
-   v.schemaVersion==='workflow.prop-package-write.v1'&&Array.isArray(v.modes)&&v.modes.length===1&&v.modes[0]==='still';
+   v.schemaVersion==='workflow.prop-package-write.v1'&&Array.isArray(v.modes)&&
+   (v.modes.length===1&&v.modes[0]==='still'||v.modes.length===2&&v.modes[0]==='still'&&v.modes[1]==='append-animation')&&
+   v.modes.includes(mode);
  }catch{return false;}
 }
+
+export const propAnimationReady=()=>propPackageReady(fetch,'append-animation');

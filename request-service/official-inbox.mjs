@@ -25,7 +25,7 @@ export function validateInboxPath(directory){
   throw error();
  return directory;
 }
-export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propMutationsEnabled=false}={}){
+export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propMutationsEnabled=false}={}){
  validateInboxPath(directory);
  if(realpathSync(dirname(directory))!==dirname(directory))throw error();
  try{mkdirSync(directory,{mode:0o700});}catch(e){if(e.code!=='EEXIST')throw e;}
@@ -67,7 +67,8 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  const ownedStatus=db.prepare(`SELECT state FROM official_requests
   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
   AND ${propMutationsEnabled===true?'1=1':`request_type NOT IN ('${propTypes[1]}','${propTypes[2]}')`}
-  AND ${propGenerateMotionEnabled===true?'1=1':`request_type<>'${propAnimationType}' AND (request_type NOT IN ('${propGenerateType}','${propTypes[1]}') OR json_extract(payload_json,'$.motion') IS NOT 'subtle')`}
+  AND ${propAnimationEnabled===true?'1=1':`request_type<>'${propAnimationType}'`}
+  AND ${propGenerateMotionEnabled===true?'1=1':`(request_type NOT IN ('${propGenerateType}','${propTypes[1]}') OR json_extract(payload_json,'$.motion') IS NOT 'subtle')`}
   AND ${propGenerateEnabled===true?'1=1':`request_type<>'${propGenerateType}'`}
   AND ${propImageEnabled===true?'1=1':`request_type<>'${propImageType}'`}
   AND ${workflowScopeSql}`);
@@ -92,7 +93,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
    if(propTypes.includes(kind)){
     if(propGenerateEnabled!==true)throw Error(propGenerateUnavailable);
     if(kind!==propGenerateType&&propMutationsEnabled!==true)throw Error(propMutationUnavailable);
-    if((kind===propAnimationType||JSON.parse(payload).motion==='subtle')&&propGenerateMotionEnabled!==true)throw Error(propGenerateMotionUnavailable);
+    if((kind===propAnimationType?propAnimationEnabled:JSON.parse(payload).motion!=='subtle'||propGenerateMotionEnabled)!==true)throw Error(propGenerateMotionUnavailable);
    }
    if(kind===propImageType&&propImageEnabled!==true)throw Error(propImageUnavailable);
    const officialRequestId=officialIdFor(request);
@@ -139,7 +140,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  return {
   list:createRequestList(db),
-  workflowList:createWorkflowList(db,{propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled,propMutationsEnabled}),
+  workflowList:createWorkflowList(db,{propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propMutationsEnabled}),
   register:value=>register(validateOfficialSubmit(value),false,value),
   registerSpace:typeof readSpaceRequest==='function'?request=>register(request,true):undefined,
   cancel(value){

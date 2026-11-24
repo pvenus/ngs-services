@@ -213,7 +213,7 @@ function addPropFamily(tool,kind,payload){
   requestType:{enum:[...tool.inputSchema.properties.requestType.enum,kind]}},
   oneOf:[...tool.inputSchema.oneOf,{properties:{requestType:{const:kind},payload}}]}};
 }
-export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propMutationsEnabled=false,propPackageReadiness}={}){
+export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness}={}){
  if(!allowed(req,req.socket.localPort))return send(res,403,{error:'REQUEST_MCP_LOOPBACK_REQUIRED'});
  if(req.url!=='/mcp')return send(res,404,{error:'NOT_FOUND'});
  if(req.method!=='POST')return send(res,405,{error:'REQUEST_MCP_POST_ONLY'},{Allow:'POST'});
@@ -239,6 +239,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
  }
  if(method==='ping'&&!Object.keys(params).length)return result(res,id,{});
  const packageReady=async()=>propGenerateEnabled===true&&(!propPackageReadiness||await propPackageReadiness()===true);
+ const animationReady=async()=>propAnimationEnabled===true&&(!propAnimationReadiness||await propAnimationReadiness()===true);
  const ready=async()=>propImageEnabled===true&&(!propImageReadiness||await propImageReadiness()===true);
  if(method==='tools/list'&&!Object.keys(params).length){
   let submit=await ready()?addPropImage(tool):tool;
@@ -250,7 +251,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
     const regenerate=propGenerateMotionEnabled===true?propRegeneratePayloadSchema:{...propRegeneratePayloadSchema,
      properties:{...propRegeneratePayloadSchema.properties,motion:{const:'still'}}};
     submit=addPropFamily(submit,propRegenerateType,regenerate);
-    if(propGenerateMotionEnabled===true)submit=addPropFamily(submit,propAnimationType,propAnimationPayloadSchema);
+    if(await animationReady())submit=addPropFamily(submit,propAnimationType,propAnimationPayloadSchema);
    }
   }
   return result(res,id,{tools:[submit,cancel,list,workflowList,updateStatus,...(readSpaceRequest?[siteToolSchema]:[])]});
@@ -265,11 +266,14 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
   const args=site?await verifiedSpaceRequest(params.arguments,readSpaceRequest):params.arguments;
   if((site||params.name===submitTool)&&args?.requestType===propImageType&&propImageReadiness&&!await ready())throw Error(propImageUnavailable);
   if((site||params.name===submitTool)&&propTypes.includes(args?.requestType)&&!await packageReady())throw Error(propGenerateUnavailable);
+  if((site||params.name===submitTool)&&args?.requestType===propAnimationType&&!await animationReady())throw Error(propGenerateMotionUnavailable);
   let value=inbox[binding[0]](args);
   // Keep cursor semantics intact when PDS goes down. Suppress pending formal
   // prop work without dropping or marking it; unrelated rows still advance.
   if(params.name===workflowListTool&&propPackageReadiness&&value.requests.some(row=>propTypes.includes(row.requestType))&&!await packageReady())
     value={...value,requests:value.requests.filter(row=>!propTypes.includes(row.requestType))};
+  if(params.name===workflowListTool&&value.requests.some(row=>row.requestType===propAnimationType)&&!await animationReady())
+    value={...value,requests:value.requests.filter(row=>row.requestType!==propAnimationType)};
   return result(res,id,{isError:false,content:text(value),structuredContent:value});
  }catch(err){
   const matched=Object.hasOwn(known,err?.message);

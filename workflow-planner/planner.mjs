@@ -246,12 +246,14 @@ export class PlannerStore{
  #propImageEnabled;
  #propGenerateEnabled;
  #propGenerateMotionEnabled;
+ #propAnimationEnabled;
  #readPropPublication;
  #propMutationsEnabled;
- constructor(path,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propMutationsEnabled=false,readPropPublication}={}){
+ constructor(path,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propMutationsEnabled=false,readPropPublication}={}){
   if(propGenerateEnabled===true&&typeof readPropPublication!=='function')throw Error(propGenerateUnavailable);
   this.#propGenerateEnabled=propGenerateEnabled===true;
   this.#propGenerateMotionEnabled=propGenerateMotionEnabled===true;
+  this.#propAnimationEnabled=propAnimationEnabled===true;
   this.#readPropPublication=readPropPublication;
   this.#propMutationsEnabled=propMutationsEnabled===true;
   this.#propImageEnabled=propImageEnabled===true;
@@ -274,7 +276,7 @@ export class PlannerStore{
   if(propTypes.includes(row.requestType)){
    if(!this.#propGenerateEnabled)throw Error(propGenerateUnavailable);
    if(row.requestType!==propGenerateType&&!this.#propMutationsEnabled)throw Error(propMutationUnavailable);
-   if((row.requestType===propAnimationType||row.payload.motion==='subtle')&&!this.#propGenerateMotionEnabled)throw Error(propGenerateMotionUnavailable);
+   if((row.requestType===propAnimationType?!this.#propAnimationEnabled:row.payload.motion==='subtle'&&!this.#propGenerateMotionEnabled))throw Error(propGenerateMotionUnavailable);
   }
   if(row.requestType===propImageType&&!this.#propImageEnabled)throw Error(propImageUnavailable);
   this.db.exec('BEGIN IMMEDIATE');
@@ -298,10 +300,11 @@ export class PlannerStore{
  #propSql(type,payload){
   // Only fixed column identifiers and compile-time request types are passed.
   const known=propTypes.map(t=>"'"+t+"'").join(',');
-  const motion="("+type+"<>'"+propAnimationType+"' AND json_extract("+payload+",'$.motion') IS NOT 'subtle')";
+  const motion="(("+type+"='"+propAnimationType+"' AND "+Number(this.#propAnimationEnabled)+"=1) OR ("+
+   type+"<>'"+propAnimationType+"' AND ("+Number(this.#propGenerateMotionEnabled)+"=1 OR json_extract("+payload+",'$.motion') IS NOT 'subtle')))";
   return "("+type+" NOT IN ("+known+") OR ("+Number(this.#propGenerateEnabled)+"=1 AND ("+
    Number(this.#propMutationsEnabled)+"=1 OR "+type+"='"+propGenerateType+"') AND ("+
-   Number(this.#propGenerateMotionEnabled)+"=1 OR "+motion+")))";
+   motion+")))";
  }
  pending(){return this.db.prepare( `SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) AND
    ${this.#propSql('request_type','payload')} ORDER BY registered_at,official_request_id`)
@@ -324,7 +327,7 @@ export class PlannerStore{
      if(!this.#propGenerateEnabled||!restoreStoredPlan(row))continue;
      const payload=JSON.parse(row.payload);
      if(row.request_type!==propGenerateType&&!this.#propMutationsEnabled||
-        (row.request_type===propAnimationType||payload.motion==='subtle')&&!this.#propGenerateMotionEnabled)continue;
+        (row.request_type===propAnimationType?!this.#propAnimationEnabled:payload.motion==='subtle'&&!this.#propGenerateMotionEnabled))continue;
      const publication=propCompletionCandidate({officialRequestId:row.official_request_id,projectId:row.project_id,
       requestType:row.request_type,payload,payloadSha256:row.payload_sha256},evidence.all(row.official_request_id,propCompletionLimit));
      if(publication)result.push({official_request_id:row.official_request_id,publication});

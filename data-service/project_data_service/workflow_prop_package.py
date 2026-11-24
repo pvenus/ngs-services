@@ -115,7 +115,9 @@ def serve(handler):
             # An explicit injected instance is a development/test boundary;
             # production never configures one until every adapter is verified.
             if not obj.readiness():return handler.respond(503,{'error':'WORKFLOW_PROP_PACKAGE_NOT_READY'})
-            return handler.respond(200,{'enabled':True,'schemaVersion':CAPABILITY,'modes':['still']})
+            get_modes=getattr(obj.authority,'package_modes',None)
+            modes=get_modes() if callable(get_modes) else ['still']
+            return handler.respond(200,{'enabled':True,'schemaVersion':CAPABILITY,'modes':modes})
         if handler.command!='POST':return handler.respond(404,{'error':'WORKFLOW_PROP_PACKAGE_ROUTE'})
         n=handler.headers.get('Content-Length','')
         maximum=MAX_MANIFEST+8192 if parsed.path==PATH else 4096
@@ -126,7 +128,7 @@ def serve(handler):
         if len(raw)!=int(n):return handler.respond(400,{'error':'WORKFLOW_PROP_PACKAGE_BAD_BODY'})
         body=strict_json(raw)
         if parsed.path==PATH+'/prepare':
-            prepare=getattr(obj.authority,'prepare_static_manifest',None)
+            prepare=getattr(obj.authority,'prepare_manifest',None)
             need(callable(prepare) and keys(body,('claim',)))
             return handler.respond(200,{'manifest':prepare(body['claim'])})
         result=obj.publish(body) if parsed.path==PATH else obj.read(parsed.path.rsplit('/',1)[-1],body)

@@ -42,14 +42,25 @@ def half_canvas(m):
 
 class RealPropAuthority:
     """Private Planner authority injected into WorkflowPropPackage and every stage."""
-    def __init__(self,planner,staging,concept,writer,*,motion_enabled=False):
+    def __init__(self,planner,staging,concept,writer,*,motion_enabled=False,append_readiness=None):
         need(isinstance(planner,PropClaimAuthority) and isinstance(staging,PropStageStore) and
              isinstance(concept,PropDesignContext) and callable(writer))
         self.planner,self.staging,self.concept,self.writer=planner,staging,concept,writer
         self.motion_enabled=motion_enabled is True
+        self.append_readiness=append_readiness
 
     def require_mode(self,run,p):
-        need(self.motion_enabled or run['request_type']!=APPEND and p.get('motion','still')=='still')
+        if run['request_type']==APPEND:
+            # Production append jobs are admitted only with live readiness.
+            # A later idle/probe expiry must not prevent an already-rendered
+            # job from completing its verified CPU assets and publication.
+            need(self.motion_enabled or callable(self.append_readiness))
+        else:need(self.motion_enabled or p.get('motion','still')=='still')
+
+    def package_modes(self):
+        modes=['still']
+        if callable(self.append_readiness) and self.append_readiness() is True:modes.append('append-animation')
+        return modes
 
     def readiness(self):
         with self.planner.claim.snapshot():pass
@@ -66,7 +77,9 @@ class RealPropAuthority:
         if kind not in (APPEND,REGENERATE):return None
         head=self.writer(WRITER+'/head',{'propId':p['propId']})['pointer']
         if _pointer(head)!=p['source']:raise Stale()
-        return self.writer(WRITER+'/read',{'propId':p['propId'],**p['source']})['manifest']
+        prior=self.writer(WRITER+'/read',{'propId':p['propId'],**p['source']})['manifest']
+        if kind==APPEND and any(a['id']==p['motionId'] for a in prior['animations']):raise Stale()
+        return prior
 
     def context(self,p,kind):
         self.current_source(p,kind)
@@ -105,7 +118,9 @@ class RealPropAuthority:
                             **source(geom),'media':records[geom]['artifact']}
                         need(line=={'source':source(dep),'geometry':geometry})
                 if kind==APPEND:
-                    need(prior is not None)
+                    clips=m.get('animations')
+                    need(prior is not None and type(clips)is list and bool(clips) and type(clips[-1])is dict and
+                         clips[-1].get('title')==p['motionId'])
                     scope.update(operation='append-animation',source=p['source'],animationId=p['motionId'])
                 else:
                     # A superseded design pin must not silently become a published bundle.
@@ -120,10 +135,30 @@ class RealPropAuthority:
                 d=digest(m);return {'scope':scope,'members':members,'manifestSha256':d,'resultRef':ref_name(PUBLISH,d)}
             yield prepare
 
-    def prepare_static_manifest(self,claim):
+    def prepare_manifest(self,claim):
         with self.planner.selected(claim,(PUBLISH,)) as (run,p,rows,key):
             kind=run['request_type']
-            need(kind in (GENERATE,REGENERATE) and p.get('motion','still')=='still')
+            self.require_mode(run,p)
+            need(kind==APPEND or kind in (GENERATE,REGENERATE) and p.get('motion','still')=='still')
+            if kind==APPEND:
+                pin={'propId':p['propId'],**p['source']}
+                prior=self.writer(WRITER+'/read',pin)['manifest']
+                if any(a['id']==p['motionId'] for a in prior['animations']):raise Stale()
+                media={lane:self.stored(run,rows,k)['artifact']
+                       for lane,k in (('detail',MOTION_DETAIL),('pixel',MOTION_PIXEL))}
+                clip={'id':p['motionId'],'title':p['motionId'],'officialRequestId':run['official_request_id'],
+                      'requestSha256':run['payload_sha256'],'media':media}
+                prepared={**prior,'revision':prior['revision']+1,'officialRequestId':run['official_request_id'],
+                          'requestSha256':run['payload_sha256'],'parentSha256':p['source']['sha256'],
+                          'animations':[*prior['animations'],clip]}
+                head=self.writer(WRITER+'/head',{'propId':p['propId']})['pointer']
+                if _pointer(head)!=p['source']:
+                    try:
+                        existing=self.writer(WRITER+'/read',{'propId':p['propId'],'revision':prepared['revision'],
+                                                             'sha256':digest(prepared)})['manifest']
+                    except FileNotFoundError:raise Stale() from None
+                    need(existing==prepared)
+                return prepared
             prior=self.current_source(p,kind)
             # Read the exact two static stage artifacts; the full publish path
             # independently revalidates all lineage and raw hashes under CAS.
@@ -231,13 +266,15 @@ class RealPropAuthority:
             data=self.staging.bytes(oid,r['task_id'],source,r['result_ref'],index)
             return data,'image/apng' if source==MOTION_DETAIL else 'image/png'
 
-def configure_static(server,host,planner,concept,stage_root):
+def configure_static(server,host,planner,concept,stage_root,ready_file=None):
     from .concept_filex import FilexConcept
     from .workflow_prop_package import WorkflowPropPackage,bound_prop_writer
     need(host=='127.0.0.1' and isinstance(concept,FilexConcept))
     from .filex_writer_binding import writer as connect_writer,PROP_NAMESPACE
     writer=bound_prop_writer(lambda:connect_writer('props'),namespace=PROP_NAMESPACE)
-    authority=RealPropAuthority(PropClaimAuthority(planner),PropStageStore(stage_root),PropDesignContext(concept),writer)
+    from .prop_animation_ready import READY_FILE,renderer_ready
+    authority=RealPropAuthority(PropClaimAuthority(planner),PropStageStore(stage_root),PropDesignContext(concept),writer,
+                                append_readiness=lambda:renderer_ready(ready_file or READY_FILE))
     server.workflow_prop_stage=authority
     server.workflow_prop_package=WorkflowPropPackage(authority,writer)
 

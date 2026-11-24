@@ -1,17 +1,17 @@
 """Actual Planner-created SQLite -> read-only PDS stages -> authenticated Filex."""
-import base64,json,os,sqlite3,subprocess
+import base64,json,os,sqlite3,struct,subprocess,time,zlib
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request,urlopen
 from unittest import main,TestCase
-from test_prop_package_http import PropFixture,PROP,artifact_store
+from test_prop_package_http import PropFixture,PROP,artifact_store,make
 
 from prop_package_contract import wire,digest,sha
 from project_data_service.prop_design_context import PropDesignContext
 from project_data_service.prop_stage_claim import PropClaimAuthority,task_id,build_graph
 from project_data_service.prop_stage_store import PropStageStore
 from project_data_service.workflow_delete_claim import PrivatePlannerClaim
-from project_data_service.workflow_prop_package import WorkflowPropPackage,bound_prop_writer
+from project_data_service.workflow_prop_package import PATH,WRITER,WorkflowPropPackage,bound_prop_writer
 from project_data_service.workflow_prop_stage import DESIGN_ROUTE,STAGE,RealPropAuthority,expected_interaction
 
 REPO=Path(__file__).resolve().parents[1]
@@ -167,5 +167,78 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
         with sqlite3.connect(self.db) as db:
             db.execute("UPDATE workflow_tasks SET task_input='{}' WHERE task_key='prop_base'")
         self.api('/read',self.pin(pack),expected=403)
+
+    def test_live_lease_and_append_uses_exact_original_preserves_static_metadata_and_reconciles(self):
+        from project_data_service.prop_animation_ready import SCHEMA,PROVIDER,renderer_ready
+        lease=Path(self.temp.name).resolve()/'lease'; lease.mkdir(mode=0o700)
+        marker=lease/'ready.json'
+        self.actual.append_readiness=lambda:renderer_ready(marker)
+        def modes():
+            with urlopen(self.pds+PATH,timeout=3) as response:return json.load(response)['modes']
+        self.assertEqual(modes(),['still'])
+        def signal(t):
+            marker.write_bytes(wire({'schemaVersion':SCHEMA,'provider':PROVIDER,'checkedAt':t}))
+            marker.chmod(0o600)
+        now=time.time_ns()//1_000_000
+        signal(now-121_000);self.assertEqual(modes(),['still'])
+        signal(now+10_000);self.assertEqual(modes(),['still'])
+        signal(now)
+        marker.chmod(0o644);self.assertEqual(modes(),['still'])
+        marker.chmod(0o600);self.assertEqual(modes(),['still','append-animation'])
+        fixture=make('a')
+        prior=fixture['manifest']
+        self.filex_writer(WRITER,{k:fixture[k] for k in ('candidate','manifest','media')})
+        source={k:v for k,v in self.pin(prior).items() if k!='propId'}
+        oid='request.official.'+'d'*64
+        payload={'schemaVersion':'ngs.prop-animation-generate.v1','projectId':'binari','propId':PROP,
+                 'source':source,'motionId':'gentle-flicker','prompt':'Only the flame flickers'}
+        subprocess.run(['node','--input-type=module','-e',"""import {PlannerStore} from './workflow-planner/planner.mjs';
+import {canonical,sha} from './workflow-planner/envelope.mjs';
+const [db,id,raw]=process.argv.slice(1),payload=JSON.parse(raw);
+const s=new PlannerStore(db,{propGenerateEnabled:true,propAnimationEnabled:true,propMutationsEnabled:true,readPropPublication:async()=>null});
+s.stage({officialRequestId:id,requestType:'prop.animation.generate',projectId:'binari',schemaVersion:payload.schemaVersion,
+ payload,payloadSha256:sha(canonical(payload)),status:'registered',registeredAt:2});
+s.acknowledge(id);s.close();
+""",str(self.db),oid,json.dumps(payload)],cwd=REPO,check=True,capture_output=True)
+        self.oid=oid; self.payload_sha=digest(payload)
+        motion=self.mark('prop_motion',10)
+        self.assertEqual(self.stage(STAGE,'/read',{'claim':motion}),{'package':source,'media':prior['media']['detail'],
+                         'motionPrompt':payload['prompt']})
+        raw=self.stage(STAGE,'/asset',{'claim':motion,'purpose':'input','index':None},raw=True)
+        self.assertEqual(sha(raw),prior['media']['detail']['sha256'])
+        def rgb(color):
+            def c(k,v):return struct.pack('!I',len(v))+k+v+struct.pack('!I',zlib.crc32(k+v))
+            return b'\x89PNG\r\n\x1a\n'+c(b'IHDR',struct.pack('!IIBBBBB',32,32,8,2,0,0,0))+c(
+                b'IDAT',zlib.compress((b'\0'+bytes([color,20,30])*32)*32))+c(b'IEND',b'')
+        frames=[rgb(50),rgb(60)]
+        m={'schemaVersion':'ngs.prop-native-rgb-sequence.v1','officialRequestId':oid,'taskId':motion['taskId'],'propId':PROP,
+           'width':32,'height':32,'frameDurationsMs':[100,100],
+           'frames':[{'index':i,'sha256':sha(b),'bytes':len(b),'mediaType':'image/png'} for i,b in enumerate(frames)]}
+        raw_art={'manifest':m,'frames':[base64.b64encode(b).decode() for b in frames]}
+        result=self.stage(STAGE,'',{'claim':motion,'artifact':raw_art})
+        self.mark('prop_motion',10,result['resultRef'])
+        marker.unlink();self.assertEqual(modes(),['still'])
+        clips={}
+        for n,lane,w in [(11,'detail',32),(12,'pixel',16)]:
+            key='prop_animation_'+lane;cl=self.mark(key,n)
+            inputs=self.stage(STAGE,'/read',{'claim':cl})
+            self.assertEqual(inputs['geometry'],{**source,'media':prior['media'][lane]})
+            self.assertEqual(sha(self.stage(STAGE,'/asset',{'claim':cl,'purpose':'geometry','index':None},raw=True)),
+                             prior['media'][lane]['sha256'])
+            meta,data=artifact_store(w,w,100+n,True); clips[lane]=meta
+            r=self.stage(STAGE,'',{'claim':cl,'artifact':{'media':meta,'base64':base64.b64encode(data).decode()}})
+            self.mark(key,n,r['resultRef'])
+        publish=self.mark('prop_pack_publish',13)
+        artifact=self.api('/prepare',{'claim':publish})['manifest']
+        self.assertEqual(artifact['media'],prior['media'])
+        self.assertEqual(artifact['interaction'],prior['interaction'])
+        self.assertEqual(artifact['animations'],[{'id':payload['motionId'],'title':payload['motionId'],
+            'officialRequestId':oid,'requestSha256':self.payload_sha,'media':clips}])
+        out=self.api('',{'claim':publish,'manifest':artifact})
+        self.assertEqual(self.api('/prepare',{'claim':publish})['manifest'],artifact)
+        self.assertEqual(self.api('',{'claim':publish,'manifest':artifact}),out)
+        self.assertEqual(self.filex_writer(WRITER+'/read',self.pin(prior))['manifest'],prior)
+        self.mark('prop_pack_publish',13,out['resultRef'])
+        self.assertEqual(self.api('/read',self.pin(artifact))['manifest'],artifact)
 
 if __name__=='__main__':main()
