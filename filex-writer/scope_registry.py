@@ -33,7 +33,7 @@ _NPC_POST={'/v1/asset','/v1/batch','/v1/cas','/v1/create-character','/v1/restore
  '/v1/generation/reserve-equivalent','/v1/generation/release-equivalent','/v1/generation/abandon-creation',
  '/v1/migration/prepare','/v1/migration/asset','/v1/migration/activate','/v1/migration/commit',
  '/v1/portrait-assets/register','/v1/workflow/delete-character','/v1/workflow/preset',
- '/v1/workflow/animation','/v1/workflow/animation/read','/v1/workflow/frames','/v1/workflow/frames/read',
+ '/v1/workflow/animation','/v1/workflow/animation/read','/v1/workflow/frames','/v1/workflow/frames/read','/v1/workflow/frames/asset',
  '/v1/workflow/portrait-pixel','/v1/workflow/portrait-pixel/read',
  '/v1/workflow/npc-planning-add','/v1/workflow/npc-planning-add/read',
  '/v1/workflow/npc-planning-update','/v1/workflow/npc-planning-update/read',
@@ -123,7 +123,7 @@ def writable_mounts():
             by_mount[r[4]]='rw' in r[5].split(',')
     return frozenset(p for p,w in by_mount.items() if w)
 
-def bind_scopes(registry, root, credentials, *, verify_mounts=None, tokens=None):
+def bind_scopes(registry, root, credentials, *, verify_mounts=None):
     """Explicit private fixture override only. Production roots/credentials are fixed in main."""
     root=Path(root);credentials=Path(credentials)
     _require(root.is_absolute() and root.resolve(strict=True)==root and root.is_dir())
@@ -139,7 +139,7 @@ def bind_scopes(registry, root, credentials, *, verify_mounts=None, tokens=None)
         _require(scoped=={str(p) for p in roots.values()},'FILEX_SCOPE_MOUNT_UNKNOWN')
     _require(len({(p.stat().st_dev,p.stat().st_ino) for p in roots.values()})==len(roots),
              'FILEX_SCOPE_ROOT_ALIAS')
-    real_tokens={k:(tokens[k] if tokens is not None else _read_bearer(credentials,k))
+    real_tokens={k:_read_bearer(credentials,k)
                  for k in sorted({r.credential for r in registry})}
     _require(len(set(real_tokens.values()))==len(real_tokens),'FILEX_SCOPE_TOKEN_ALIAS')
     from server import handler
@@ -152,6 +152,9 @@ def bind_scopes(registry, root, credentials, *, verify_mounts=None, tokens=None)
     constructors={'concept':ConceptStore,'npc':FencedOwnedNPCStore,'motion':MotionStore,
                   'media':MediaStore,'props':PropPackageStore}
     stores={r.id:constructors[r.profile](roots[r.id]) for r in registry if r.profile!='audio'}
+    for r in registry:
+        if r.profile in ('concept','motion'):
+            stores[r.id].namespace=CANONICAL_NAMESPACE+r.folder+'/'
     out={}
     for r in registry:
         extra={};store=stores.get(r.id)

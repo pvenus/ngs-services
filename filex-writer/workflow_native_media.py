@@ -2,6 +2,7 @@
 import base64
 from datetime import datetime,timezone
 import hashlib
+import json
 import math
 import re
 import struct
@@ -14,6 +15,10 @@ from ownership_plan import plan
 from server import Conflict
 
 CAPABILITY='workflowNativePNGMediaV1'
+REGEN_MODES=('animation-sequences','animation-alpha','animation-processed-directions')
+GENERATION=re.compile(r'[a-f0-9]{48}')
+REGEN_SOURCE={'generationId','portraitAssetId','resultBasisSha256'}
+REGEN_RECEIPT='filex.workflow-animation-regeneration-receipt.v1'
 DIRECTIONS=('n','ne','e','se','s','sw','w','nw')
 MOTIONS=('walk','run')
 MOTION_ID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
@@ -242,7 +247,193 @@ class WorkflowNativeMedia:
             writes.update({'metadata.json':encoded(after_root),prefix+'.owned-assets.json':encoded(following)})
             return self.commit_workflow_native_bytes(writes)
 
+    @staticmethod
+    def _regen_scope(kind,b):
+        require(type(b) is dict and b.get('regeneration') is True and 'assetSetSha256' in b,'regeneration scope')
+        return scope(kind,{k:v for k,v in b.items() if k!='regeneration'})
+
+    def _regen_target(self,parsed):
+        oid,owner,motion,direction,pose,assets,stem,appearance=parsed
+        self.require_no_migration()
+        state=self.state(owner);self.require_no_cleanup(state)
+        require(state.get('state')=='active' and state.get('npcId')==owner
+                and txt(GENERATION,state.get('generationId')),'regeneration owner')
+        docs=self.documents_unlocked();root=docs['metadata.json'];prefix=owner+'/'
+        meta=docs.get(prefix+'metadata.json',{})
+        require(type(root['characterOrder']) is list and root['characterOrder'].count(owner)==1
+                and meta.get('id')==owner,'regeneration current NPC')
+        input_pose=appearance or 'idle'
+        key=f'{input_pose}/portrait/{direction}'
+        view=docs.get(prefix+'pose-views/'+key+'.json',{})
+        aid=view.get('assetId')
+        require(key in meta.get('poseViewKeys',[]) and view.get('schemaVersion')=='ngs.npc-pose-view.v1'
+                and (view.get('posePreset'),view.get('referenceType'),view.get('direction'))==(input_pose,'portrait',direction)
+                and txt(PNG,aid),'regeneration current appearance')
+        portrait_slot='assets/pose-views/'+key+'/image.png'
+        manifest=self.manifests().get(owner)
+        require(manifest is not None and manifest['slots'].get(portrait_slot)=={'assetId':aid,'sha256':aid[:-4]},
+                'regeneration portrait slot')
+        portrait=self.safe(prefix+portrait_slot)
+        require(0<portrait.stat().st_size<=MAX_ASSET and hashlib.sha256(portrait.read_bytes()).hexdigest()==aid[:-4],
+                'regeneration portrait bytes')
+        suffix=f'{pose}/{motion}/{direction}'
+        paths=tuple(k+'/'+suffix+'.json' for k in REGEN_MODES)
+        old=tuple(docs.get(prefix+path) for path in paths)
+        # Existing layers are either absent or from the same canonical
+        # generation/slot. Never replace a legacy/non-native artifact.
+        for row,schema in zip(old,(RAW,ALPHA,pixel_contract.WORKFLOW_SCHEMA)):
+            if row is None:continue
+            require(old[0] is not None and type(row) is dict and row.get('schemaVersion')==schema
+                    and all(row.get(k)==value for k,value in
+                         (('npcId',owner),('generationId',state['generationId']),
+                          ('posePreset',pose),('presetId',motion),('direction',direction))),
+                    'regeneration previous slot')
+        basis={'generationId':state['generationId'],'portraitAssetId':aid,'resultBasisSha256':digest(old)}
+        return docs,state,suffix,paths,basis,manifest
+
+    @staticmethod
+    def _regen_lineage(b):
+        return {k:v for k,v in b.items() if k!='taskId'}
+
+    def _regen_stage_path(self,oid,stem):
+        # Animation and postprocess are independent residents. Several
+        # directions/presets of the same parent can be staged simultaneously.
+        return '.workflow-motion-regeneration/'+digest([oid,stem])+'/'
+
+    def _regen_read_stage(self,b,parsed,target):
+        oid,owner,motion,direction,pose,assets,stem,appearance=parsed
+        _,_,_,_,basis,_=target
+        folder=self._regen_stage_path(oid,stem)
+        state=self.safe(folder+'raw.json')
+        require(state.is_file() and 0<state.stat().st_size<=1024*1024,'regeneration staged manifest')
+        staged=json.loads(state.read_bytes())
+        require(type(staged) is dict and set(staged)=={'scope','basis','sequence'}
+                and staged['scope']==self._regen_lineage(b) and staged['basis']==basis,'regeneration stage drift')
+        raw=staged['sequence']
+        require(type(raw) is dict and raw.get('schemaVersion')==RAW and raw.get('requestId')==task(oid,'animation_'+stem)
+                and all(raw.get(k)==value for k,value in (('npcId',owner),('generationId',basis['generationId']),
+                  ('posePreset',pose),('presetId',motion),('direction',direction),
+                  ('sourceBindingHash',source_binding(oid,direction,motion,pose,assets,appearance)))),'regeneration raw lineage')
+        rows=raw.get('frames')
+        require(type(rows) is list and 2<=raw.get('frameCount',0)<=1000 and len(rows)==raw['frameCount'],
+                'regeneration stored frames')
+        for i,row in enumerate(rows):
+            require(type(row) is dict and set(row)==FRAME and type(row['index']) is int and row['index']==i
+                    and txt(PNG,row['assetId']) and row['sha256']==row['assetId'][:-4]
+                    and type(row['bytes']) is int and 0<row['bytes']<=MAX_ASSET
+                    and row['mimeType']=='image/png','regeneration stored frame')
+        require(sum(row['bytes'] for row in rows)<=MAX_ASSETS,'regeneration stored frame aggregate')
+        return folder,staged
+
+    def _regen_bytes(self,folder,row):
+        path=self.safe(folder+row['assetId'])
+        require(path.is_file() and path.stat().st_size==row['bytes'],'regeneration frame length')
+        raw=path.read_bytes()
+        require(len(raw)==row['bytes'] and hashlib.sha256(raw).hexdigest()==row['sha256'],'regeneration frame bytes')
+        return raw
+
+    def workflow_media_asset(self,kind,b,artifact):
+        require(kind=='frames' and type(artifact) is dict and set(artifact)=={'assetId'}
+                and txt(PNG,artifact['assetId']),'regeneration asset input')
+        parsed=self._regen_scope(kind,b)
+        with self.lock():
+            folder,staged=self._regen_read_stage(b,parsed,self._regen_target(parsed))
+            row=next((row for row in staged['sequence']['frames'] if row['assetId']==artifact['assetId']),None)
+            require(row is not None,'regeneration asset scope')
+            raw=self._regen_bytes(folder,row)
+            return {k:row[k] for k in ('assetId','sha256','bytes')}|{'base64':base64.b64encode(raw).decode('ascii')}
+
+    def _regen_read(self,kind,b):
+        parsed=self._regen_scope(kind,b)
+        with self.lock():
+            target=self._regen_target(parsed)
+            result={k:b[k] for k in ('motion','direction','posePreset','assetSetSha256')}
+            if kind=='animation':return {**result,**target[4]}
+            _,staged=self._regen_read_stage(b,parsed,target)
+            return {**result,'sequence':staged['sequence']}
+
+    def _regen_publish(self,kind,b,artifact):
+        parsed=self._regen_scope(kind,b)
+        required={'fps','width','height','frames','source'} if kind=='animation' else {'alpha','pixel','assets'}
+        require(type(artifact) is dict and set(artifact)==required,'regeneration artifact')
+        with self.lock():
+            target=self._regen_target(parsed)
+            docs,state,suffix,paths,basis,previous=target
+            oid,owner,_,_,_,_,stem,_=parsed
+            if kind=='animation':
+                source=artifact['source']
+                require(type(source) is dict and set(source)==REGEN_SOURCE and source==basis,'regeneration source changed')
+                folder=self._regen_stage_path(oid,stem)
+                raw,by_id=self._workflow_raw(b,state,artifact,suffix)
+                sequence=raw[paths[0]]
+                staged={'scope':self._regen_lineage(b),'basis':basis,'sequence':sequence}
+                if self.safe(folder+'raw.json').exists():
+                    _,prior=self._regen_read_stage(b,parsed,target)
+                    require(prior==staged and all(self._regen_bytes(folder,row)==by_id[row['assetId']] for row in sequence['frames']),
+                            'regeneration staged replay drift')
+                    return {'ok':True}
+                return self.commit_workflow_native_bytes({
+                    **{folder+aid:data for aid,data in by_id.items()},folder+'raw.json':encoded(staged)})
+
+            tid=b['taskId']
+            input_hash=digest([b,artifact])
+            receipt_path=self.receipt_path(tid)
+            if receipt_path.exists():
+                receipt=json.loads(receipt_path.read_bytes())
+                observed={f'{owner}/{path}':digest(docs[f'{owner}/{path}']) for path in paths if f'{owner}/{path}' in docs}
+                require(type(receipt) is dict and receipt.get('schemaVersion')==REGEN_RECEIPT and receipt.get('status')=='committed'
+                        and receipt.get('requestId')==tid and receipt.get('generationId')==basis['generationId']
+                        and receipt.get('inputHash')==input_hash and len(observed)==3
+                        and receipt.get('hashes')==observed,'regeneration committed replay drift')
+                return {'ok':True}
+            folder,staged=self._regen_read_stage(b,parsed,target)
+            sequence=staged['sequence']
+            changes,assets=self._workflow_corrected(b,sequence,artifact,suffix)
+            by_id={**{row['assetId']:self._regen_bytes(folder,row) for row in sequence['frames']},**assets}
+            changes={paths[0]:sequence,**changes}
+            return self._regen_swap(b,docs,previous,changes,by_id,folder,staged,input_hash,suffix)
+
+    def _regen_swap(self,b,docs,previous,changes,by_id,folder,staged,input_hash,suffix):
+        owner=b['npcId'];prefix=owner+'/'
+        before={k.removeprefix(prefix):v for k,v in docs.items() if k.startswith(prefix)}
+        require(previous==plan(owner,before),'regeneration owner manifest inconsistent')
+        following=plan(owner,{**before,**changes})
+        def in_scope(path):
+            return any(path.startswith('assets/'+layer+'/'+suffix+'/') for layer in REGEN_MODES)
+        old=previous['slots'];new=following['slots']
+        old_slots={k:v for k,v in old.items() if in_scope(k)}
+        new_slots={k:v for k,v in new.items() if in_scope(k)}
+        require({k:v for k,v in old.items() if not in_scope(k)}=={k:v for k,v in new.items() if not in_scope(k)}
+                and previous['nonSlotReferences']==following['nonSlotReferences']
+                and {v['assetId'] for v in new_slots.values()}==set(by_id),'regeneration write scope')
+        for slot,item in old_slots.items():
+            file=self.safe(prefix+slot)
+            require(0<file.stat().st_size<=MAX_ASSET and hashlib.sha256(file.read_bytes()).hexdigest()==item['sha256'],
+                    'regeneration prior bytes')
+        require(all(not self.safe(prefix+slot).exists() for slot in new_slots if slot not in old_slots),
+                'regeneration unexpected existing slot file')
+        root=docs['metadata.json'];rev=root.get('_pdsCurrent',{}).get('revision')
+        require(type(rev) is int and rev>=0,'regeneration current revision')
+        after={**docs,**{prefix+k:v for k,v in changes.items()}}
+        doc=decode(after);doc.pop('_pdsCurrent',None)
+        metadata={'revision':rev+1,'savedAt':datetime.now(timezone.utc).isoformat(),
+                  'note':'Workflow native PNG direction regeneration','operationHash':input_hash,'documentHash':digest(doc)}
+        after_root={**root,'_pdsCurrent':metadata}
+        self.check_document_hash({**after,'metadata.json':after_root})
+        writes={prefix+k:by_id[v['assetId']] for k,v in new_slots.items()}
+        writes.update({prefix+k:encoded(v) for k,v in changes.items()})
+        writes.update({'metadata.json':encoded(after_root),prefix+'.owned-assets.json':encoded(following)})
+        cleanup={prefix+k for k in set(old_slots)-set(new_slots)}
+        cleanup.update({folder+row['assetId'] for row in staged['sequence']['frames']})
+        cleanup.add(folder+'raw.json')
+        receipt={'schemaVersion':REGEN_RECEIPT,'status':'committed','requestId':b['taskId'],
+                 'generationId':staged['basis']['generationId'],'inputHash':input_hash,
+                 'hashes':{prefix+k:digest(v) for k,v in changes.items()},'resultMetadata':metadata}
+        self.commit_owned(b['taskId'],receipt,writes,cleanup)
+        return {'ok':True}
+
     def workflow_media_read(self,kind,b):
+        if type(b) is dict and 'regeneration' in b:return self._regen_read(kind,b)
         if kind=='portrait-pixel':
             with self.lock():
                 _,_,raw,aid=self._workflow_static_pixel_current(b)
@@ -256,6 +447,7 @@ class WorkflowNativeMedia:
                     **({'portraitAssetId':source['assetId']} if kind=='animation' else {'sequence':source})}
 
     def workflow_media_publish(self,kind,b,artifact):
+        if type(b) is dict and 'regeneration' in b:return self._regen_publish(kind,b,artifact)
         if kind=='portrait-pixel':return self.workflow_static_pixel_publish(b,artifact)
         parsed=scope(kind,b);owner=parsed[1]
         # Structural checks precede lock; ownership and current dependencies

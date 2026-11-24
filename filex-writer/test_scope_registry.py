@@ -3,7 +3,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request,urlopen
-from scope_registry import bind_scopes,load_registry,unified_handler
+from scope_registry import Scope,bind_scopes,load_registry,unified_handler
 from test_prop_package_http import make
 
 class UnifiedFixture(unittest.TestCase):
@@ -65,6 +65,21 @@ class UnifiedFixture(unittest.TestCase):
         self.call('/v1/scopes/motion/snapshot','motion')
         self.call('/v1/scopes/media/media-artifacts/assets/'+'f'*64+'.png','media',status=404)
         self.call('/v1/scopes/audio/workflow/audio/read','concept',{'conceptId':'invalid-test'},status=404)
+    def test_motion_registration_and_array_only_reusable_concept_profile(self):
+        path='canonical-files/binari/motion-presets/presets/fixture.json'
+        packet={'requestId':'scoped-fixture','inputHash':'1'*64,
+          'readSet':{path:None},'files':[{'path':path,'expectedHash':None,'body':{'fixture':'motion'}}]}
+        ack=json.loads(self.call('/v1/scopes/motion/batch','motion',packet))
+        self.assertEqual(ack['status'],'committed')
+        self.assertTrue((self.data/'motion-presets'/'presets'/'fixture.json').is_file())
+        self.call('/v1/scopes/concept/batch','concept',packet,status=400)
+        assert (self.data/'concept'/'presets'/'fixture.json').exists() is False
+        # Adding a sibling with the same reviewed policy changes only the
+        # registry and mount set. It does not add a server/port.
+        alt=Scope('region-concept','region-concept','concept','concept')
+        (self.data/alt.folder).mkdir(mode=0o700)
+        out=bind_scopes((*self.scope,alt),self.data,self.secret)
+        self.assertIn(alt.id,out)
     def test_missing_or_wrong_secret_mount_refuses_start(self):
         req={str(self.data/key.folder) for key in self.scope}
         with self.assertRaisesRegex(ValueError,'FILEX_SCOPE_MOUNT_REQUIRED'):

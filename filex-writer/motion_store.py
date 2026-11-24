@@ -4,6 +4,10 @@ from concept_store import ConceptStore
 from server import Conflict
 class MotionStore(ConceptStore):
     namespace='canonical-files/binari/motion-presets/'
+    def modern_concept_authority(self):
+        # Motion preset documents have no concept-wide metadata index. The
+        # shared ConceptStore batch transaction still handles their exact files.
+        return False
     def path(self,key):
         if not isinstance(key,str) or not key.startswith(self.namespace):raise ValueError('namespace')
         relative=key[len(self.namespace):]
