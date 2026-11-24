@@ -5,8 +5,8 @@ Sources are **project-owned static PNGs** imported through the trusted Filex own
 filesystem path, background-removal policy, worker option, or second source is accepted.
 
 The canonical scope registry adds only `cinematics`, with its own mount/routing and the existing
-media binding. OPS provisions the owner-controlled canonical folder before applying the new
-writer/PDS pair; Docker does not create host paths. A deployment lacking that scope or a fresh,
+media binding. The owner-controlled canonical directory must be provisioned before OPS applies
+the new writer/PDS pair; Docker does not create host paths. A deployment lacking that scope or a fresh,
 private cinematic animation worker proof does not advertise intake. This does not disable props.
 
 `cinematic.generate` accepts `ngs.cinematic-generate.v1` with `projectId`, `sourceSha256`, and

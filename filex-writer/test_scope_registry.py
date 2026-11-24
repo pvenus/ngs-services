@@ -1,4 +1,6 @@
 import base64,json,os,tempfile,threading,unittest
+from hashlib import sha256
+from struct import pack
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -80,6 +82,36 @@ class UnifiedFixture(unittest.TestCase):
         (self.data/alt.folder).mkdir(mode=0o700)
         out=bind_scopes((*self.scope,alt),self.data,self.secret)
         self.assertIn(alt.id,out)
+    def test_cinematic_scope_rejects_bad_media_and_preserves_exact_immutable_result(self):
+        root=self.data/'cinematics'; sources=root/'sources'; sources.mkdir()
+        from test_workflow_native_media_http import image
+        still=image(32,32,37); source=sha256(still).hexdigest()
+        (sources/(source+'.png')).write_bytes(still)
+        pre='/v1/scopes/cinematics/workflow/cinematics'
+        pin={'sourceSha256':source}
+        self.call(pre+'/asset','concept',pin,status=401)
+        self.assertEqual(json.loads(self.call(pre+'/source-status','media',pin)),pin)
+        self.assertEqual(base64.b64decode(json.loads(self.call(pre+'/asset','media',pin))['base64']),still)
+        self.call(pre+'/asset','media',{'sourceSha256':'b'*64},status=404)
+        self.call(pre+'/asset','media',{'sourceSha256':'../image.png'},status=400)
+        def box(kind,data):return pack('>I4s',len(data)+8,kind)+data
+        expected_oid='request.official.'+'a'*64
+        def packet(raw):
+            return {'manifest':{'schemaVersion':'ngs.cinematic-result.v1','projectId':'binari',
+             'officialRequestId':expected_oid,'sourceSha256':source,'sha256':sha256(raw).hexdigest(),
+             'bytes':len(raw),'mimeType':'video/mp4','width':512,'height':352,'fps':24,'frameCount':45},
+             'base64':base64.b64encode(raw).decode()}
+        file_marker=box(b'ftyp',b'isom'+b'\0'*4)
+        self.call(pre,'media',packet(file_marker),status=400)
+        self.assertFalse((root/'results').exists())
+        raw=file_marker+box(b'moov',b'fixture-metadata')+box(b'mdat',b'fixture-video')
+        first=packet(raw)
+        self.assertEqual(json.loads(self.call(pre,'media',first)),first['manifest'])
+        self.assertEqual(json.loads(self.call(pre,'media',first)),first['manifest'])
+        self.call(pre,'media',packet(raw+b'garbage'),status=400)
+        self.call(pre,'media',packet(raw+box(b'free',b'mutation')),status=409)
+        self.assertEqual((root/'results'/(expected_oid+'.mp4')).read_bytes(),raw)
+        self.assertEqual(json.loads(self.call(pre+'/result','media',{'officialRequestId':expected_oid})),first['manifest'])
     def test_missing_or_wrong_secret_mount_refuses_start(self):
         req={str(self.data/key.folder) for key in self.scope}
         with self.assertRaisesRegex(ValueError,'FILEX_SCOPE_MOUNT_REQUIRED'):

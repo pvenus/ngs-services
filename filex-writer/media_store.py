@@ -4,7 +4,7 @@ Root is a dedicated deployment binding, never supplied by a worker.
 import base64, hashlib, io, json, re, struct, wave, zlib
 from server import Store, Conflict
 
-from media_validation import SCOPE,wire,sha,require,validate
+from media_validation import SCOPE,wire,sha,require,validate,png
 
 class MediaStore(Store):
  namespace='request-media-artifacts.v1'
@@ -112,6 +112,12 @@ class CinematicStore(Store):
    require(raw[:16]==b'\x89PNG\r\n\x1a\n\0\0\0\rIHDR' and len(raw)>=33 and sha(raw)==h,'cinematic source integrity')
    w,y=struct.unpack_from('>II',raw,16)
    require(0<w<=4096 and 0<y<=4096 and w*y<=8388608,'cinematic source dimensions')
+   png(raw)
+   i=8
+   while i<len(raw):
+    size,kind=struct.unpack_from('>I4s',raw,i)
+    require(kind not in (b'acTL',b'fcTL',b'fdAT'),'cinematic source must be a still PNG')
+    i+=12+size
   return {'sourceSha256':h} if status else {'sourceSha256':h,'base64':base64.b64encode(raw).decode()}
  def _result(self,oid):
   require(cinematic_match(oid,CINEMATIC_ID),'cinematic result id')
