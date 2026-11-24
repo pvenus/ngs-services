@@ -68,7 +68,7 @@ class WorkflowPropPackage:
                 current={'revision':prior['revision'],'sha256':digest(prior)} if prior else None
             elif prior is not None and current!={'revision':prior['revision'],'sha256':digest(prior)}:
                 raise Stale()
-            c=prepare(m,prior,current)
+            c=prepare(m,prior,current,replayed=replay is not None)
             need(keys(c,KEYS) and c['manifestSha256']==digest(m) and c['resultRef']=='prop.package.'+c['manifestSha256'])
             if replay is not None:
                 receipt=replay['receipt']

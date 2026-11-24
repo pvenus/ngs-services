@@ -103,3 +103,44 @@ using audited fixture stage bytes/claim port. Production mount/provisioning,
 the trusted real Planner-claim and stage-artifact ports, production
 execution readiness, and authenticated NGS list/show remain explicit
 separate gates.
+
+### Claim-bound intermediate transport
+
+The staged composition constructs `RealPropAuthority` from the existing
+inode-pinned owner-private `PrivatePlannerClaim`, a private 0700
+`PropStageStore`, the actual `PropDesignContext`, and the same narrow
+authenticated Filex bridge as the final package. It is injected into both
+the shared package and stage routes. The stage DB reader is SQLite mode=ro,
+query-only and rollback-journal only. It rederives the exact current DAG
+and task input, checks the running claim stamp and completed predecessor,
+and holds a read snapshot across stage/file operations and final publish.
+It does not update Planner or RS itself.
+
+- Document: GET `/v1/props/ownership/workflow-design` (readiness); POST
+  `/read {claim}` yields exact design context and bound task input; POST
+  base `{claim,artifact}` stores the one typed design spec.
+- Other stage workers: GET `/v1/props/ownership/workflow-stage`; POST
+  `/read {claim}` obtains the stage-kind-derived document/media/geometry
+  context; POST `/asset {claim,purpose,index}` returns only the bound
+  upstream PNG/APNG or indexed RGB PNG. `purpose` is `input` or
+  `geometry`, `index` is null outside raw frame retrieval.
+- POST stage base `{claim,artifact}` commits one immutable stage:
+  design JSON; `{media,base64}` for image and derived lanes;
+  `{manifest,frames}` for ordered RGB. PDS derives lineage and exact receipt.
+- `409 WORKFLOW_PROP_STAGE_INPUT_PENDING` is transient (no stage write)
+  when same-run animation geometry has not finished. Executors must wait
+  or use equivalent readiness gates, not mark this as a terminal failure.
+  A source change 409 is separately identified.
+- Final stages read all exact predecessor receipts, verify lineage, match
+  projected title and hotspots to the design, and load raw new lane bytes
+  only from the private store. The pinned package evidence endpoints
+  require an exact completed Planner publish row and independent Filex
+  verification. Production does not create a staging root, mount props,
+  configure the adapter, or enable the dormant routes from a client/env
+  override in this change.
+
+Retest the exact authority with
+`PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=data-service:filex-writer python3 -m unittest discover -s filex-writer -p 'test_prop*http.py'`.
+The real stage fixture injects deterministic design context and PNG bytes,
+not a production model, and drives genuine Node-created Planner state,
+the real snapshot and both HTTP servers.

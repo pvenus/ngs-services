@@ -46,7 +46,7 @@ class FixtureAuthority:
         if entry is None or claim!=entry['claim']:raise Denied()
         self.state.in_scope=True
         try:
-            def prepare(manifest,prior,head):
+            def prepare(manifest,prior,head,*,replayed=False):
                 if manifest!=entry['manifest'] or prior!=entry['prior'] or head!=entry['candidate']['scope'].get('source'):raise Denied()
                 return entry['candidate']
             yield prepare
@@ -97,7 +97,7 @@ def make(id_char,operation='create',prior=None,color=20):
            'payloadSha256':request_sha,'claimStamp':1}
     return {'claim':claim,'manifest':m,'candidate':c,'prior':prior,'media':raws}
 
-class PropHTTP(unittest.TestCase):
+class PropFixture:
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         p=Path(self.temp.name).resolve();(p/'props').mkdir();(p/'unrelated').mkdir()
@@ -109,7 +109,8 @@ class PropHTTP(unittest.TestCase):
         filex=self.launch(handler(dummy,token,workflow_props=self.props))
         config={'schemaVersion':'pds-filex-cas.v1','projectId':'binari','enabled':True,'endpoint':filex,'tokenFile':str(key)}
         self.authority=FixtureAuthority()
-        self.pds=self.launch(PDS,workflow_prop_package=WorkflowPropPackage(self.authority,bound_prop_writer(lambda:FilexCASTransport(config))))
+        self.filex_writer=bound_prop_writer(lambda:FilexCASTransport(config));self.handler=PDS
+        self.pds=self.launch(PDS,workflow_prop_package=WorkflowPropPackage(self.authority,self.filex_writer))
     def launch(self,h,**kw):
         s=ThreadingHTTPServer(('127.0.0.1',0),h)
         for k,v in kw.items():setattr(s,k,v)
@@ -130,6 +131,8 @@ class PropHTTP(unittest.TestCase):
         return self.api('',{k:e[k] for k in ('claim','manifest')},expected=expected)
     def current(self):return self.api('/head',{'propId':PROP})['pointer']
     def pin(self,m):return {'propId':m['propId'],'revision':m['revision'],'sha256':digest(m)}
+
+class PropHTTP(PropFixture,unittest.TestCase):
     def test_three_real_publications_pinned_history_replay_and_unchanged_legacy(self):
         original=make('a')
         self.assertIsNone(self.current())
