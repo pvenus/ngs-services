@@ -16,7 +16,7 @@ import {allowedWorkflowSourceSql,officialIdFor} from './space-intake.mjs';
 
 import {ensurePendingReasonTable,unsupportedPlannerPolicy} from './pending-unsupported.mjs';
 
-import {propGenerateType,propGenerateUnavailable,propGenerateMotionUnavailable} from './prop-generate-envelope.mjs';
+import {propTypes,propGenerateType,propAnimationType,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable} from './prop-generate-envelope.mjs';
 import {propImageType,propImageUnavailable} from './prop-image-envelope.mjs';
 
 const error=()=>Error('OFFICIAL_REQUEST_INBOX_PRIVATE_REQUIRED');
@@ -25,7 +25,7 @@ export function validateInboxPath(directory){
   throw error();
  return directory;
 }
-export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false}={}){
+export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propMutationsEnabled=false}={}){
  validateInboxPath(directory);
  if(realpathSync(dirname(directory))!==dirname(directory))throw error();
  try{mkdirSync(directory,{mode:0o700});}catch(e){if(e.code!=='EEXIST')throw e;}
@@ -66,6 +66,8 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
   payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,?,?)`);
  const ownedStatus=db.prepare(`SELECT state FROM official_requests
   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
+  AND ${propMutationsEnabled===true?'1=1':`request_type NOT IN ('${propTypes[1]}','${propTypes[2]}')`}
+  AND ${propGenerateMotionEnabled===true?'1=1':`request_type<>'${propAnimationType}' AND (request_type<>'${propGenerateType}' OR json_extract(payload_json,'$.motion') IS NOT 'subtle')`}
   AND ${propGenerateEnabled===true?'1=1':`request_type<>'${propGenerateType}'`}
   AND ${propImageEnabled===true?'1=1':`request_type<>'${propImageType}'`}
   AND ${workflowScopeSql}`);
@@ -87,9 +89,10 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  function register(request,isSite=false,raw){
    const {sourceId,projectId,requestType:kind,idempotencyKey,payload,payloadSha256,schemaVersion,npcId,npcSlug,categoryId}=request;
-   if(kind===propGenerateType){
+   if(propTypes.includes(kind)){
     if(propGenerateEnabled!==true)throw Error(propGenerateUnavailable);
-    if(JSON.parse(payload).motion==='subtle'&&propGenerateMotionEnabled!==true)throw Error(propGenerateMotionUnavailable);
+    if(kind!==propGenerateType&&propMutationsEnabled!==true)throw Error(propMutationUnavailable);
+    if((kind===propAnimationType||JSON.parse(payload).motion==='subtle')&&propGenerateMotionEnabled!==true)throw Error(propGenerateMotionUnavailable);
    }
    if(kind===propImageType&&propImageEnabled!==true)throw Error(propImageUnavailable);
    const officialRequestId=officialIdFor(request);
@@ -136,7 +139,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  return {
   list:createRequestList(db),
-  workflowList:createWorkflowList(db,{propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled}),
+  workflowList:createWorkflowList(db,{propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled,propMutationsEnabled}),
   register:value=>register(validateOfficialSubmit(value),false,value),
   registerSpace:typeof readSpaceRequest==='function'?request=>register(request,true):undefined,
   cancel(value){

@@ -46,3 +46,32 @@ proof reader. Production service CLI, PDS/worker selectors, actual
 end-to-end package execution and puzzle result browsing are not enabled
 here. The optional model is not verified in production. The separate
 single-image workflow and existing demo are untouched.
+
+## Selecting, editing and adding one animation
+
+Select a published package by exact `{propId,revision,sha256}`.
+`prop.update` (`ngs.prop-update.v1`) takes the same project and prop ID,
+`source:{revision,sha256}`, explicit `scope:"metadata"|"appearance"`, intent
+and a current design pin. Metadata edits run only document and final proof.
+Appearance edits regenerate one base PNG and its static lanes using the
+pinned predecessor. Edits preserve the exact existing ordered animations.
+
+`prop.animation.generate` (`ngs.prop-animation-generate.v1`) takes that
+same exact source pin and one named `motionId` plus a human prompt. This is
+one independent animation: no preset, no independent image generation, no
+batch. The worker must read the pinned package's existing canonical detail
+base. The new clip's detail/pixel animation lanes are synchronized RGBA,
+with the base canvases preserved. Creation can optionally add one initial
+clip (ID `initial`); no operation implicitly rerenders previous clips.
+IDs match the package reader's slug constraints; empty, separator-containing,
+or out-of-range IDs are rejected. Prompts are bounded to 2,000 UTF-8 bytes.
+
+The canonical product layout is
+`canonical-files/binari/props/<propId>/{metadata.json,releases/<revision>/manifest.json,assets/<sha256>.png}`.
+Prepare the checked candidate under the real running claim, re-read the
+pinned prior manifest, and require a writer CAS of the exact current prop
+head (absent for create; the selected revision/hash for successors). A
+concurrent advance is a stale selection, not permission to overwrite. The
+previous manifest must remain retrievable immutably for independent
+completion proof. The fixture verifies these checks but neither writes
+live Filex packages nor implements the production publisher here.

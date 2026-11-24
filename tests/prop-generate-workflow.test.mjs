@@ -100,13 +100,13 @@ test('real MCP ingress/Planner: one pack only after same-run complete proof and 
   interaction:{pixelOpen:{action:'open',x:1,y:2,width:15,height:15},detailTrigger:{action:'activate',x:2,y:3,width:80,height:80}}};
  put.run('running',null,final.id);
  for(const task of tasks.slice(0,-2))put.run('completed',propRef(task.key,evidence[task.key]),task.id);
- assert.throws(()=>preparePropPublication(run,rows(),claim,manifest),/PROP_PACKAGE_PROOF_INVALID/);
+ assert.throws(()=>preparePropPublication(run,rows(),claim,manifest,{head:null}),/PROP_PACKAGE_PROOF_INVALID/);
  assert.equal((await pollOnce(store,rs)).completed,0);assert.equal(reads,0);
  const pixel=tasks.at(-2);put.run('completed',propRef(pixel.key,evidence[pixel.key]),pixel.id);
- assert.throws(()=>preparePropPublication(run,rows(),{...claim,claimStamp:8},manifest),/PROP_PACKAGE_PROOF_INVALID/);
+ assert.throws(()=>preparePropPublication(run,rows(),{...claim,claimStamp:8},manifest,{head:null}),/PROP_PACKAGE_PROOF_INVALID/);
  const wrongMedia={...manifest,animations:manifest.animations.map(clip=>({...clip,media:{...clip.media,pixel:{...clip.media.pixel,frameDurationsMs:[80,120]}}}))};
- assert.throws(()=>preparePropPublication(run,rows(),claim,wrongMedia),/PROP_PACKAGE_PROOF_INVALID/);
- const candidate=preparePropPublication(run,rows(),claim,manifest);
+ assert.throws(()=>preparePropPublication(run,rows(),claim,wrongMedia,{head:null}),/PROP_PACKAGE_PROOF_INVALID/);
+ const candidate=preparePropPublication(run,rows(),claim,manifest,{head:null});
  put.run('completed',candidate.resultRef,final.id);
  assert.equal((await pollOnce(store,rs)).completed,0);assert.equal(reads,1);
  const receipt={schemaVersion:'ngs.prop-package-publication-receipt.v1',authority:'filex',status:'committed',...candidate};
@@ -130,4 +130,71 @@ test('exhausted root design failure settles blocked descendants without declarin
  assert.equal((await pollOnce(store,rs)).failed,1);
  assert.equal((await rs.call('request_list',{})).requests[0].status,'failed');
  assert.equal(store.db.prepare("SELECT count(*) AS n FROM workflow_tasks WHERE status='pending'").get().n,4);
+});
+
+const revisionCase=(requestType,payload,suffix)=>({officialRequestId:'request.official.'+suffix.repeat(64),
+ projectId:'binari',requestType,schemaVersion:payload.schemaVersion,payload,payloadSha256:sha(canonical(payload)),
+ status:'registered',registeredAt:1});
+const still=(digest,width,height)=>({assetId:digest+'.png',sha256:digest,bytes:600,width,height,mediaType:'image/png',frameDurationsMs:[]});
+const animate=(digest,width,height)=>({...still(digest,width,height),mediaType:'image/apng',frameDurationsMs:[100,100]});
+const basePack={schemaVersion:'ngs.prop-package.v1',officialRequestId:'request.official.'+'a'.repeat(64),projectId:'binari',propId:'lantern',
+ revision:1,parentSha256:null,requestSha256:'1'.repeat(64),designContextSha256:'2'.repeat(64),title:'기존 등롱',
+ media:{detail:still('3'.repeat(64),512,512),pixel:still('4'.repeat(64),128,128)},interaction:{pixelOpen:null,detailTrigger:null},
+ animations:[{id:'old-flutter',title:'기존 움직임',officialRequestId:'request.official.'+'b'.repeat(64),
+  requestSha256:'7'.repeat(64),media:{detail:animate('6'.repeat(64),512,512),pixel:animate('8'.repeat(64),128,128)}}]};
+const sourcePin={revision:basePack.revision,sha256:sha(canonical(basePack))};
+const editPayload={schemaVersion:'ngs.prop-update.v1',projectId:'binari',propId:'lantern',source:sourcePin,
+ scope:'metadata',intent:'이름만 수정',designContextSha256:'c'.repeat(64)};
+const animPayload={schemaVersion:'ngs.prop-animation-generate.v1',projectId:'binari',propId:'lantern',source:sourcePin,
+ motionId:'gentle-sway',prompt:'기존 등롱이 가볍게 흔들립니다'};
+function fixtureRows(row,values={}){
+ const graph=buildPlan(row).tasks,last=graph.at(-1),run={...row,state:'planned',reason:null};
+ const rows=graph.map((task,i)=>({official_request_id:run.officialRequestId,task_id:task.id,task_key:task.key,
+  task_type:task.type,worker_type:task.workerType,depends_on_task_id:task.dependsOn,task_input:canonical(task.input),
+  status:task===last?'running':'completed',result_ref:task===last?null:propRef(task.key,values[task.key]??(i+1).toString(16).repeat(64)),updated_at:7}));
+ return {run,rows,claim:{officialRequestId:run.officialRequestId,projectId:'binari',taskId:last.id,payloadSha256:row.payloadSha256,claimStamp:7}};
+}
+test('individual RS operations are independently gated and persist only exact selected-revision tasks',async t=>{
+ const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true});
+ const submit=(requestType,payload,key)=>rs.call('request_submit',{sourceId:'local',requestType,payload,idempotencyKey:key});
+ await assert.rejects(submit('prop.animation.generate',animPayload,'motion-off'),/PROP_GENERATE_MOTION_UNAVAILABLE/);
+ await assert.rejects(submit('prop.update',{...editPayload,source:{...sourcePin,motion:'subtle'}},'pin-extra'),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+ const meta=await submit('prop.update',editPayload,'update-metadata');
+ const art=await submit('prop.update',{...editPayload,scope:'appearance'},'update-art');
+ const store=new PlannerStore(':memory:',{propGenerateEnabled:true,propMutationsEnabled:true,readPropPublication:async()=>null});
+ t.after(()=>store.close());assert.equal((await pollOnce(store,rs)).acknowledged,2);
+ const tasks=store.db.prepare('SELECT task_key FROM workflow_tasks WHERE official_request_id=? ORDER BY rowid');
+ assert.deepEqual(tasks.all(meta.officialRequestId).map(r=>r.task_key),[propKeys.design,propKeys.publish]);
+ assert.deepEqual(tasks.all(art.officialRequestId).map(r=>r.task_key),[propKeys.design,propKeys.base,propKeys.detail,propKeys.pixel,propKeys.publish]);
+ const animation=buildPlan(revisionCase('prop.animation.generate',animPayload,'a')).tasks;
+ assert.deepEqual(animation.map(x=>x.key),[propKeys.motion,propKeys.animDetail,propKeys.animPixel,propKeys.publish]);
+ assert.equal(animation[0].input.motionId,animPayload.motionId);
+ assert.deepEqual(animation[0].input.source,sourcePin);
+ assert(!animation.some(task=>task.workerType==='image'));
+});
+
+test('immutable edit and append enforce the pinned current head; append cannot replace base or overwrite prior clips',()=>{
+ const meta=fixtureRows(revisionCase('prop.update',editPayload,'c'));
+ const next=(scope,body)=>({...basePack,officialRequestId:scope.run.officialRequestId,requestSha256:scope.run.payloadSha256,
+  revision:2,parentSha256:sourcePin.sha256,...body});
+ const manifest=next(meta,{title:'수정된 등롱',designContextSha256:editPayload.designContextSha256});
+ assert(preparePropPublication(meta.run,meta.rows,meta.claim,manifest,{prior:basePack,head:sourcePin}));
+ assert.throws(()=>preparePropPublication(meta.run,meta.rows,meta.claim,{...manifest,media:{...manifest.media,
+  pixel:still('b'.repeat(64),128,128)}},{prior:basePack,head:sourcePin}),/PROP_PACKAGE_PROOF_INVALID/);
+ const anim=fixtureRows(revisionCase('prop.animation.generate',animPayload,'d'),
+  {[propKeys.animDetail]:'e'.repeat(64),[propKeys.animPixel]:'f'.repeat(64)});
+ const clip={id:animPayload.motionId,title:'가벼운 흔들림',officialRequestId:anim.run.officialRequestId,requestSha256:anim.run.payloadSha256,
+  media:{detail:animate('e'.repeat(64),512,512),pixel:animate('f'.repeat(64),128,128)}};
+ const appended=next(anim,{animations:[...basePack.animations,clip]});
+ const evidence=preparePropPublication(anim.run,anim.rows,anim.claim,appended,{prior:basePack,head:sourcePin});
+ const receipt={schemaVersion:'ngs.prop-package-publication-receipt.v1',authority:'filex',status:'committed',...evidence};
+ assert.equal(verifyPropPublicationProof(evidence,{receipt,manifest:appended,prior:basePack}),true);
+ assert.equal(verifyPropPublicationProof(evidence,{receipt,manifest:appended,prior:{...basePack,title:'forged'}}),false);
+ for(const failure of [{head:{revision:2,sha256:'a'.repeat(64)},manifest:appended},
+  {head:sourcePin,manifest:{...appended,animations:[clip]}},
+  {head:sourcePin,manifest:{...appended,animations:[...basePack.animations,{...clip,id:'old-flutter'}]}},
+  {head:sourcePin,manifest:{...appended,title:'changed without editing'}}]){
+  assert.throws(()=>preparePropPublication(anim.run,anim.rows,anim.claim,failure.manifest,{prior:basePack,head:failure.head}),
+   /PROP_PACKAGE_PROOF_INVALID/);
+ }
 });

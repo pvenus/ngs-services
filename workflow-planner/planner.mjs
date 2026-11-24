@@ -17,7 +17,7 @@ import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit}
 
 import {npcAnimationRegenerateType,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
-import {propGenerateType,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,validatePropGenerate} from './prop-generate-envelope.mjs';
+import {propGenerateType,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propUpdateType,propAnimationType,propTypes,propValidator} from './prop-generate-envelope.mjs';
 import {buildPropGeneratePlan,exactPropTask,isPropRef,propCompletionLimit} from './prop-generate-plan.mjs';
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
@@ -34,10 +34,10 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,propGenerateType].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,...propTypes].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
- const payload=(row.requestType===propGenerateType?validatePropGenerate:row.requestType===propImageType?validatePropImage:
+ const payload=(Object.hasOwn(propValidator,row.requestType)?propValidator[row.requestType]:row.requestType===propImageType?validatePropImage:
   row.requestType===npcAnimationRegenerateType?validateNpcAnimationRegenerate:
   row.requestType===motion2DRequestType?validateMotion2D:
   row.requestType===audioDeleteType?validateAudioDelete:
@@ -55,7 +55,7 @@ export function buildPlan(row,{pixelPortraits=true}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true){
- if(row.requestType===propGenerateType)return {payload,tasks:buildPropGeneratePlan(row)};
+ if(propTypes.includes(row.requestType))return {payload,tasks:buildPropGeneratePlan(row)};
  if(row.requestType===propImageType)return {payload,tasks:[{
   id:'workflow.task.'+sha(canonical([row.officialRequestId,propImageKey])),key:propImageKey,type:propImageType,
   workerType:'image',dependsOn:null,input:JSON.parse(payload),
@@ -239,7 +239,7 @@ const failurePolicies=new Map([
  [npcAnimationRegenerateType,hasExhaustedRegenerationGraph],
  [audioSeparateType,hasExhaustedSingleTask],
  [propImageType,hasExhaustedSingleTask],
- [propGenerateType,hasExhaustedPropGraph],
+ ...propTypes.map(type=>[type,hasExhaustedPropGraph]),
 ]);
 
 export class PlannerStore{
@@ -247,11 +247,13 @@ export class PlannerStore{
  #propGenerateEnabled;
  #propGenerateMotionEnabled;
  #readPropPublication;
- constructor(path,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,readPropPublication}={}){
+ #propMutationsEnabled;
+ constructor(path,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propMutationsEnabled=false,readPropPublication}={}){
   if(propGenerateEnabled===true&&typeof readPropPublication!=='function')throw Error(propGenerateUnavailable);
   this.#propGenerateEnabled=propGenerateEnabled===true;
   this.#propGenerateMotionEnabled=propGenerateMotionEnabled===true;
   this.#readPropPublication=readPropPublication;
+  this.#propMutationsEnabled=propMutationsEnabled===true;
   this.#propImageEnabled=propImageEnabled===true;
   this.db=new DatabaseSync(path);
   const names=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
@@ -269,9 +271,10 @@ export class PlannerStore{
  }
  stage(row){
   const payload=checkRow(row);
-  if(row.requestType===propGenerateType){
+  if(propTypes.includes(row.requestType)){
    if(!this.#propGenerateEnabled)throw Error(propGenerateUnavailable);
-   if(row.payload.motion==='subtle'&&!this.#propGenerateMotionEnabled)throw Error(propGenerateMotionUnavailable);
+   if(row.requestType!==propGenerateType&&!this.#propMutationsEnabled)throw Error(propMutationUnavailable);
+   if((row.requestType===propAnimationType||row.payload.motion==='subtle')&&!this.#propGenerateMotionEnabled)throw Error(propGenerateMotionUnavailable);
   }
   if(row.requestType===propImageType&&!this.#propImageEnabled)throw Error(propImageUnavailable);
   this.db.exec('BEGIN IMMEDIATE');
@@ -292,8 +295,17 @@ export class PlannerStore{
    this.db.exec('COMMIT');return prior===undefined;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
- pending(){return this.db.prepare("SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) AND (request_type<>? OR (?=1 AND (?=1 OR json_extract(payload,'$.motion') IS NOT 'subtle'))) ORDER BY registered_at,official_request_id")
-  .all(Number(this.#propImageEnabled),propImageType,propGenerateType,Number(this.#propGenerateEnabled),Number(this.#propGenerateMotionEnabled));}
+ #propSql(type,payload){
+  // Only fixed column identifiers and compile-time request types are passed.
+  const known=propTypes.map(t=>"'"+t+"'").join(',');
+  const motion="("+type+"<>'"+propAnimationType+"' AND json_extract("+payload+",'$.motion') IS NOT 'subtle')";
+  return "("+type+" NOT IN ("+known+") OR ("+Number(this.#propGenerateEnabled)+"=1 AND ("+
+   Number(this.#propMutationsEnabled)+"=1 OR "+type+"='"+propGenerateType+"') AND ("+
+   Number(this.#propGenerateMotionEnabled)+"=1 OR "+motion+")))";
+ }
+ pending(){return this.db.prepare( `SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) AND
+   ${this.#propSql('request_type','payload')} ORDER BY registered_at,official_request_id`)
+  .all(Number(this.#propImageEnabled),propImageType);}
  acknowledge(id){return this.db.prepare("UPDATE workflow_runs SET state='planned',updated_at=? WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id).changes;}
  conflict(id){this.db.prepare("UPDATE workflow_runs SET state='not_claimable',updated_at=?,reason='WORKFLOW_RS_STATUS_CONFLICT' WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id);}
  terminalReady(){
@@ -308,10 +320,11 @@ export class PlannerStore{
     ORDER BY r.registered_at,r.official_request_id`).all();
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    for(const row of candidates){
-    if(row.request_type===propGenerateType){
+    if(propTypes.includes(row.request_type)){
      if(!this.#propGenerateEnabled||!restoreStoredPlan(row))continue;
      const payload=JSON.parse(row.payload);
-     if(payload.motion==='subtle'&&!this.#propGenerateMotionEnabled)continue;
+     if(row.request_type!==propGenerateType&&!this.#propMutationsEnabled||
+        (row.request_type===propAnimationType||payload.motion==='subtle')&&!this.#propGenerateMotionEnabled)continue;
      const publication=propCompletionCandidate({officialRequestId:row.official_request_id,projectId:row.project_id,
       requestType:row.request_type,payload,payloadSha256:row.payload_sha256},evidence.all(row.official_request_id,propCompletionLimit));
      if(publication)result.push({official_request_id:row.official_request_id,publication});
@@ -352,12 +365,12 @@ export class PlannerStore{
   this.db.exec('BEGIN');
   try{
    const candidates=this.db.prepare(`SELECT r.* FROM workflow_runs r
-    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?,?,?)
+    WHERE r.state='planned' AND r.reason IS NULL AND r.request_type IN (?,?,?,?,?,?)
       AND (?=1 OR r.request_type<>?)
-      AND (r.request_type<>? OR (?=1 AND (?=1 OR json_extract(r.payload,'$.motion') IS NOT 'subtle')))
+      AND ${this.#propSql('r.request_type','r.payload')}
       AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id
         AND t.status='failed' AND t.retry_count=?)
-    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,propImageType,propGenerateType,Number(this.#propImageEnabled),propImageType,propGenerateType,Number(this.#propGenerateEnabled),Number(this.#propGenerateMotionEnabled),WORKFLOW_TASK_MAX_RETRIES);
+    ORDER BY r.registered_at,r.official_request_id`).all(npcAnimationRegenerateType,audioSeparateType,propImageType,...propTypes,Number(this.#propImageEnabled),propImageType,WORKFLOW_TASK_MAX_RETRIES);
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    const ready=candidates.filter(run=>failurePolicies.get(run.request_type)(run,evidence))
     .map(({official_request_id,request_type})=>({official_request_id,request_type}));
@@ -365,7 +378,7 @@ export class PlannerStore{
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  terminalFailureAcknowledged(id,requestType){
-  if(!failurePolicies.has(requestType)||requestType===propGenerateType&&!this.#propGenerateEnabled||requestType===propImageType&&!this.#propImageEnabled)return 0;
+  if(!failurePolicies.has(requestType)||propTypes.includes(requestType)&&!this.#propGenerateEnabled||requestType===propImageType&&!this.#propImageEnabled)return 0;
   return this.db.prepare(`UPDATE workflow_runs SET state='failed',reason='WORKFLOW_TASK_RETRIES_EXHAUSTED',updated_at=?
     WHERE official_request_id=? AND request_type=? AND state='planned' AND reason IS NULL`)
    .run(Date.now(),id,requestType).changes;
@@ -384,7 +397,7 @@ export async function pollOnce(store,rs){
    for(const row of page.requests){
     try{staged+=Number(store.stage(row));}
     catch(e){
-     if(['WORKFLOW_COMBAT_NOT_SUPPORTED',propImageUnavailable,propGenerateUnavailable,propGenerateMotionUnavailable].includes(e.message)){unsupported++;continue;}
+     if(['WORKFLOW_COMBAT_NOT_SUPPORTED',propImageUnavailable,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable].includes(e.message)){unsupported++;continue;}
      if(![propImageInvalid,propGenerateInvalid,'WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_AUDIO_SEPARATE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
      invalid++;
     }

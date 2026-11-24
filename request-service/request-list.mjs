@@ -11,7 +11,7 @@ import {audioDeleteType} from './audio-delete-envelope.mjs';
 import {audioSeparateType} from './audio-separate-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
 import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
-import {propGenerateType} from './prop-generate-envelope.mjs';
+import {propTypes,propGenerateType,propUpdateType,propAnimationType} from './prop-generate-envelope.mjs';
 import {propImageType} from './prop-image-envelope.mjs';
 export const listTool='request_list',workflowListTool='request_workflow_list';
 export const statuses=Object.freeze(['registered',...workflowStatuses,'cancelled']);
@@ -42,6 +42,8 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${audioRequestType}' THEN json_extract(payload_json,'$.conceptId')
    WHEN '${audioDeleteType}' THEN json_extract(payload_json,'$.officialRequestId')
    WHEN '${audioSeparateType}' THEN json_extract(payload_json,'$.sourceOfficialRequestId')
+   WHEN '${propUpdateType}' THEN json_extract(payload_json,'$.propId')
+   WHEN '${propAnimationType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propGenerateType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propImageType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.variantPresetId')
@@ -58,6 +60,8 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${audioSeparateType}' THEN '음원 분리'
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.label')
    WHEN '${npcAnimationRegenerateType}' THEN '애니메이션 생성'
+   WHEN '${propUpdateType}' THEN '프랍 수정'
+   WHEN '${propAnimationType}' THEN '프랍 애니메이션 추가'
    WHEN '${propGenerateType}' THEN '프랍 패키지 생성'
    WHEN '${propImageType}' THEN '프랍 이미지 생성'
    ELSE json_extract(payload_json,'$.character.name') END END AS targetName`;
@@ -73,7 +77,7 @@ function workflowProjection(r){
  }catch{throw Error('OFFICIAL_REQUEST_WORKFLOW_LIST_FAILED');}
 }
 
-function createPage(db,workflow,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false}={}){
+function createPage(db,workflow,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propMutationsEnabled=false}={}){
  const highest=db.prepare('SELECT coalesce(MAX(rowid),0) AS horizon FROM official_requests');
  const page=db.prepare(`SELECT ${workflow?workflowFields:operatorFields}
   FROM official_requests
@@ -106,8 +110,9 @@ function createPage(db,workflow,{propImageEnabled=false,propGenerateEnabled=fals
    // Cursors follow the examined rows even when an entire page retires.
    const retired=retirePage(rows);
    requests=rows.filter(row=>!retired.has(row.internalRowId)&&knownWorkflowSchema(row.requestType,row.schemaVersion))
-    .filter(row=>row.requestType!==propGenerateType||propGenerateEnabled===true&&
-     (JSON.parse(row.payloadJson).motion!=='subtle'||propGenerateMotionEnabled===true))
+    .filter(row=>!propTypes.includes(row.requestType)||propGenerateEnabled===true&&
+     (row.requestType===propGenerateType||propMutationsEnabled===true)&&
+     (row.requestType!==propAnimationType&&JSON.parse(row.payloadJson).motion!=='subtle'||propGenerateMotionEnabled===true))
     .filter(row=>row.requestType!==propImageType||propImageEnabled===true)
     .map(({internalRowId,...row})=>workflowProjection(row));
   }else requests=rows.map(({internalRowId,failureReason,...row})=>
