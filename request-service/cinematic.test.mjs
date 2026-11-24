@@ -31,6 +31,9 @@ test('MCP advertises scoped cinematic only when ready and rejects missing digest
  exists=true;
  const accepted=await call('request_submit',packet);assert.equal(accepted.isError,false);
  assert.equal(accepted.structuredContent.status,'registered');
+ const operator=(await call('request_list',{limit:8})).structuredContent.requests;
+ assert.equal(operator[0].targetNpcId,accepted.structuredContent.officialRequestId);
+ assert.equal(operator[0].targetName,'시네마틱 영상 생성');
  const listing=await call('request_workflow_list',{limit:8});
  assert.deepEqual(listing.structuredContent.requests.map(x=>x.payload),[packet.payload]);
  space={queueId:'space-fixture',idempotencyKey:'space-fixture',requestType:cinematicType,payload:packet.payload};

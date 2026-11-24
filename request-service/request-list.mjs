@@ -45,6 +45,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${audioSeparateType}' THEN json_extract(payload_json,'$.sourceOfficialRequestId')
    WHEN '${propRegenerateType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propAnimationType}' THEN json_extract(payload_json,'$.propId')
+   WHEN '${cinematicType}' THEN official_request_id
    WHEN '${propGenerateType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propImageType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.variantPresetId')
