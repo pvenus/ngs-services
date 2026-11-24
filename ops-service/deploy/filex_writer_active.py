@@ -1,6 +1,7 @@
 """Read-only PDS prerequisite: exact active Filex concept/BGM writer provenance."""
 from datetime import datetime
 from pathlib import Path
+import os
 import re
 import subprocess
 
@@ -98,6 +99,9 @@ def filex_active(home, control, repo, head, *, host=None, runtime=None):
     or mismatched evidence keeps Backend Stack's Filex prerequisite pending.
     """
     try:
+        if runtime is None and os.path.lexists(Path(control)/'targets'/'filex-writer'/'unified-applied.json'):
+            from filex_unified_runtime import verify_selected
+            return verify_selected(Path(home),Path(control),Path(repo),head)
         if runtime is None:
             from filex_writer_apply import verify_active_candidate
             runtime = verify_active_candidate

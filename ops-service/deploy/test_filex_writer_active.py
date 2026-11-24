@@ -1,10 +1,10 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from filex_writer_apply import LEGACY_CAP_DIGEST, SEPARATION_CAP_DIGEST
-from prepare_filex_writer import closure, declared_capabilities, git, REPO, SCHEMA
+from prepare_filex_writer import CLOSURE, closure, declared_capabilities, git, REPO, SCHEMA, dockerfile
 from prepare_ngs_release import atomic_write, digest, json_bytes
 
 import filex_writer_active as m
@@ -19,6 +19,12 @@ class FilexPrerequisite(unittest.TestCase):
         # Only the exact current Git closure must exist in a shallow checkout.
         cls.previous = '1'*40 if cls.head != '1'*40 else '2'*40
         cls.root, cls.files = closure(cls.repo,cls.head)
+        cls.is_unified = 'scopes.json' in cls.files
+        if cls.is_unified:
+            # The legacy proof path remains independently testable after
+            # removing legacy writer sources from the active checkout.
+            cls.files = {name:b'pass\n' for name in CLOSURE}
+            cls.files['Dockerfile'] = dockerfile('python:3.12-slim')
         cls.prepared_at = '2026-11-22T15:00:00Z'
         cls.deployed_at = '2026-11-22T16:00:00Z'
 
@@ -63,6 +69,9 @@ class FilexPrerequisite(unittest.TestCase):
         self.write(self.result_path,self.result)
 
     def run_guard(self):
+        if self.is_unified:
+            with patch.object(m,'closure',return_value=(self.root,self.files)):
+                return m.filex_active(self.home,self.control,self.repo,self.head,runtime=self.runtime)
         return m.filex_active(self.home,self.control,self.repo,self.head,runtime=self.runtime)
 
     def test_exact_writer_closure_and_success_receipt_still_need_live_proof(self):

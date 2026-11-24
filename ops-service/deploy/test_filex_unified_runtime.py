@@ -3,7 +3,7 @@ import json
 import unittest
 
 from filex_unified_runtime import (NAME, PROJECT, VOLUMES, CutoverFailure, compose,
-                                   cutover, guard_mounts, registry)
+                                   cutover, guard_mounts, registry, render_pds)
 from prepare_ngs_release import Refused
 
 IMAGE = 'sha256:' + 'f'*64
@@ -69,6 +69,17 @@ class UnifiedFilex(unittest.TestCase):
         self.assertEqual({x['name'] for x in o['volumes'].values()},set(VOLUMES.values()))
         self.assertEqual(sum(x['type']=='bind' for x in o['services'][NAME]['volumes']),6)
         guard_mounts(container(), REGISTRY)
+
+    def test_one_array_extends_compose_and_pds_binding(self):
+        rows=json.loads(REGISTRY)
+        rows['scopes'].append({'id':'new-motion','folder':'new-motion','credential':'motion','profile':'motion'})
+        raw=json.dumps(rows)
+        policy=json.dumps({'schemaVersion':'ops.filex-writer-credentials.v1',
+                           'credentials': {k:'/tmp/private/'+k for k in VOLUMES}})
+        config=json.loads(render_pds(raw,policy))
+        self.assertEqual(config['scopes'][-1],{'id':'new-motion','tokenFile':'/tmp/private/motion'})
+        targets=[x['target'] for x in compose(IMAGE,raw)['services'][NAME]['volumes']]
+        self.assertIn('/canonical/new-motion',targets)
 
     def test_scope_path_ambiguity_rejected(self):
         r=json.loads(REGISTRY)
