@@ -25,6 +25,17 @@ RETRY_READY = 'ops.worker-manual-retry-ready.v1'
 DECISION = 'ops.worker-source-decision.v1'
 SHA = re.compile(r'[a-f0-9]{40}')
 STAMP = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z')
+# One reviewed migration of the already-running canonical Wan selector, not
+# a fabricated earlier OPS result. Both immutable roots are fixed: once this
+# exact candidate is selected, this predecessor can never match again.
+_ANIMATION_ADOPTION = {
+    'from': '64443beed7f4a114418a97892535e6b9fe4b89b9',
+    'to': '03a7ac1f7b1836091e14374a0bf2080410e3b3a5',
+    'lastManaged': 'ae8b922a2a85a1c24c529d1d5d019444496a3b8b',
+    'selector': '16e0af97d538ca85ce3e21fa5cab802f7854a942a8d14800bc893d709a6a1f1b',
+    'files': 210,
+    'tree': 'a3bbc01d5efd471dd549f93ba67a87f72c97d5b3dceaf222c908780d206fe242',
+}
 # Trusted production adapters are read and compared, never imported from the
 # live target directories or executed by this module.
 SUPPORT = ('prepare_ngs_release.py', 'planner_cutover.py', 'audio_cutover.py')
@@ -164,7 +175,7 @@ def _prior_attempt(target_dir, target, head):
     return (last,digest(raw)) if last['attemptedSha']==head and last['state']=='failed' else None
 
 
-def _observation(directory,target,old):
+def _recorded_observation(directory):
     last=_optional(directory/'last-result.json')
     initial=_optional(directory/'observed.json')
     rows=[]
@@ -176,11 +187,15 @@ def _observation(directory,target,old):
         datetime.fromisoformat(item['deployedAt'])
         rows.append(item)
     need(bool(rows),'WORKER_ACTIVE_PROOF_UNAVAILABLE')
-    observed=max(reversed(rows),key=lambda item:item['deployedAt'])
+    return max(reversed(rows),key=lambda item:item['deployedAt'])['sha']
+
+
+def _observation(directory,target,old):
+    observed=_recorded_observation(directory)
     hint=old.name.removeprefix('workflows-github-')
-    need(re.fullmatch(r'[a-f0-9]{7,40}',hint) is not None and observed['sha'].startswith(hint),
+    need(re.fullmatch(r'[a-f0-9]{7,40}',hint) is not None and observed.startswith(hint),
          'WORKER_ACTIVE_PROOF_UNAVAILABLE')
-    return observed['sha']
+    return observed
 
 
 def _history(repo, revision, target):
@@ -255,11 +270,28 @@ def _safe_runtime_dir(path):
          and stat.S_IMODE(attrs.st_mode) in (0o500,0o700),'WORKER_ACTIVE_TREE_DRIFT')
 
 
-def _comparison(previous_repo, target, selector, old, current, directory, head):
-    observed=_observation(directory,target,old)
-    previous=current if observed==head else _history(previous_repo(observed),observed,target)
+def _comparison(previous_repo, target, selector, old, current, directory, head, prior_hash=None):
+    adopted=None
+    try:
+        observed=_observation(directory,target,old)
+    except Refused as error:
+        p=_ANIMATION_ADOPTION
+        need(str(error)=='WORKER_ACTIVE_PROOF_UNAVAILABLE' and target=='worker-animation'
+             and head==p['to'] and prior_hash==p['selector']
+             and old.name=='workflows-github-'+p['from'], 'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+        observed=_recorded_observation(directory)
+        need(observed==p['lastManaged'], 'WORKER_ACTIVE_PROOF_UNAVAILABLE')
+        adopted=p
+    source=adopted['from'] if adopted else observed
+    previous=current if source==head else _history(previous_repo(source),source,target)
     active_digest=_active_tree(_active_paths(target,selector,old),previous)
     candidate_digest=digest(json_bytes(sorted(current.items())))
+    if adopted:
+        # Capture a real known active tree; the external decision's observedSha
+        # still binds the unchanged last managed result for its existing CAS.
+        # An equal tree cannot be used to claim this release as deployed.
+        need(len(previous)==adopted['files'] and active_digest==adopted['tree']
+             and previous!=current, 'WORKER_ACTIVE_PROOF_UNAVAILABLE')
     return ('equivalent' if previous==current else 'changed',observed,active_digest,candidate_digest)
 
 
@@ -275,7 +307,7 @@ def _plan(verified, repo, home, control, release, full_tree, target, trusted_dep
     need(loaded(target,prior_hash) is True,'WORKER_LOADED_UNPROVEN')
     verify_worker_runtime(target,selector)
     try:
-        comparison=_comparison(prior_repo,target,selector,old,tracked[target],directory,head)
+        comparison=_comparison(prior_repo,target,selector,old,tracked[target],directory,head,prior_hash)
     except (OSError,ValueError,KeyError,IndexError,TypeError,subprocess.SubprocessError) as error:
         if not failed:
             code='WORKER_ACTIVE_TREE_DRIFT' if getattr(error,'args',())==('WORKER_ACTIVE_TREE_DRIFT',) else 'WORKER_ACTIVE_PROOF_UNAVAILABLE'

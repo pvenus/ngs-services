@@ -79,6 +79,36 @@ class WorkerCandidates(unittest.TestCase):
                                                               'repository_id':321,'head_repository_id':321}}
         cls.evidence={'head':cls.head,'workflow':workflow,'run':run,'artifact':artifact,'raw':raw}
 
+    def test_one_time_adoption_links_current_verified_source_without_history_rewrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory=Path(tmp).resolve()
+            target='worker-animation'
+            record=directory/'observed.json'
+            original=json_bytes({'sha':'a'*40,'deployedAt':'2026-11-23T05:25:43Z'})
+            atomic_write(record,original)
+            p={'from':self.prior_sha,'to':self.head,'selector':'b'*64,'lastManaged':'a'*40,
+               'files':2,'tree':'c'*64}
+            old=directory/('workflows-github-'+p['from'])
+            previous={'one':('o',0o644),'two':('p',0o644)}
+            current={'one':('q',0o644),'two':('p',0o644)}
+            with (patch.object(workers,'_ANIMATION_ADOPTION',p),patch.object(workers,'_active_paths'),
+                  patch.object(workers,'_history',return_value=previous) as history,
+                  patch.object(workers,'_active_tree',return_value=p['tree']) as tree):
+                args=(lambda rev:self.repo,target,{},old,current,directory,p['to'])
+                state,observed,checked,_=workers._comparison(*args,p['selector'])
+                self.assertEqual((state,observed,checked),('changed',p['lastManaged'],p['tree']))
+                history.assert_called_once_with(self.repo,p['from'],target)
+                self.assertEqual(record.read_bytes(),original)
+                self.assertEqual(list(directory.iterdir()),[record])
+                for wrong in (None,'0'*64):
+                    with self.assertRaisesRegex(ValueError,'WORKER_ACTIVE_PROOF_UNAVAILABLE'):
+                        workers._comparison(*args,wrong)
+                with self.assertRaisesRegex(ValueError,'WORKER_ACTIVE_PROOF_UNAVAILABLE'):
+                    workers._comparison(*args[:-1],self.same_tree_sha,p['selector'])
+                tree.return_value='d'*64
+                with self.assertRaisesRegex(ValueError,'WORKER_ACTIVE_PROOF_UNAVAILABLE'):
+                    workers._comparison(*args,p['selector'])
+
     def setUp(self):
         temp=tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

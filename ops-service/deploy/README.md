@@ -360,3 +360,11 @@ record and checks loaded identity/work again before invoking a changed
 worker runner. The separately verified Image Worker retry lane remains
 available for applicable failures; proved source equivalence never needs a
 restart just to change the recorded repository head.
+
+The exact one-time animation migration proves the already-loaded canonical
+Wan predecessor before preparing the prop-append Worker candidate. It binds
+the known predecessor selector SHA, all 210 selected source/dependency files,
+and the unchanged last managed OPS observation. It never rewrites the
+observation or a past receipt. Only normal OPS deployment writes a new
+successful result. An altered predecessor, unknown history, different role or
+candidate SHA uses the normal guard and is refused on mismatch.
