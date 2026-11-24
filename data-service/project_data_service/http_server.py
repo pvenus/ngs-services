@@ -734,6 +734,13 @@ def serve(storage_root: Path, host: str, port: int):
     if os.environ.get('PDS_MEDIA_ARTIFACT_CONFIG'):
         from .media_artifacts import MediaArtifacts
         server.media_artifacts=MediaArtifacts.configured(os.environ['PDS_MEDIA_ARTIFACT_CONFIG'])
+    prop_packages=os.environ.get('PDS_WORKFLOW_PROP_STATIC','0')
+    if prop_packages not in ('0','1'):raise ValueError('PDS_WORKFLOW_PROP_STATIC_INVALID')
+    if prop_packages=='1':
+        from .workflow_prop_stage import configure_static
+        stage_root=os.environ.get('PDS_WORKFLOW_PROP_STAGE_ROOT')
+        if not stage_root or not hasattr(server,'workflow_delete'):raise ValueError('PDS_WORKFLOW_PROP_AUTHORITY_REQUIRED')
+        configure_static(server,host,planner,app.concept,stage_root)
     from .workflow_prop_image import configured as configure_prop_image
     server.workflow_prop_image=configure_prop_image(host,app.concept,
         planner if hasattr(server,'workflow_delete') else None,getattr(server,'media_artifacts',None))

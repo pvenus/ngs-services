@@ -2,6 +2,7 @@ import {closeSync,constants,mkdirSync,openSync,fstatSync,realpathSync,lstatSync}
 import {basename,dirname,isAbsolute,resolve} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {PlannerStore,pollOnce} from './planner.mjs';
+import {readPropPublication} from './prop-package-readback.mjs';
 import {createRSClient} from './rs.mjs';
 import {startPlannerHeartbeat} from './service-heartbeat.mjs';
 
@@ -22,7 +23,7 @@ try{
  try{const s=fstatSync(fd);if(!s.isFile()||s.uid!==process.getuid()||s.nlink!==1||(s.mode&0o777)!==0o600)throw Error();}
  finally{closeSync(fd);}
  // Request Service admits prop work only when the canonical PDS capability is ready.
- store=new PlannerStore(file,{propImageEnabled:true});
+ store=new PlannerStore(file,{propImageEnabled:true,propGenerateEnabled:true,propMutationsEnabled:true,readPropPublication});
 }catch{
  console.error('WORKFLOW_PLANNER_DATABASE_INVALID');process.exit(1);
 }

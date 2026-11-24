@@ -42,10 +42,19 @@ def half_canvas(m):
 
 class RealPropAuthority:
     """Private Planner authority injected into WorkflowPropPackage and every stage."""
-    def __init__(self,planner,staging,concept,writer):
+    def __init__(self,planner,staging,concept,writer,*,motion_enabled=False):
         need(isinstance(planner,PropClaimAuthority) and isinstance(staging,PropStageStore) and
              isinstance(concept,PropDesignContext) and callable(writer))
         self.planner,self.staging,self.concept,self.writer=planner,staging,concept,writer
+        self.motion_enabled=motion_enabled is True
+
+    def require_mode(self,run,p):
+        need(self.motion_enabled or run['request_type']!=APPEND and p.get('motion','still')=='still')
+
+    def readiness(self):
+        with self.planner.claim.snapshot():pass
+        self.staging._root()
+        return callable(getattr(self.writer,'ready',None)) and self.writer.ready() is True and bool(self.concept.read('binari'))
 
     def stored(self,run,rows,key):
         r=rows[key]
@@ -68,6 +77,7 @@ class RealPropAuthority:
     @contextmanager
     def snapshot(self,claim):
         with self.planner.selected(claim,(PUBLISH,)) as (run,p,rows,key):
+            self.require_mode(run,p)
             # The DB shared read transaction spans all Filex read/write operations.
             members=[];records={}
             for k,r in rows.items():
@@ -109,6 +119,21 @@ class RealPropAuthority:
                     if kind==REGENERATE:scope.update(operation='regenerate',source=p['source'])
                 d=digest(m);return {'scope':scope,'members':members,'manifestSha256':d,'resultRef':ref_name(PUBLISH,d)}
             yield prepare
+
+    def prepare_static_manifest(self,claim):
+        with self.planner.selected(claim,(PUBLISH,)) as (run,p,rows,key):
+            kind=run['request_type']
+            need(kind in (GENERATE,REGENERATE) and p.get('motion','still')=='still')
+            prior=self.current_source(p,kind)
+            # Read the exact two static stage artifacts; the full publish path
+            # independently revalidates all lineage and raw hashes under CAS.
+            media={lane:self.stored(run,rows,k)['artifact'] for lane,k in (('detail',DETAIL),('pixel',PIXEL))}
+            design=self.stored(run,rows,DESIGN)['artifact']
+            return {'schemaVersion':'ngs.prop-package.v1','projectId':'binari','propId':p['propId'],
+                'revision':prior['revision']+1 if prior else 1,'officialRequestId':run['official_request_id'],
+                'requestSha256':run['payload_sha256'],'designContextSha256':p['designContextSha256'],'title':design['title'],
+                'parentSha256':p['source']['sha256'] if prior else None,'media':media,'animations':[],
+                'interaction':expected_interaction(design,media)}
 
     def read_media(self,claim,c,m,prior):
         # Caller still holds a verified snapshot; read only exact final member
@@ -162,11 +187,13 @@ class RealPropAuthority:
 
     def read_stage(self,claim,design_only):
         with self.planner.selected(claim,(DESIGN,) if design_only else tuple(k for k in STAGES if k!=DESIGN)) as (run,p,rows,key):
+            self.require_mode(run,p)
             if key==DESIGN:return {'context':self.context(p,run['request_type']), 'input':strict_json(rows[key]['task_input'].encode())}
             return self.details(run,p,rows,key)
 
     def stage(self,claim,artifact,design_only):
         with self.planner.selected(claim,(DESIGN,) if design_only else tuple(k for k in STAGES if k!=DESIGN)) as (run,p,rows,key):
+            self.require_mode(run,p)
             input=strict_json(rows[key]['task_input'].encode())
             if key==DESIGN:
                 self.context(p,run['request_type']);lineage=None
@@ -184,6 +211,7 @@ class RealPropAuthority:
     def stage_asset(self,claim,purpose,index):
         need(purpose in ('input','geometry'))
         with self.planner.selected(claim,(MOTION,DETAIL,PIXEL,MOTION_DETAIL,MOTION_PIXEL)) as (run,p,rows,key):
+            self.require_mode(run,p)
             info=self.details(run,p,rows,key);kind=run['request_type'];oid=run['official_request_id']
             if purpose=='geometry':
                 need(index is None and 'geometry' in info);g=info['geometry'];m=g['media']
@@ -203,6 +231,15 @@ class RealPropAuthority:
             data=self.staging.bytes(oid,r['task_id'],source,r['result_ref'],index)
             return data,'image/apng' if source==MOTION_DETAIL else 'image/png'
 
+def configure_static(server,host,planner,concept,stage_root):
+    from .concept_filex import FilexConcept
+    from .workflow_prop_package import WorkflowPropPackage,bound_prop_writer
+    need(host=='127.0.0.1' and isinstance(concept,FilexConcept))
+    writer=bound_prop_writer(concept.factory)
+    authority=RealPropAuthority(PropClaimAuthority(planner),PropStageStore(stage_root),PropDesignContext(concept),writer)
+    server.workflow_prop_stage=authority
+    server.workflow_prop_package=WorkflowPropPackage(authority,writer)
+
 def serve(handler):
     service=getattr(handler.server,'workflow_prop_stage',None)
     if not isinstance(service,RealPropAuthority):return handler.respond(404,{'error':'WORKFLOW_PROP_STAGE_DISABLED'})
@@ -212,6 +249,7 @@ def serve(handler):
         return handler.respond(403,{'error':'WORKFLOW_PROP_STAGE_INTERNAL_ONLY'})
     try:
         if handler.command=='GET' and p.path in (STAGE,DESIGN_ROUTE):
+            if not service.readiness():return handler.respond(503,{'error':'WORKFLOW_PROP_STAGE_NOT_READY'})
             return handler.respond(200,{'enabled':True,'schemaVersion':'workflow.prop-design-write.v1' if design else 'workflow.prop-stage.v1'})
         if handler.command!='POST':return handler.respond(404,{'error':'WORKFLOW_PROP_STAGE_ROUTE'})
         n=handler.headers.get('Content-Length','');limit=MAX_BODY if p.path==STAGE else 8192

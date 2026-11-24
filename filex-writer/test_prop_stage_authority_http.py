@@ -15,8 +15,14 @@ from project_data_service.workflow_prop_package import WorkflowPropPackage,bound
 from project_data_service.workflow_prop_stage import DESIGN_ROUTE,STAGE,RealPropAuthority,expected_interaction
 
 REPO=Path(__file__).resolve().parents[1]
-DESIGN_HASH='a'*64
-CONTEXT={'projectId':'binari','schemaVersion':'ngs.prop-image-design.v1','contextSha256':DESIGN_HASH,'sources':[]}
+FIELDS=[{'id':k,'text':json.dumps({'schemaVersion':v},ensure_ascii=False,sort_keys=True,separators=(',',':'))}
+        for k,v in [('visualStyle','ngs.character-style-contract.v1'),('visualProhibitions','ngs.character-style-constraints.v1')]]
+for row in FIELDS:row['sha256']=sha(row['text'].encode())
+MARKDOWN='# 프랍 디자인 설계\n\n## 형태와 식별\n단정한 형태\n## 재료와 색\n나무\n## 상태 사이의 일관성\n모양 유지\n## 납품과 검수\n검수\n'
+SOURCES=[{'role':'master-design','categoryId':'expression','sha256':digest(FIELDS),'fields':FIELDS},
+ {'role':'prop-design','categoryId':'category.add.26710502f5713d99018b77a29384d5da','sha256':sha(MARKDOWN.encode()),'markdown':MARKDOWN}]
+DESIGN_HASH=digest([[r[k] for k in ('role','categoryId','sha256')] for r in SOURCES])
+CONTEXT={'projectId':'binari','schemaVersion':'ngs.prop-image-design.v1','contextSha256':DESIGN_HASH,'sources':SOURCES}
 
 class Context(PropDesignContext):
     # Context call boundary only (canonical two-source integration has its own
@@ -66,6 +72,30 @@ s.close();
                 self.assertEqual(r.status,expected);return r.read() if raw else json.load(r)
         except HTTPError as e:
             with e:self.assertEqual(e.code,expected);return json.load(e)
+    def test_actual_document_worker_claim_transport_and_completion(self):
+        package=os.getenv('PROP_DOCUMENT_MODULE_DIR')
+        if not package:self.skipTest('optional exact staged document-worker source')
+        cmd="""import {pathToFileURL} from 'node:url';import {join} from 'node:path';
+const [root,db,oid,tid,port]=process.argv.slice(1);
+const imp=name=>import(pathToFileURL(join(root,name)).href);
+const {localPorts,requestLocalJson}=await imp('local-ports.mjs');
+const {runPropDesignFromPath}=await imp('prop-design-worker.mjs');
+const pds=localPorts({transport:args=>requestLocalJson({...args,port:Number(port)})});
+console.log(JSON.stringify(await runPropDesignFromPath({dbPath:db,officialRequestId:oid,taskId:tid,
+ operation:'prop.generate.design',pds,render:async input=>{
+ if(input.sources.length!==2||input.intent!=='테스트 등롱')throw Error('fixture input');
+ return {title:'등롱',appearancePrompt:'종이 등롱',motionPrompt:null,interaction:{pixelOpen:null,detailTrigger:null}};
+ }})));"""
+        task=task_id(self.oid,'prop_design')
+        execution=subprocess.run(['node','--input-type=module','-e',cmd,package,str(self.db),self.oid,task,
+            self.pds.rsplit(':',1)[1]],cwd=REPO,check=True,capture_output=True)
+        r=json.loads(execution.stdout)
+        self.assertEqual(r['state'],'completed',r)
+        self.assertTrue(r['resultRef'].startswith('prop.design-spec.'))
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute('SELECT status,result_ref FROM workflow_tasks WHERE task_id=?',(task,)).fetchone(),
+                ('completed',r['resultRef']))
+        self.assertEqual(self.actual.staging.get(self.oid,task,'prop_design',r['resultRef'])['artifact']['title'],'등롱')
     def test_python_claim_dag_matches_actual_js_planner_for_every_operation(self):
         source={'revision':1,'sha256':'c'*64};all_rows=[]
         for kind,extra,schema in (
@@ -92,6 +122,11 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
                     'task_input':wire(t['input']).decode(),'depends_on_task_id':t['dependsOn']}
                 self.assertEqual(graph[key],expected)
     def test_exact_claim_design_and_image_bytes_link_to_published_artifacts(self):
+        # Actual Filex authenticated capability, Planner inode and stage-root
+        # checks are all part of the readiness path.
+        from project_data_service.workflow_prop_package import PATH
+        with urlopen(self.pds+PATH,timeout=3) as response:
+            self.assertEqual(json.load(response),{'enabled':True,'schemaVersion':'workflow.prop-package-write.v1','modes':['still']})
         # Actual reconstructed persisted node DAG must match all rows.
         rows=build_graph(self.oid,'prop.generate',self.payload)
         self.assertEqual(len(rows),5)
@@ -122,6 +157,8 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
         pack={'schemaVersion':'ngs.prop-package.v1','projectId':'binari','propId':PROP,'revision':1,'officialRequestId':self.oid,
               'requestSha256':self.payload_sha,'title':doc['title'],'designContextSha256':DESIGN_HASH,'parentSha256':None,
               'media':media,'animations':[],'interaction':expected_interaction(doc,media)}
+        draft=self.api('/prepare',{'claim':final})
+        self.assertEqual(draft,{'manifest':pack})
         published=self.api('',{'claim':final,'manifest':pack})
         self.assertEqual(published['resultRef'],'prop.package.'+digest(pack))
         self.api('/read',self.pin(pack),expected=403) # exact Filex result is not yet claimed completed by worker

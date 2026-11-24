@@ -40,12 +40,10 @@ same observed frame durations for animations, and independently typed pixel
 open/detail activate hotspots. No puzzle coordinates, named candle states,
 arbitrary scripts, or public paths are inserted into the package.
 
-In this change the real RS and Planner are exercised through an isolated
-MCP fixture; only fixture constructors enable the type and inject a test
-proof reader. Production service CLI, PDS/worker selectors, actual
-end-to-end package execution and puzzle result browsing are not enabled
-here. The optional model is not verified in production. The separate
-single-image workflow and existing demo are untouched.
+Static launchers use the normal readiness handshake described below.
+This is a source release candidate, not a deployment or proof of live
+model execution. The optional model is not verified in production. The
+separate single-image workflow and existing demo are untouched.
 
 ## Selecting, regenerating and adding one animation
 
@@ -135,12 +133,41 @@ It does not update Planner or RS itself.
   projected title and hotspots to the design, and load raw new lane bytes
   only from the private store. The pinned package evidence endpoints
   require an exact completed Planner publish row and independent Filex
-  verification. Production does not create a staging root, mount props,
-  configure the adapter, or enable the dormant routes from a client/env
-  override in this change.
+  verification. Production never creates storage implicitly on startup:
+  provision and approve the exact dedicated writer mount and private PDS
+  stage root first. No client field activates it.
 
 Retest the exact authority with
 `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=data-service:filex-writer python3 -m unittest discover -s filex-writer -p 'test_prop*http.py'`.
 The real stage fixture injects deterministic design context and PNG bytes,
 not a production model, and drives genuine Node-created Planner state,
 the real snapshot and both HTTP servers.
+
+### Normal release activation (static only)
+
+1. In the existing Filex concept writer role add only the canonical project
+   props child bind mount to exactly /props and
+   WRITER_WORKFLOW_PROP_PACKAGES=1. The container requires a verified
+   writable /props mount in Linux mountinfo and refuses activation in
+   any other writer role. It keeps the existing mounts and auth; never
+   mount the project root writable. Its existing token-gated capability
+   probe adds workflowPropPackageV1:true.
+2. Provision one owner-private 0700 stage root; do not put it in a replica
+   or canonical data path. Existing PDS can bind it with
+   PDS_WORKFLOW_PROP_STATIC=1 and PDS_WORKFLOW_PROP_STAGE_ROOT pointing
+   to that exact directory, using the already provisioned private Planner
+   inode and trusted concept Filex transport. Only opt in after the exact
+   document, image, and postprocess workers are verified for this route.
+3. Existing RS uses GET /v1/props/ownership/workflow-package. Only the
+   exact {"enabled":true,"schemaVersion":"workflow.prop-package-write.v1","modes":["still"]}
+   capability enables static create and regenerate; a transient failure
+   leaves already registered rows intact and pauses their handoff. The
+   existing Planner independently reads completion proof over fixed local
+   PDS. The postprocess finalizer may call /prepare {claim} for the static manifest.
+4. This release never advertises or admits individual animation or
+   subtle motion; the production stage and publish authority refuse
+   both as well. Verify a real motion provider and dedicated worker
+   integration separately before opening that route.
+
+OPS selector/mount changes are ordinary release settings, not alternate
+product paths or separate deployment scripts.

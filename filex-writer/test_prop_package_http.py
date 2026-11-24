@@ -8,7 +8,8 @@ from urllib.request import Request,urlopen
 
 from prop_package_contract import digest,sha,wire
 from prop_package_store import PropPackageStore,Conflict
-from server import Store,handler
+from concept_store import ConceptStore
+from server import handler
 from project_data_service.filex_cas_transport import FilexCASTransport
 from project_data_service.http_server import Handler as ProductionPDS
 
@@ -105,7 +106,7 @@ class PropFixture:
         self.legacy=(p/'props'/'legacy-lamp');self.legacy.mkdir();(self.legacy/'old.png').write_bytes(b'original')
         token='test-only-token-'+'h'*48;key=p/'token'
         key.write_text(token);key.chmod(0o600)
-        dummy=Store(p/'unrelated')
+        dummy=ConceptStore(p/'unrelated')
         filex=self.launch(handler(dummy,token,workflow_props=self.props))
         config={'schemaVersion':'pds-filex-cas.v1','projectId':'binari','enabled':True,'endpoint':filex,'tokenFile':str(key)}
         self.authority=FixtureAuthority()

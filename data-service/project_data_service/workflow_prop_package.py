@@ -5,7 +5,7 @@ from .filex_read import canonical,digest
 from .workflow_motion_2d import strict_json
 
 PATH='/v1/props/ownership/workflow-package'
-ROUTES=(PATH,PATH+'/read',PATH+'/asset',PATH+'/head')
+ROUTES=(PATH,PATH+'/prepare',PATH+'/read',PATH+'/asset',PATH+'/head')
 WRITER='/v1/workflow/props'
 CAPABILITY='workflow.prop-package-write.v1'
 MAX_MANIFEST=512*1024
@@ -32,12 +32,21 @@ def bound_prop_writer(factory):
             result=transport.call('POST',path,body,missing=path in (WRITER+'/read',WRITER+'/asset'))
         if result is None:raise FileNotFoundError('pinned prop missing')
         return result
+    def ready():
+        with factory() as transport:
+            c=transport.capabilities()
+            return c.get('namespace')=='canonical-files/binari/concept/' and c.get('workflowPropPackageV1') is True
+    call.ready=ready
     return call
 
 class WorkflowPropPackage:
     def __init__(self,authority,writer):
         need(all(callable(getattr(authority,name,None)) for name in ('snapshot','authorize_read','read_media')) and callable(writer))
         self.authority,self.writer=authority,writer
+
+    def readiness(self):
+        probe=getattr(self.authority,'readiness',None)
+        return callable(probe) and probe() is True
 
     def publish(self,packet):
         need(keys(packet,('claim','manifest')) and type(packet['manifest']) is dict and len(canonical(packet['manifest']))<=MAX_MANIFEST)
@@ -105,7 +114,8 @@ def serve(handler):
         if handler.command=='GET' and parsed.path==PATH:
             # An explicit injected instance is a development/test boundary;
             # production never configures one until every adapter is verified.
-            return handler.respond(200,{'enabled':True,'schemaVersion':CAPABILITY})
+            if not obj.readiness():return handler.respond(503,{'error':'WORKFLOW_PROP_PACKAGE_NOT_READY'})
+            return handler.respond(200,{'enabled':True,'schemaVersion':CAPABILITY,'modes':['still']})
         if handler.command!='POST':return handler.respond(404,{'error':'WORKFLOW_PROP_PACKAGE_ROUTE'})
         n=handler.headers.get('Content-Length','')
         maximum=MAX_MANIFEST+8192 if parsed.path==PATH else 4096
@@ -115,6 +125,10 @@ def serve(handler):
         raw=handler.rfile.read(int(n))
         if len(raw)!=int(n):return handler.respond(400,{'error':'WORKFLOW_PROP_PACKAGE_BAD_BODY'})
         body=strict_json(raw)
+        if parsed.path==PATH+'/prepare':
+            prepare=getattr(obj.authority,'prepare_static_manifest',None)
+            need(callable(prepare) and keys(body,('claim',)))
+            return handler.respond(200,{'manifest':prepare(body['claim'])})
         result=obj.publish(body) if parsed.path==PATH else obj.read(parsed.path.rsplit('/',1)[-1],body)
         return handler.respond(200,result)
     except Stale:return handler.respond(409,{'error':'WORKFLOW_PROP_PACKAGE_HEAD_CHANGED'})

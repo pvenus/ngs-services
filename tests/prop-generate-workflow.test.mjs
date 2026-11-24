@@ -198,3 +198,23 @@ test('immutable regeneration and append enforce the pinned current head; append 
    /PROP_PACKAGE_PROOF_INVALID/);
  }
 });
+
+test('normal RS capability gate pauses current prop intake and refuses to admit motion',async t=>{
+ const temp=root(t);let ready=false;
+ const rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true,propPackageReadiness:async()=>ready});
+ const schema=async()=>(await rs.rpc('tools/list',{})).tools.find(x=>x.name==='request_submit').inputSchema.properties.requestType.enum;
+ assert(!(await schema()).includes('prop.generate'));
+ await assert.rejects(rs.call('request_submit',command()),/PROP_GENERATE_RUNTIME_UNAVAILABLE/);
+ ready=true;
+ assert((await schema()).includes('prop.generate'));
+ assert((await schema()).includes('prop.regenerate'));
+ assert(!(await schema()).includes('prop.animation.generate'));
+ await assert.rejects(rs.call('request_submit',command({...p,motion:'subtle'})),/PROP_GENERATE_MOTION_UNAVAILABLE/);
+ const accepted=await rs.call('request_submit',command());
+ assert.equal((await rs.call('request_workflow_list',{})).requests[0].officialRequestId,accepted.officialRequestId);
+ ready=false;
+ assert.deepEqual((await rs.call('request_workflow_list',{})).requests,[]);
+ assert.equal((await rs.call('request_list',{})).requests[0].status,'registered');
+ ready=true;
+ assert.equal((await rs.call('request_workflow_list',{})).requests[0].officialRequestId,accepted.officialRequestId);
+});
