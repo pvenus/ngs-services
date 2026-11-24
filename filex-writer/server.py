@@ -113,7 +113,7 @@ class Store:
             if request_id: self.write(rp,json.dumps(record).encode())
             return record
 
-def handler(store, token, *, workflow_delete=False, workflow_preset=False, workflow_representative=False, workflow_portrait=False, workflow_idle_plan=False, workflow_idle_portrait=False, workflow_direction_portrait=False, workflow_native_media=False, workflow_shared_plan=False,single_target_delete=None,workflow_npc_folder_delete=False,workflow_npc_planning_update=False,workflow_npc_planning_markdown=False,workflow_npc_planning_add=False,workflow_audio=None,workflow_audio_delete=False):
+def handler(store, token, *, workflow_delete=False, workflow_preset=False, workflow_representative=False, workflow_portrait=False, workflow_idle_plan=False, workflow_idle_portrait=False, workflow_direction_portrait=False, workflow_native_media=False, workflow_shared_plan=False,single_target_delete=None,workflow_npc_folder_delete=False,workflow_npc_planning_update=False,workflow_npc_planning_markdown=False,workflow_npc_planning_add=False,workflow_audio=None,workflow_audio_delete=False,workflow_props=None):
     workflow_combat_pose=(workflow_shared_plan is True and workflow_native_media is True
                           and workflow_portrait is True and workflow_idle_portrait is True
                           and workflow_direction_portrait is True)
@@ -129,6 +129,30 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                 return self.reply(401, {'error':'UNAUTHORIZED'})
             try:
                 url = urlsplit(self.path)
+                if url.path in ('/v1/workflow/props','/v1/workflow/props/read','/v1/workflow/props/asset','/v1/workflow/props/head'):
+                    from prop_package_store import PropPackageStore,WRITER,MAX_BODY,keys
+                    if not isinstance(workflow_props,PropPackageStore):
+                        return self.reply(404,{'error':'NOT_FOUND'})
+                    n=self.headers.get('Content-Length','')
+                    if (self.command!='POST' or url.query or self.headers.get('Origin') is not None or
+                       self.headers.get('Transfer-Encoding') is not None or self.headers.get('Content-Type')!='application/json' or
+                       not n.isdecimal() or len(n)>10 or not 0<int(n)<=(MAX_BODY if url.path==WRITER else 4096)):
+                        raise ValueError('workflow props transport')
+                    self.connection.settimeout(20)
+                    raw=self.rfile.read(int(n))
+                    if len(raw)!=int(n):raise ValueError('incomplete prop body')
+                    def distinct(pairs):
+                        result=dict(pairs)
+                        if len(result)!=len(pairs):raise ValueError('duplicate prop key')
+                        return result
+                    body=json.loads(raw.decode('utf-8'),object_pairs_hook=distinct)
+                    if url.path==WRITER:return self.reply(200,workflow_props.publish(body))
+                    if url.path==WRITER+'/head':
+                        if not keys(body,('propId',)):raise ValueError('prop head input')
+                        return self.reply(200,{'pointer':workflow_props.head(body['propId'])})
+                    if url.path==WRITER+'/read':return self.reply(200,workflow_props.read(body))
+                    if not keys(body,('pin','assetId')):raise ValueError('prop asset input')
+                    return self.reply(200,workflow_props.read(body['pin'],body['assetId']))
                 if url.path in ('/v1/workflow/audio','/v1/workflow/audio/read',
                                 '/v1/workflow/audio-separate','/v1/workflow/audio-separate/read',
                                 '/v1/workflow/audio-separate/asset'):

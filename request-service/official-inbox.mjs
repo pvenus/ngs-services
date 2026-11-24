@@ -67,7 +67,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  const ownedStatus=db.prepare(`SELECT state FROM official_requests
   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
   AND ${propMutationsEnabled===true?'1=1':`request_type NOT IN ('${propTypes[1]}','${propTypes[2]}')`}
-  AND ${propGenerateMotionEnabled===true?'1=1':`request_type<>'${propAnimationType}' AND (request_type<>'${propGenerateType}' OR json_extract(payload_json,'$.motion') IS NOT 'subtle')`}
+  AND ${propGenerateMotionEnabled===true?'1=1':`request_type<>'${propAnimationType}' AND (request_type NOT IN ('${propGenerateType}','${propTypes[1]}') OR json_extract(payload_json,'$.motion') IS NOT 'subtle')`}
   AND ${propGenerateEnabled===true?'1=1':`request_type<>'${propGenerateType}'`}
   AND ${propImageEnabled===true?'1=1':`request_type<>'${propImageType}'`}
   AND ${workflowScopeSql}`);

@@ -1,6 +1,6 @@
 /** Boundary contract for the trusted PDS/Filex prop publisher, never a worker-local file. */
 import {canonical,sha} from './envelope.mjs';
-import {exactProp,propHash,propGenerateType,propUpdateType,propAnimationType,propValidator} from './prop-generate-envelope.mjs';
+import {exactProp,propHash,propGenerateType,propRegenerateType,propAnimationType,propValidator} from './prop-generate-envelope.mjs';
 import {checkPropPublishRows,propKeys,propRef,propTaskId} from './prop-generate-plan.mjs';
 const fail=()=>Error('PROP_PACKAGE_PROOF_INVALID');
 const need=x=>{if(!x)throw fail();};
@@ -14,16 +14,19 @@ function binding(run){
  need(sha(body)===payloadSha256);
  return {officialRequestId,projectId,propId:payload.propId,requestSha256:payloadSha256,
   ...(requestType===propGenerateType?{designContextSha256:payload.designContextSha256,motion:payload.motion==='subtle'?'subtle':'still'}:
-   requestType===propUpdateType?{operation:'edit',source:payload.source,scope:payload.scope,designContextSha256:payload.designContextSha256}:
+   requestType===propRegenerateType?{operation:'regenerate',source:payload.source,designContextSha256:payload.designContextSha256,motion:payload.motion==='subtle'?'subtle':'still'}:
    {operation:'append-animation',source:payload.source,animationId:payload.motionId})};
 }
-function checkMedia(v,motion){
+function checkMedia(v,motion,lane){
+ const max=lane==='detail'?2048:512;
  need(exactProp(v,['assetId','sha256','bytes','width','height','mediaType','frameDurationsMs'])&&
-  propHash(v.sha256)&&v.assetId===v.sha256+'.png'&&positive(v.bytes,32*1024*1024)&&
-  positive(v.width,4096)&&positive(v.height,4096)&&Array.isArray(v.frameDurationsMs));
+  propHash(v.sha256)&&v.assetId===v.sha256+'.png'&&positive(v.bytes,16*1024*1024)&&v.bytes>=57&&
+  positive(v.width,max)&&v.width>=12&&positive(v.height,max)&&v.height>=12&&Array.isArray(v.frameDurationsMs));
  if(motion==='still')need(v.mediaType==='image/png'&&v.frameDurationsMs.length===0);
  else need(v.mediaType==='image/apng'&&v.frameDurationsMs.length>=2&&v.frameDurationsMs.length<=96&&
-  v.frameDurationsMs.every(d=>positive(d,120000)));
+  v.frameDurationsMs.every(d=>positive(d,1000)&&d>=10)&&
+  v.frameDurationsMs.reduce((a,b)=>a+b,0)>=100&&v.frameDurationsMs.reduce((a,b)=>a+b,0)<=10000);
+ need(v.width*v.height*Math.max(1,v.frameDurationsMs.length)<=30_000_000);
 }
 function checkRegion(v,action,media){
  if(v===null)return;
@@ -34,13 +37,15 @@ function checkRegion(v,action,media){
 function checkPair(media,motion,members,detailKey,pixelKey){
  need(exactProp(media,['detail','pixel']));
  const {detail,pixel}=media;
- checkMedia(detail,motion);checkMedia(pixel,motion);
+ checkMedia(detail,motion,'detail');checkMedia(pixel,motion,'pixel');
+ need(pixel.width<=detail.width&&pixel.height<=detail.height&&pixel.width*pixel.height<detail.width*detail.height&&
+  Math.abs(pixel.width*detail.height-pixel.height*detail.width)<=Math.max(detail.width,detail.height));
  need(matches(detail.frameDurationsMs,pixel.frameDurationsMs));
  if(members)need(members.some(x=>x.key===detailKey&&x.ref===propRef(detailKey,detail.sha256))&&
   members.some(x=>x.key===pixelKey&&x.ref===propRef(pixelKey,pixel.sha256)));
 }
 const cleanTitle=s=>typeof s==='string'&&s.isWellFormed()&&s.trim()===s&&s.length>0&&
- Buffer.byteLength(s)<=480&&!/[\u0000-\u001f\u007f-\u009f]/u.test(s);
+ [...s].length<=160&&!/[\p{Cc}\u2028\u2029]/u.test(s);
 const clipId=s=>typeof s==='string'&&s.length>=2&&s.length<=80&&s.trim()===s&&/^[a-z0-9]+(?:[-._][a-z0-9]+)*$/u.test(s);
 const validId=s=>typeof s==='string'&&s.length===81&&/^request\.official\.[a-f0-9]{64}$/u.test(s);
 function checkClip(clip,base,members){
@@ -53,8 +58,8 @@ function checkGeneralManifest(m){
  need(exactProp(m,['schemaVersion','officialRequestId','projectId','propId','requestSha256','designContextSha256',
   'revision','title','media','interaction','parentSha256','animations'])&&m.schemaVersion==='ngs.prop-package.v1'&&
   m.projectId==='binari'&&clipId(m.propId)&&validId(m.officialRequestId)&&propHash(m.requestSha256)&&propHash(m.designContextSha256)&&
-  positive(m.revision,Number.MAX_SAFE_INTEGER)&&(m.revision===1?m.parentSha256===null:propHash(m.parentSha256))&&cleanTitle(m.title)&&
-  exactProp(m.interaction,['pixelOpen','detailTrigger'])&&Array.isArray(m.animations)&&m.animations.length<=64);
+  positive(m.revision,Number.MAX_SAFE_INTEGER-1)&&(m.revision===1?m.parentSha256===null:propHash(m.parentSha256))&&cleanTitle(m.title)&&
+  exactProp(m.interaction,['pixelOpen','detailTrigger'])&&Array.isArray(m.animations)&&m.animations.length<=1024);
  checkPair(m.media,'still');
  checkRegion(m.interaction.pixelOpen,'open',m.media.pixel);
  checkRegion(m.interaction.detailTrigger,'activate',m.media.detail);
@@ -78,10 +83,14 @@ function checkManifest(m,scope,members,prior){
   need(prior.projectId===m.projectId&&prior.propId===m.propId&&prior.revision===scope.source.revision&&
    sha(canonical(prior))===scope.source.sha256&&m.revision===prior.revision+1&&m.parentSha256===scope.source.sha256&&
    prior.officialRequestId!==m.officialRequestId);
-  if(scope.operation==='edit'){
-   need(m.designContextSha256===scope.designContextSha256&&matches(prior.animations,m.animations));
-   if(scope.scope==='metadata')need(matches(m.media,prior.media));
-   else checkPair(m.media,'still',members,propKeys.detail,propKeys.pixel);
+  if(scope.operation==='regenerate'){
+   need(m.designContextSha256===scope.designContextSha256&&m.animations.length===(scope.motion==='subtle'?1:0));
+   checkPair(m.media,'still',members,propKeys.detail,propKeys.pixel);
+   if(scope.motion==='subtle'){
+    const [clip]=m.animations;
+    need(clip.officialRequestId===scope.officialRequestId&&clip.requestSha256===scope.requestSha256&&clip.id==='initial');
+    checkClip(clip,m.media,members);
+   }
   }else{
    need(scope.operation==='append-animation'&&m.designContextSha256===prior.designContextSha256&&m.title===prior.title&&
     matches(m.media,prior.media)&&matches(m.interaction,prior.interaction)&&m.animations.length===prior.animations.length+1&&
@@ -91,7 +100,7 @@ function checkManifest(m,scope,members,prior){
    checkClip(clip,m.media,members);
   }
  }
- return sha(canonical(m));
+ const text=canonical(m);need(Buffer.byteLength(text)<=512*1024);return sha(text);
 }
 
 /** Run under the same fixed PDS claim/commit fence used for the authoritative read/write.

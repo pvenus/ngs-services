@@ -143,8 +143,8 @@ const basePack={schemaVersion:'ngs.prop-package.v1',officialRequestId:'request.o
  animations:[{id:'old-flutter',title:'기존 움직임',officialRequestId:'request.official.'+'b'.repeat(64),
   requestSha256:'7'.repeat(64),media:{detail:animate('6'.repeat(64),512,512),pixel:animate('8'.repeat(64),128,128)}}]};
 const sourcePin={revision:basePack.revision,sha256:sha(canonical(basePack))};
-const editPayload={schemaVersion:'ngs.prop-update.v1',projectId:'binari',propId:'lantern',source:sourcePin,
- scope:'metadata',intent:'이름만 수정',designContextSha256:'c'.repeat(64)};
+const editPayload={schemaVersion:'ngs.prop-regenerate.v1',projectId:'binari',propId:'lantern',source:sourcePin,
+ intent:'이전 디자인을 대체하는 새 등롱',designContextSha256:'c'.repeat(64)};
 const animPayload={schemaVersion:'ngs.prop-animation-generate.v1',projectId:'binari',propId:'lantern',source:sourcePin,
  motionId:'gentle-sway',prompt:'기존 등롱이 가볍게 흔들립니다'};
 function fixtureRows(row,values={}){
@@ -158,14 +158,12 @@ test('individual RS operations are independently gated and persist only exact se
  const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true});
  const submit=(requestType,payload,key)=>rs.call('request_submit',{sourceId:'local',requestType,payload,idempotencyKey:key});
  await assert.rejects(submit('prop.animation.generate',animPayload,'motion-off'),/PROP_GENERATE_MOTION_UNAVAILABLE/);
- await assert.rejects(submit('prop.update',{...editPayload,source:{...sourcePin,motion:'subtle'}},'pin-extra'),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
- const meta=await submit('prop.update',editPayload,'update-metadata');
- const art=await submit('prop.update',{...editPayload,scope:'appearance'},'update-art');
+ await assert.rejects(submit('prop.regenerate',{...editPayload,source:{...sourcePin,motion:'subtle'}},'pin-extra'),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+ const meta=await submit('prop.regenerate',editPayload,'regenerate');
  const store=new PlannerStore(':memory:',{propGenerateEnabled:true,propMutationsEnabled:true,readPropPublication:async()=>null});
- t.after(()=>store.close());assert.equal((await pollOnce(store,rs)).acknowledged,2);
+ t.after(()=>store.close());assert.equal((await pollOnce(store,rs)).acknowledged,1);
  const tasks=store.db.prepare('SELECT task_key FROM workflow_tasks WHERE official_request_id=? ORDER BY rowid');
- assert.deepEqual(tasks.all(meta.officialRequestId).map(r=>r.task_key),[propKeys.design,propKeys.publish]);
- assert.deepEqual(tasks.all(art.officialRequestId).map(r=>r.task_key),[propKeys.design,propKeys.base,propKeys.detail,propKeys.pixel,propKeys.publish]);
+ assert.deepEqual(tasks.all(meta.officialRequestId).map(r=>r.task_key),[propKeys.design,propKeys.base,propKeys.detail,propKeys.pixel,propKeys.publish]);
  const animation=buildPlan(revisionCase('prop.animation.generate',animPayload,'a')).tasks;
  assert.deepEqual(animation.map(x=>x.key),[propKeys.motion,propKeys.animDetail,propKeys.animPixel,propKeys.publish]);
  assert.equal(animation[0].input.motionId,animPayload.motionId);
@@ -173,12 +171,14 @@ test('individual RS operations are independently gated and persist only exact se
  assert(!animation.some(task=>task.workerType==='image'));
 });
 
-test('immutable edit and append enforce the pinned current head; append cannot replace base or overwrite prior clips',()=>{
- const meta=fixtureRows(revisionCase('prop.update',editPayload,'c'));
+test('immutable regeneration and append enforce the pinned current head; append cannot replace base or overwrite prior clips',()=>{
+ const meta=fixtureRows(revisionCase('prop.regenerate',editPayload,'c'));
  const next=(scope,body)=>({...basePack,officialRequestId:scope.run.officialRequestId,requestSha256:scope.run.payloadSha256,
   revision:2,parentSha256:sourcePin.sha256,...body});
- const manifest=next(meta,{title:'수정된 등롱',designContextSha256:editPayload.designContextSha256});
+ const manifest=next(meta,{title:'새롭게 재생성된 등롱',designContextSha256:editPayload.designContextSha256,animations:[],
+  media:{detail:still('3'.repeat(64),512,512),pixel:still('4'.repeat(64),128,128)}});
  assert(preparePropPublication(meta.run,meta.rows,meta.claim,manifest,{prior:basePack,head:sourcePin}));
+ assert.throws(()=>preparePropPublication(meta.run,meta.rows,meta.claim,{...manifest,animations:basePack.animations},{prior:basePack,head:sourcePin}),/PROP_PACKAGE_PROOF_INVALID/);
  assert.throws(()=>preparePropPublication(meta.run,meta.rows,meta.claim,{...manifest,media:{...manifest.media,
   pixel:still('b'.repeat(64),128,128)}},{prior:basePack,head:sourcePin}),/PROP_PACKAGE_PROOF_INVALID/);
  const anim=fixtureRows(revisionCase('prop.animation.generate',animPayload,'d'),

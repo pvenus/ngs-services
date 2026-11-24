@@ -11,7 +11,7 @@ import {audioDeleteType} from './audio-delete-envelope.mjs';
 import {audioSeparateType} from './audio-separate-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
 import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
-import {propTypes,propGenerateType,propUpdateType,propAnimationType} from './prop-generate-envelope.mjs';
+import {propTypes,propGenerateType,propRegenerateType,propAnimationType} from './prop-generate-envelope.mjs';
 import {propImageType} from './prop-image-envelope.mjs';
 export const listTool='request_list',workflowListTool='request_workflow_list';
 export const statuses=Object.freeze(['registered',...workflowStatuses,'cancelled']);
@@ -42,7 +42,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${audioRequestType}' THEN json_extract(payload_json,'$.conceptId')
    WHEN '${audioDeleteType}' THEN json_extract(payload_json,'$.officialRequestId')
    WHEN '${audioSeparateType}' THEN json_extract(payload_json,'$.sourceOfficialRequestId')
-   WHEN '${propUpdateType}' THEN json_extract(payload_json,'$.propId')
+   WHEN '${propRegenerateType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propAnimationType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propGenerateType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propImageType}' THEN json_extract(payload_json,'$.propId')
@@ -60,7 +60,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${audioSeparateType}' THEN '음원 분리'
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.label')
    WHEN '${npcAnimationRegenerateType}' THEN '애니메이션 생성'
-   WHEN '${propUpdateType}' THEN '프랍 수정'
+   WHEN '${propRegenerateType}' THEN '프랍 재생성'
    WHEN '${propAnimationType}' THEN '프랍 애니메이션 추가'
    WHEN '${propGenerateType}' THEN '프랍 패키지 생성'
    WHEN '${propImageType}' THEN '프랍 이미지 생성'

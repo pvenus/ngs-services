@@ -15,7 +15,7 @@ import {spaceQueueIdPattern,verifiedSpaceRequest} from './space-intake.mjs';
 
 import {unsupportedReason} from './pending-unsupported.mjs';
 
-import {propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propUpdateType,propUpdatePayloadSchema,propAnimationType,propAnimationPayloadSchema} from './prop-generate-envelope.mjs';
+import {propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propRegeneratePayloadSchema,propAnimationType,propAnimationPayloadSchema} from './prop-generate-envelope.mjs';
 import {propImageType,propImagePayloadSchema,propImageInvalid,propImageUnavailable} from './prop-image-envelope.mjs';
 
 const version='2025-06-18';
@@ -246,7 +246,9 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
     properties:{...propGeneratePayloadSchema.properties,motion:{const:'still'}}};
    submit=addPropFamily(submit,propGenerateType,generate);
    if(propMutationsEnabled===true){
-    submit=addPropFamily(submit,propUpdateType,propUpdatePayloadSchema);
+    const regenerate=propGenerateMotionEnabled===true?propRegeneratePayloadSchema:{...propRegeneratePayloadSchema,
+     properties:{...propRegeneratePayloadSchema.properties,motion:{const:'still'}}};
+    submit=addPropFamily(submit,propRegenerateType,regenerate);
     if(propGenerateMotionEnabled===true)submit=addPropFamily(submit,propAnimationType,propAnimationPayloadSchema);
    }
   }

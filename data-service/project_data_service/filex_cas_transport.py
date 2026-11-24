@@ -24,7 +24,9 @@ class FilexCASTransport:
   headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}
   try:
    with self.op.open(urllib.request.Request(self.endpoint+path,data=canonical(body)if body is not None else None,method=method,headers=headers),timeout=timeout)as r:
-    require(r.status==200,'FILEX_CAS_HTTP_ERROR');asset_read=method=='GET'and path.startswith('/v1/asset?');raw=r.read()if asset_read else r.read(16*1024*1024+1)
+    require(r.status==200,'FILEX_CAS_HTTP_ERROR');asset_read=method=='GET'and path.startswith('/v1/asset?')
+    limit=24*1024*1024 if method=='POST' and path=='/v1/workflow/props/asset' else 16*1024*1024
+    raw=r.read()if asset_read else r.read(limit+1)
   except urllib.error.HTTPError as e:
    if missing and e.code==404:return None
    if e.code==422 and method=='POST' and path in ('/v1/workflow/audio','/v1/workflow/audio/read',
@@ -34,7 +36,7 @@ class FilexCASTransport:
     if failure=={'error':'WORKFLOW_AUDIO_REJECTED_BEFORE_WRITE'}:raise AudioPrewriteRejected()from None
    if e.code==409:raise ValueError('KNOWLEDGE_SOURCE_CHANGED')from None
    raise ValueError('FILEX_CAS_HTTP_'+str(e.code))from None
-  require(asset_read or len(raw)<=16*1024*1024,'FILEX_CAS_RESPONSE_LIMIT');return json.loads(raw)
+  require(asset_read or len(raw)<=limit,'FILEX_CAS_RESPONSE_LIMIT');return json.loads(raw)
  def audio_separate_asset(self,path,binding,*,maximum):
   require(path=='/v1/workflow/audio-separate/asset','FILEX_AUDIO_ASSET_ROUTE')
   headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}

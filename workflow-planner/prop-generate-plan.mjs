@@ -1,5 +1,5 @@
 import {canonical,sha} from './envelope.mjs';
-import {propGenerateType,propUpdateType,propAnimationType,propTypes,propHash} from './prop-generate-envelope.mjs';
+import {propGenerateType,propRegenerateType,propAnimationType,propTypes,propHash} from './prop-generate-envelope.mjs';
 
 export const propKeys=Object.freeze({
  design:'prop_design',base:'prop_base',motion:'prop_motion',detail:'prop_detail',pixel:'prop_pixel',animDetail:'prop_animation_detail',animPixel:'prop_animation_pixel',publish:'prop_pack_publish',
@@ -29,13 +29,14 @@ export function buildPropGeneratePlan(run){
  const {officialRequestId:oid,payload}=run;
  if(!propTypes.includes(run.requestType)||typeof oid!=='string'||oid.length!==81||!official.test(oid))
   throw Error('PROP_COMPOSITE_TOPOLOGY_INVALID');
- if(run.requestType!==propGenerateType)return buildMutationPlan(run);
+ if(run.requestType===propAnimationType)return buildAppendPlan(run);
  const id=key=>propTaskId(oid,key),motion=payload.motion==='subtle', mode=motion?'subtle':'still';
- const scope={propId:payload.propId,designContextSha256:payload.designContextSha256};
+ const regenerate=run.requestType===propRegenerateType;
+ const scope={propId:payload.propId,designContextSha256:payload.designContextSha256,...(regenerate?{source:payload.source}:{})};
  const tasks=[];
  const task=(key,parent,input)=>{
   const {type,workerType}=propStageRegistry[key];
-  tasks.push({id:id(key),key,type,workerType,dependsOn:parent===null?null:id(parent),input:{...scope,...input}});
+  tasks.push({id:id(key),key,type:regenerate?type.replace(propGenerateType,propRegenerateType):type,workerType,dependsOn:parent===null?null:id(parent),input:{...scope,...input}});
  };
  task(propKeys.design,null,{intent:payload.intent,motion:mode});
  task(propKeys.base,propKeys.design,{designTaskId:id(propKeys.design)});
@@ -53,35 +54,20 @@ export function buildPropGeneratePlan(run){
  return tasks;
 }
 
-export const propMutationRegistry=Object.freeze({
- [propUpdateType]:Object.freeze({[propKeys.design]:'document',[propKeys.base]:'image',[propKeys.detail]:'postprocess',
-  [propKeys.pixel]:'postprocess',[propKeys.publish]:'postprocess'}),
- [propAnimationType]:Object.freeze({[propKeys.motion]:'animation',[propKeys.animDetail]:'postprocess',
-  [propKeys.animPixel]:'postprocess',[propKeys.publish]:'postprocess'}),
-});
-function buildMutationPlan({officialRequestId:oid,requestType,payload}){
+export const propAnimationRegistry=Object.freeze({[propKeys.motion]:'animation',[propKeys.animDetail]:'postprocess',
+ [propKeys.animPixel]:'postprocess',[propKeys.publish]:'postprocess'});
+function buildAppendPlan({officialRequestId:oid,requestType,payload}){
  const id=key=>propTaskId(oid,key),tasks=[];
  const frozen={propId:payload.propId,source:payload.source};
  function task(key,role,parent,extra={}){
-  tasks.push({id:id(key),key,type:requestType+'.'+role,workerType:propMutationRegistry[requestType][key],
+  tasks.push({id:id(key),key,type:requestType+'.'+role,workerType:propAnimationRegistry[key],
    dependsOn:parent?id(parent):null,input:{...frozen,...extra}});
  }
- if(requestType===propUpdateType){
-  const {scope,intent,designContextSha256}=payload;
-  task(propKeys.design,'design',null,{scope,intent,designContextSha256});
-  if(scope==='appearance'){
-   task(propKeys.base,'base',propKeys.design,{designTaskId:id(propKeys.design)});
-   task(propKeys.detail,'detail',propKeys.base,{baseTaskId:id(propKeys.base)});
-   task(propKeys.pixel,'pixel',propKeys.detail,{detailTaskId:id(propKeys.detail)});
-  }
- }else{
-  const {motionId,prompt}=payload;
-  task(propKeys.motion,'raw',null,{motionId,prompt});
-  task(propKeys.animDetail,'detail',propKeys.motion,{motionId,rawTaskId:id(propKeys.motion)});
-  task(propKeys.animPixel,'pixel',propKeys.animDetail,{motionId,detailTaskId:id(propKeys.animDetail)});
- }
- const previous=tasks.at(-1).key;
- task(propKeys.publish,'publish',previous,{dependsOnTaskIds:tasks.map(row=>row.id)});
+ const {motionId,prompt}=payload;
+ task(propKeys.motion,'raw',null,{motionId,prompt});
+ task(propKeys.animDetail,'detail',propKeys.motion,{motionId,rawTaskId:id(propKeys.motion)});
+ task(propKeys.animPixel,'pixel',propKeys.animDetail,{motionId,detailTaskId:id(propKeys.animDetail)});
+ task(propKeys.publish,'publish',propKeys.animPixel,{dependsOnTaskIds:tasks.map(row=>row.id)});
  return tasks;
 }
 

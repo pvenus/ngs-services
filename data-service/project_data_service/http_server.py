@@ -67,6 +67,9 @@ class Handler(DomainHandler):
         from .workflow_motion_2d import ROUTES as motion_2d_routes,serve as motion_2d
         if media_path in motion_2d_routes:return motion_2d(self)
 
+        from .workflow_prop_package import ROUTES as prop_package_paths,serve as workflow_prop_package
+        if media_path in prop_package_paths:return workflow_prop_package(self)
+
         from .workflow_prop_image import ROUTES as prop_image_paths,serve as workflow_prop_image
         if media_path in prop_image_paths:return workflow_prop_image(self)
 

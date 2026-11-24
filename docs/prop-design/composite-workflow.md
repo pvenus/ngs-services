@@ -47,14 +47,15 @@ end-to-end package execution and puzzle result browsing are not enabled
 here. The optional model is not verified in production. The separate
 single-image workflow and existing demo are untouched.
 
-## Selecting, editing and adding one animation
+## Selecting, regenerating and adding one animation
 
 Select a published package by exact `{propId,revision,sha256}`.
-`prop.update` (`ngs.prop-update.v1`) takes the same project and prop ID,
-`source:{revision,sha256}`, explicit `scope:"metadata"|"appearance"`, intent
-and a current design pin. Metadata edits run only document and final proof.
-Appearance edits regenerate one base PNG and its static lanes using the
-pinned predecessor. Edits preserve the exact existing ordered animations.
+`prop.regenerate` (`ngs.prop-regenerate.v1`) takes the same project, prop ID,
+`source:{revision,sha256}`, replacement intent, a current design pin, and
+optional subtle motion. It runs the full generation graph with a fresh
+design, one base PNG and static lanes. No old animations are carried into
+the new current package. The previous version stays available to already
+pinned puzzles and remains the current version if regeneration fails.
 
 `prop.animation.generate` (`ngs.prop-animation-generate.v1`) takes that
 same exact source pin and one named `motionId` plus a human prompt. This is
@@ -75,3 +76,30 @@ concurrent advance is a stale selection, not permission to overwrite. The
 previous manifest must remain retrievable immutably for independent
 completion proof. The fixture verifies these checks but neither writes
 live Filex packages nor implements the production publisher here.
+
+### Staged real storage path
+
+The Filex write bridge is the existing service-bearer handler, using a
+dedicated owner-bound `props` root and the standard Filex exclusive lock
+and atomic-write/fsync primitives. It independently checks the complete
+manifest, same-packet member refs and digests, decoded RGBA and APNG timing,
+and predecessor preservation for append. It never touches sibling prop
+folders. Assets are content-addressed per prop; the immutable release
+directory and receipt are sealed before the single atomic metadata head
+change. A lost response can recover the exact prior commit; two competing
+writes from the same head cannot both become current. Previously published
+pinned versions are readable after the head advances. Unknown future
+revisions and bytes not explicitly named by that pinned manifest are not
+served.
+
+PDS exposes the staged, default-off localhost
+`/v1/props/ownership/workflow-package` plus `/head`, `/read`, and `/asset`.
+No browser credentials are accepted by these internal worker endpoints.
+The PDS composition must inject a trusted exact-running claim scope, a
+stage-artifact resolver, and scoped pinned-read authority; callers cannot
+supply a Filex path, member receipt, media body, or authorization flag.
+This fixture exercises both real HTTP handlers and Sibling Filex storage
+using audited fixture stage bytes/claim port. Production mount/provisioning,
+the trusted real Planner-claim and stage-artifact ports, production
+execution readiness, and authenticated NGS list/show remain explicit
+separate gates.

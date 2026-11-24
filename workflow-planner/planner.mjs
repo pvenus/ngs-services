@@ -17,7 +17,7 @@ import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit}
 
 import {npcAnimationRegenerateType,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
-import {propGenerateType,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propUpdateType,propAnimationType,propTypes,propValidator} from './prop-generate-envelope.mjs';
+import {propGenerateType,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propAnimationType,propTypes,propValidator} from './prop-generate-envelope.mjs';
 import {buildPropGeneratePlan,exactPropTask,isPropRef,propCompletionLimit} from './prop-generate-plan.mjs';
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
