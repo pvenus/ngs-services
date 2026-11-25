@@ -72,7 +72,11 @@ export function validateOneStop(value,projectId){
  if(!object(value)||!oneStopSchemas.includes(value.schemaVersion))throw invalid();
  const selected=isSelectionSchema(value.schemaVersion);
  const basic=isBasicSchema(value.schemaVersion);
- const validShape=basic?keys(value,[...fields,'includeCombat'])&&typeof value.includeCombat==='boolean':selected?keys(value,[...fields,'motionSelection']):
+ const hasCombatRequirements=Object.hasOwn(value,'combatRequirements');
+ const validShape=basic?keys(value,[...fields,'includeCombat',...(hasCombatRequirements?['combatRequirements']:[])])&&
+  typeof value.includeCombat==='boolean'&&(!hasCombatRequirements||(value.includeCombat===true&&
+   fits(value.combatRequirements,1,900)&&value.combatRequirements===value.combatRequirements.trim()&&
+   !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value.combatRequirements))):selected?keys(value,[...fields,'motionSelection']):
   fields.every(k=>Object.hasOwn(value,k))&&typeof value.includeCombat==='boolean'&&
   !Object.keys(value).some(k=>!fields.includes(k)&&!['includeCombat','motionPresets','combatMotionPresets'].includes(k))&&
   Object.hasOwn(value,'includeCombat');

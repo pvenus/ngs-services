@@ -262,7 +262,14 @@ class PrivatePlannerClaim:
                         and bool(payload['sourceRefs'])
                         and all(type(x) is str and 1<=len(x)<=300 and bool(x.strip()) for x in payload['sourceRefs']))
                 if basic:
-                    require(set(payload)==fields|{'includeCombat'} and type(payload['includeCombat']) is bool)
+                    has_combat_requirements='combatRequirements' in payload
+                    require(set(payload)==fields|{'includeCombat'}|({'combatRequirements'} if has_combat_requirements else set())
+                            and type(payload['includeCombat']) is bool)
+                    if has_combat_requirements:
+                        requirements=payload['combatRequirements']
+                        require(payload['includeCombat'] is True and type(requirements) is str
+                                and 1<=len(requirements)<=900 and requirements==requirements.strip()
+                                and not re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]',requirements))
                     slots={}
                 elif selection:
                     require(set(payload)==fields|{'motionSelection'})

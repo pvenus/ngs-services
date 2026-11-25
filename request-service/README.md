@@ -210,3 +210,9 @@ Combat opt-in adds only the combat plan and original center portrait. This
 schema cannot enqueue direction, pixel or motion stages and never deletes a
 folder. Previously persisted selected-motion workflows use their original
 plan and remain untouched.
+
+Basic NPC brief: enter a short occupation/story role in `character.role`. In
+`intent`, provide one or two lines each for 목표·등장 이유, 성격·평소 행동,
+퍼스널 컬러, and 외형·복식의 단서. Keep any extra instructions under 추가 요청.
+If canon is undecided, mark it explicitly and specify where proposals are allowed.
+Use a fresh ID and do not include previous NPC assets or backup references.

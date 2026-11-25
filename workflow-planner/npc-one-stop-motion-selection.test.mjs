@@ -94,6 +94,10 @@ test('separate basic schema builds originals only with independent combat opt-in
   assert(tasks.every(t=>!t.input.imageStyle&&!t.input.direction));
   assert.deepEqual(tasks[0].input,{npcId:common.character.npcId,mode:'new',noOldDataReuse:true});
  }
+ assert.deepEqual(make(true,{combatRequirements:'오른손 환도'}).tasks,make(true).tasks);
+ assert.throws(()=>make(false,{combatRequirements:'오른손 환도'}));
+ assert.throws(()=>make(true,{combatRequirements:' '}));
+ assert.throws(()=>make(true,{combatRequirements:'가'.repeat(901)}));
  assert.throws(()=>make(false,{motionSelection})); assert.throws(()=>make(undefined));
  assert.throws(()=>make(false,{character:{...common.character,npcId:'npc.wrong'}}));
 });

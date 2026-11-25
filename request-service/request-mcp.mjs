@@ -38,7 +38,11 @@ const known={
 };
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const npcCommon={projectId:{const:'binari'},intent:{type:'string'},character:{type:'object'},sourceRefs:{type:'array',items:{type:'string'}}};
-const npcBasicPayload={type:'object',properties:{schemaVersion:{const:basicSchemaVersion},...npcCommon,includeCombat:{type:'boolean'}},
+const npcBasicPayload={type:'object',properties:{schemaVersion:{const:basicSchemaVersion},...npcCommon,
+ character:{type:'object',description:'Fresh unique NPC identity; enter its job and story role in character.role. Never attach a prior NPC ID or backup.'},
+ intent:{type:'string',description:'Use one short answer per labeled section: 목표·등장 이유: …, 성격·평소 행동: …, 퍼스널 컬러: …, 외형·복식의 단서: …. Optional: 추가 요청: …. If undecided, say so and state what the model may propose. Do not split these inputs into portrait-plan documents.'},
+ includeCombat:{type:'boolean',description:'Optional combat original and plan on top of the required representative and idle originals. Never generates directions, pixels, or animation here.'},
+ combatRequirements:{type:'string',minLength:1,maxLength:900,description:'Only when includeCombat is true. Optional weapon, stance, and combat-specific exclusions; applied to the combat plan only.'}},
  required:['schemaVersion','projectId','intent','character','sourceRefs','includeCombat'],additionalProperties:false};
 const npcLegacyPayload={type:'object',properties:{schemaVersion:{enum:legacyOneStopSchemas},...npcCommon,
  includeCombat:{type:'boolean'},motionPresets:{type:'object'},combatMotionPresets:{type:'array',items:{type:'string'}}},
