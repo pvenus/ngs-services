@@ -42,13 +42,13 @@ const npcLegacyPayload={type:'object',properties:{schemaVersion:{enum:legacyOneS
  includeCombat:{type:'boolean'},motionPresets:{type:'object'},combatMotionPresets:{type:'array',items:{type:'string'}}},
  required:['schemaVersion','projectId','intent','character','sourceRefs','includeCombat'],additionalProperties:false};
 const npcSelectionPayload={type:'object',properties:{schemaVersion:{enum:selectionSchemas},...npcCommon,
- motionSelection:{type:'array',minItems:1,items:{type:'object',properties:{
+ motionSelection:{type:'array',items:{type:'object',properties:{
   presetId:{type:'string',pattern:selectedMotionIdPattern},posePreset:{enum:motionSelectionPoses},
   assetSetSha256:{type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64},
  },required:['presetId','posePreset','assetSetSha256'],additionalProperties:false}}},
  required:['schemaVersion','projectId','intent','character','sourceRefs','motionSelection'],additionalProperties:false};
 const npcAnimationRegeneratePayload={type:'object',properties:{schemaVersion:{enum:npcAnimationRegenerateSchemas},
- projectId:{const:'binari'},npcId:{type:'string',pattern:npcAnimationOwnerPattern},motionSelection:npcSelectionPayload.properties.motionSelection},
+ projectId:{const:'binari'},npcId:{type:'string',pattern:npcAnimationOwnerPattern},motionSelection:{...npcSelectionPayload.properties.motionSelection,minItems:1}},
  required:['schemaVersion','projectId','npcId','motionSelection'],additionalProperties:false};
 const conceptId={type:'string',pattern:conceptCategoryIdPattern},groupId={type:'string',pattern:conceptCategoryGroupIdPattern};
 const conceptPayload={type:'object',properties:{schemaVersion:{const:conceptCategorySchema},projectId:{const:'binari'},

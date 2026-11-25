@@ -675,7 +675,7 @@ test('new exact selected-preset schemas register immutable payloads and share ol
    {presetId:'run-2d',posePreset:'idle',assetSetSha256:'a'.repeat(64)}]};
  const [first,second]=selected.motionSelection;
  const wire=async args=>(await submit(args)).result.structuredContent;
- for(const body of [{...selected,motionSelection:[]},{...selected,includeCombat:false},
+ for(const body of [{...selected,schemaVersion:'ngs.npc-one-stop.selection.replace.v1',motionSelection:[]},{...selected,includeCombat:false},
   {...selected,motionPresets:{walk:'walk',run:'run'}},{...selected,combatMotionPresets:['attack-flat']},
   {...selected,motionSelection:[first,{...second,presetId:'ATTACK-FLAT'}]},
   ...[{presetId:'..'},{presetId:'evil/name'},{presetId:'run-2d\n'},{posePreset:'walk'},
@@ -787,4 +787,15 @@ test('v2 scoped appearance contracts admit full/animation-only, and older versio
  const {requests}= (await api.workflow({})).result.structuredContent;
  assert.deepEqual(requests.find(x=>x.officialRequestId===accepted.officialRequestId).payload,full.payload);
  assert.deepEqual(requests.find(x=>x.officialRequestId===animated.officialRequestId).payload,regen.payload);
+});
+
+test('exact empty selection registers a new NPC without creating a replacement',async t=>{
+ const {directory}=folder(t),{submit,workflow}=await listener(t,directory);
+ const schemaVersion='ngs.npc-one-stop.selection.v1';
+ const {intent,character,sourceRefs}=payload;
+ const request={schemaVersion,projectId:'binari',intent,character,sourceRefs,motionSelection:[]};
+ const receipt=(await submit(input('portrait-only',request))).result.structuredContent;
+ assert.equal(receipt.status,'registered');
+ const rows=(await workflow({})).result.structuredContent.requests;
+ assert.deepEqual(rows[0].payload,request);
 });

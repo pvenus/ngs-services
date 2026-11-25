@@ -64,3 +64,19 @@ test('legacy full replacement plans only the exact character owner and new creat
  const create={...payload,schemaVersion:'ngs.npc-one-stop.selection.v1'};
  assert.throws(()=>buildPlan(hashRow({...row,schemaVersion:create.schemaVersion},create)),/ONE_STOP_PAYLOAD_INVALID/);
 });
+
+test('zero selected motions keep full planning and portrait DAG only',()=>{
+ const {row}=cases[0];
+ const selected=buildPlan(row).tasks.filter(t=>!media.has(t.type));
+ const payload={...row.payload,motionSelection:[]};
+ const result=buildPlan(hashRow(row,payload)).tasks;
+ assert.deepEqual(result,selected);
+ assert.equal(result.length,24);
+ assert(result.some(t=>t.key==='portrait_representative'));
+ assert.equal(result.filter(t=>t.key.match(/^portrait_(n|ne|e|se|s|sw|w|nw)$/)).length,8);
+ assert(result.every(t=>!media.has(t.type)&&t.type!=='npc.delete-folder'));
+ const v2={...payload,schemaVersion:'ngs.npc-one-stop.selection.v2'};
+ const v2Tasks=buildPlan(hashRow({...row,schemaVersion:v2.schemaVersion},v2)).tasks;
+ assert.equal(v2Tasks.filter(t=>t.type==='npc.portrait-pixel').length,9);
+ assert(v2Tasks.every(t=>!media.has(t.type)));
+});

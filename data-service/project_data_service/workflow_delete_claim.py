@@ -49,9 +49,9 @@ def motion_slot(preset_id):
     return hashlib.sha256(preset_id.encode('utf-8')).hexdigest()[:16]
 
 
-def selection_rows(payload):
+def selection_rows(payload, *, allow_empty=False):
     rows=payload['motionSelection']
-    require(type(rows) is list and bool(rows))
+    require(type(rows) is list and (allow_empty or bool(rows)))
     ids=set()
     slots={}
     for row in rows:
@@ -260,7 +260,7 @@ class PrivatePlannerClaim:
                         and all(type(x) is str and 1<=len(x)<=300 and bool(x.strip()) for x in payload['sourceRefs']))
                 if selection:
                     require(set(payload)==fields|{'motionSelection'})
-                    slots=selection_rows(payload)
+                    slots=selection_rows(payload, allow_empty=not replacement)
                 else:
                     fields.add('includeCombat')
                     require(fields<=payload.keys()<=fields|{'motionPresets'} and payload['includeCombat'] is False
