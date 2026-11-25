@@ -18,7 +18,7 @@ CONFIG={
           'capability':'workflow.cinematic-sequence-remove.v1','filex':'workflowCinematicSequenceRemoveV1'},
 }
 RESULT_ARCHIVE='binari/cinematics/sequence-archive.json'
-ROUTES=(ORIGIN+SOURCE,ORIGIN+SOURCE+'/read',ORIGIN+SOURCE+'/result',
+ROUTES=(ORIGIN+SOURCE,ORIGIN+SOURCE+'/read',ORIGIN+SOURCE+'/result',ORIGIN+SOURCE+'/reconcile',
         ORIGIN+ARCHIVE,ORIGIN+ARCHIVE+'/result')
 
 
@@ -72,7 +72,7 @@ class WorkflowCinematicProject(WorkflowCinematic):
             c=tx.capabilities()
             return type(c)is dict and c.get('namespace')=='canonical-files/binari/cinematics/' and c.get(CONFIG[self.mode]['filex']) is True
     def provider(self,endpoint,p,missing=False):
-        need(endpoint in ('','/result'))
+        need(endpoint in ('','/result','/reconcile'))
         with self.writer_factory() as tx:
             r=tx.call('POST',WRITER+self.mode+endpoint,p,missing=missing)
         if r is None:raise FileNotFoundError('cinematic project result not found')
@@ -93,17 +93,22 @@ class WorkflowCinematicProject(WorkflowCinematic):
         return {'ok':True,'resultRef':ref,**out}
     def operate(self,op,p):
         if op=='result':return self.result(p)
-        need((op in ('read','publish') if self.mode==SOURCE else op=='publish') and
+        need((op in ('read','publish','reconcile') if self.mode==SOURCE else op=='publish') and
              keys(p,('claim','artifact') if self.mode==SOURCE and op=='publish' else ('claim',)))
         with exact_claim(self.planner,p['claim'],self.graph) as (oid,inp):
             if op=='read':return inp
+            if op=='reconcile':
+                value=self.provider('/reconcile',{'officialRequestId':oid,'claimStamp':p['claim']['claimStamp']})
+                if value=={'state':'absent_fenced'}:return value
+                need(keys(value,('state','manifest')) and value['state']=='published')
+                return {'state':'published','resultRef':source_result(value['manifest'],oid,inp['title'])}
             if self.mode==SOURCE:
                 a=p['artifact'];need(keys(a,('sha256','bytes','width','height','base64')) and type(a['base64'])is str and
                                     0<len(a['base64'])<=4*((8*1024*1024+2)//3))
                 m={**{k:v for k,v in a.items() if k!='base64'},'schemaVersion':'ngs.cinematic-source-result.v1',
                    'projectId':'binari','officialRequestId':oid,'title':inp['title']}
                 ref=source_result(m,oid,inp['title'])
-                need(self.provider('',{'manifest':m,'base64':a['base64']})==m)
+                need(self.provider('',{'manifest':m,'base64':a['base64'],'claimStamp':p['claim']['claimStamp']})==m)
             else:
                 with self.planner.snapshot() as db:
                     for i in inp['sequenceIds']:
@@ -114,6 +119,6 @@ class WorkflowCinematicProject(WorkflowCinematic):
             return {'ok':True,'resultRef':ref}
 
 def serve(handler):
-    mode=SOURCE if handler.path.split('?',1)[0] in (ORIGIN+SOURCE,ORIGIN+SOURCE+'/read',ORIGIN+SOURCE+'/result') else ARCHIVE
+    mode=SOURCE if handler.path.split('?',1)[0] in (ORIGIN+SOURCE,ORIGIN+SOURCE+'/read',ORIGIN+SOURCE+'/result',ORIGIN+SOURCE+'/reconcile') else ARCHIVE
     return serve_cinematic(handler,attribute='workflow_cinematic_'+mode.replace('-','_'),path=ORIGIN+mode,
                            capability=CONFIG[mode]['capability'])

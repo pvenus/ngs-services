@@ -218,7 +218,7 @@ def _checkpoint(folders,root,paths):
     return tuple(out)
 
 
-def compare(folders,value,*,operation):
+def compare(folders,value,*,operation='internal_compare'):
     fields={'scope','files'}
     include_deleted=(type(value) is dict and set(value)==fields|{'includeDeleted'}
                      and value['includeDeleted'] is True)

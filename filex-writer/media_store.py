@@ -413,7 +413,7 @@ def archive_ids(ids,limit=30):
 
 class CinematicProjectStore(CinematicPlaybackStore):
  def _private_result(self,folder,oid):
-  require(cinematic_match(oid,CINEMATIC_ID) and folder in ('.source-receipts','.archive-receipts'),'cinematic receipt')
+  require(cinematic_match(oid,CINEMATIC_ID) and folder in ('.source-receipts','.source-abandoned','.archive-receipts'),'cinematic receipt')
   directory=self.root/folder;require(not directory.is_symlink(),'cinematic receipt folder')
   return directory/(oid+'.json')
  def _result_source(self,oid):
@@ -426,12 +426,39 @@ class CinematicProjectStore(CinematicPlaybackStore):
   alias=source_entry(json.loads(public))
   require(wire(alias)==public and all(alias[k]==m[k] for k in ('sha256','bytes','width','height')),'source alias integrity')
   return m
+ def _source_fence(self,oid):
+  path=self._private_result('.source-abandoned',oid)
+  try:raw=self._read(path,256)
+  except FileNotFoundError:return path,0
+  record=json.loads(raw)
+  require(type(record)is dict and set(record)=={'claimStamp'} and wire(record)==raw and
+          self._source_stamp(record['claimStamp']),'source fence integrity')
+  return path,record['claimStamp']
+ @staticmethod
+ def _source_stamp(stamp):
+  return type(stamp)is int and 0<stamp<=2**53-1
+ def cinematic_source_reconcile(self,p):
+  require(type(p)is dict and set(p)=={'officialRequestId','claimStamp'} and
+          self._source_stamp(p['claimStamp']),'source reconcile packet')
+  oid=p['officialRequestId'];stamp=p['claimStamp']
+  with self.lock():
+   receipt=self._private_result('.source-receipts',oid)
+   # Receipt is written before media. A partial publish is not an absent publish.
+   try:self._read(receipt,8192)
+   except FileNotFoundError:pass
+   else:return {'state':'published','manifest':self._result_source(oid)}
+   path,fence=self._source_fence(oid)
+   # Under the writer lock, fence all delayed sends for this exact or older claim.
+   if stamp>fence:self.write(path,wire({'claimStamp':stamp}))
+   return {'state':'absent_fenced'}
  def cinematic_source_generate(self,p):
-  require(type(p)is dict and set(p)=={'manifest','base64'} and type(p['base64'])is str and
+  require(type(p)is dict and set(p)=={'manifest','base64','claimStamp'} and self._source_stamp(p['claimStamp']) and type(p['base64'])is str and
    len(p['base64'])<=4*((CINEMATIC_MAX+2)//3),'source generation packet')
   m=source_entry(p['manifest']); raw=base64.b64decode(p['base64'],validate=True);source_image(raw,m)
   oid=m['officialRequestId'];s=m['sha256'];frozen=wire(m)
   with self.lock():
+   _,fence=self._source_fence(oid)
+   if p['claimStamp']<=fence:raise Conflict('source claim fenced')
    receipt=self._private_result('.source-receipts',oid)
    if receipt.exists() or receipt.is_symlink():
     if self._read(receipt,8192)!=frozen:raise Conflict('source image request reused')

@@ -18,6 +18,7 @@ from project_data_service.workflow_cinematic_sequence import WorkflowCinematicSe
 from project_data_service.workflow_delete_claim import PrivatePlannerClaim
 from project_data_service.workflow_cinematic_playback import WorkflowCinematicPlayback,PATH as PLAYBACK_PATH
 from test_scope_registry import UnifiedFixture
+from project_data_service.workflow_cinematic_project import WorkflowCinematicProject,ORIGIN as PROJECT_ORIGIN,SOURCE
 
 REPO=Path(__file__).resolve().parents[1]
 OID='request.official.'+'4'*64
@@ -25,23 +26,26 @@ PLAYBACK={'durationFrames':132,'speedCurve':[{'frame':0,'rate':1/3},{'frame':90,
           'cameraCurve':[{'frame':0,'x':.5,'y':.5,'zoom':1},{'frame':110,'x':.2,'y':.4,'zoom':2}]}
 
 def sha(raw):return hashlib.sha256(raw).hexdigest()
-def png(i):
-    k=128;h=struct.pack('>IIBBBBB',k,k,8,2,0,0,0);frame=(b'\0'+bytes([30+i,180,70])*k)*k
+def png(i,width=128,height=128):
+    h=struct.pack('>IIBBBBB',width,height,8,2,0,0,0);frame=(b'\0'+bytes([30+i,180,70])*width)*height
     def chunk(name,raw):return struct.pack('>I',len(raw))+name+raw+struct.pack('>I',zlib.crc32(name+raw))
     return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',h)+chunk(b'IDAT',zlib.compress(frame))+chunk(b'IEND',b'')
 
 class SequenceFixture(UnifiedFixture):
-    def sequence(self):
+    def sequence(self,source_job=False):
         root=self.data/'cinematics';folder=root/'sources';folder.mkdir();still=png(0);source=sha(still)
         (folder/(source+'.png')).write_bytes(still)
         payload={'schemaVersion':'ngs.cinematic-sequence-generate.v1','projectId':'binari','sourceSha256':source,
                  'motionPrompt':'저고리 주변의 먹 번짐', 'playback':PLAYBACK}
+        if source_job:
+            payload={'schemaVersion':'ngs.cinematic-source-generate.v1','projectId':'binari',
+                     'title':'영적인 문','prompt':'밤의 종이문 틈으로 들어오는 그림자.'}
         db=self.root/'planner.sqlite'
         js="""import {PlannerStore} from './workflow-planner/planner.mjs';
 import {canonical,sha} from './workflow-planner/envelope.mjs';
 const [file,oid,raw]=process.argv.slice(1),payload=JSON.parse(raw),s=new PlannerStore(file,{cinematicEnabled:true});
 const payloadSha256=sha(canonical(payload));
-s.stage({officialRequestId:oid,projectId:'binari',requestType:'cinematic.sequence.generate',
+s.stage({officialRequestId:oid,projectId:'binari',requestType:payload.schemaVersion==='ngs.cinematic-source-generate.v1'?'cinematic.source.generate':'cinematic.sequence.generate',
  schemaVersion:payload.schemaVersion,payload,payloadSha256,registeredAt:1,status:'registered'});
 s.acknowledge(oid);
 const taskId=s.db.prepare('SELECT task_id FROM workflow_tasks').get().task_id;
@@ -60,6 +64,7 @@ s.close();"""
         app.workflow_cinematic_sequence=WorkflowCinematicSequence(
             planner,writer_factory=lambda:FilexCASTransport(writer),readiness=lambda:True)
         app.workflow_cinematic_playback=WorkflowCinematicPlayback(planner,writer_factory=lambda:FilexCASTransport(writer))
+        app.workflow_cinematic_source=WorkflowCinematicProject(planner,SOURCE,writer_factory=lambda:FilexCASTransport(writer))
         t=Thread(target=app.serve_forever,daemon=True);t.start()
         def stop():app.shutdown();app.server_close();t.join()
         self.addCleanup(stop)
@@ -72,6 +77,34 @@ s.close();"""
             except HTTPError as e:
                 with e:self.assertEqual(e.code,expected);return json.load(e)
         return root,db,claim,call,payload,still
+
+    def test_source_reconcile_fences_late_publish_and_preserves_already_stored_png(self):
+        root,db,claim,call,_,_=self.sequence(source_job=True)
+        base=PROJECT_ORIGIN+SOURCE
+        raw=png(1,1536,1024)
+        artifact={'sha256':sha(raw),'bytes':len(raw),'width':1536,'height':1024,'base64':base64.b64encode(raw).decode()}
+        offer={'claim':claim,'artifact':artifact}
+        receipt=root/'.source-receipts'/(OID+'.json')
+        path=root/'sources'/(artifact['sha256']+'.png')
+        ref='binari/cinematics/sources/'+artifact['sha256']+'.json'
+        call('/reconcile',{'claim':{**claim,'claimStamp':4}},403,base=base)
+        self.assertEqual(call('/reconcile',{'claim':claim},base=base),{'state':'absent_fenced'})
+        self.assertEqual(call('/reconcile',{'claim':claim},base=base),{'state':'absent_fenced'})
+        call('',offer,503,base=base)
+        self.assertFalse(receipt.exists())
+        self.assertFalse(path.exists())
+        with sqlite3.connect(db) as conn:conn.execute('UPDATE workflow_tasks SET updated_at=6')
+        current={**claim,'claimStamp':6}
+        self.assertEqual(call('',{**offer,'claim':current},base=base),{'ok':True,'resultRef':ref})
+        self.assertEqual(call('/reconcile',{'claim':current},base=base),{'state':'published','resultRef':ref})
+        self.assertEqual(path.read_bytes(),raw)
+        # An intent with a missing artifact is not a no-write proof.
+        path.unlink()
+        self.assertEqual(call('/reconcile',{'claim':current},503,base=base),{'error':'WORKFLOW_CINEMATIC_OUTCOME_UNCERTAIN'})
+        self.assertTrue(receipt.exists())
+        self.assertEqual(call('',{**offer,'claim':current},base=base),{'ok':True,'resultRef':ref})
+        self.assertEqual(call('/reconcile',{'claim':current},base=base),{'state':'published','resultRef':ref})
+        self.assertEqual(path.read_bytes(),raw)
 
     def test_claim_stages_frames_off_catalog_then_commits_exact_full_png_folder(self):
         root,db,claim,call,payload,still=self.sequence()

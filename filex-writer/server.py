@@ -401,6 +401,7 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                                        PLAYBACK_ROUTE+'/result':store.cinematic_playback_result})
                     if hasattr(store,'cinematic_source_generate'):
                         routes.update({SOURCE_ROUTE:store.cinematic_source_generate,SOURCE_ROUTE+'/result':store.cinematic_source_result,
+                                       SOURCE_ROUTE+'/reconcile':store.cinematic_source_reconcile,
                                        ARCHIVE_ROUTE:store.cinematic_sequences_archive,ARCHIVE_ROUTE+'/result':store.cinematic_sequences_archive_result})
                     action=routes.get(url.path)
                     if self.command!='POST' or action is None:return self.reply(404,{'error':'NOT_FOUND'})

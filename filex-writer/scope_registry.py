@@ -52,7 +52,7 @@ _ALLOW=MappingProxyType({
  'audio':(_EXACT,frozenset(_AUDIO_POST)),
  'props':(_EXACT,frozenset(_PROPS_POST)),
  'cinematics':(_EXACT,frozenset('/v1/workflow/cinematics'+p for p in
-  ('','/asset','/source-status','/result','-sequence','-sequence/frame','-sequence/result','-playback','-playback/target-status','-playback/result','-source','-source/result',
+  ('','/asset','/source-status','/result','-sequence','-sequence/frame','-sequence/result','-playback','-playback/target-status','-playback/result','-source','-source/result','-source/reconcile',
    '-sequence-remove','-sequence-remove/result'))),
 })
 _DYNAMIC=MappingProxyType({
