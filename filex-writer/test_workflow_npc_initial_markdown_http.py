@@ -8,6 +8,8 @@ from pathlib import Path
 import test_workflow_plan_representative_http as rep
 import test_workflow_shared_document_chain_http as fixture
 from test_workflow_delete_http import digest,encoded
+from npc_planning_markdown import planning_projection,planning_write_bytes
+from server import Conflict
 from project_data_service.workflow_portrait_representative import PATH,RepresentativePortrait
 
 class Tests(unittest.TestCase):
@@ -54,6 +56,16 @@ class Tests(unittest.TestCase):
             self.state(stage,'completed')
         self.assertEqual({k for k in self.writer.owner_files(npc) if k.endswith('/content.md')},set(physical))
         self.assertEqual(self.writer.owner_files('npc.other'),other)
+        # An unrelated new role in the same snapshot must not block portrait input.
+        for suffix,role in [('combat','portrait.combat'),('future','portrait.future')]:
+            cid='category.test-'+suffix
+            relative=f'{npc}/planning/{cid}.json'
+            row={'id':cid,'name':suffix,'planningRole':role,'content':'# '+suffix}
+            for key,raw in planning_write_bytes(relative,row).items():
+                path=self.writer.safe(key)
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_bytes(raw)
+            self.assertEqual(self.writer.snapshot()['documents'][relative],row)
         img='workflow.task.'+digest([oid,'portrait_representative'])
         with sqlite3.connect(self.db)as db:
             db.execute("INSERT INTO workflow_tasks VALUES(?,?,'portrait_representative','npc.portrait-representative','image',?,NULL,15,?,'running')",
@@ -62,3 +74,13 @@ class Tests(unittest.TestCase):
         code,result=self.post({'claim':claim},path=PATH+'/read')
         self.assertEqual(code,200)
         self.assertEqual(result['planningContent'],outputs['representative'])
+
+    def test_markdown_pointer_still_checks_file_integrity(self):
+        relative='npc.new/planning/category.test.json'
+        row={'id':'category.test','planningRole':'future','content':'# Original'}
+        files=planning_write_bytes(relative,row)
+        pointer=json.loads(files[relative])
+        with self.assertRaisesRegex(Conflict,'markdown proof'):
+            planning_projection(relative,pointer,lambda key:b'# Damaged')
+        with self.assertRaisesRegex(Conflict,'markdown index'):
+            planning_projection(relative,{**pointer,'content':'shadow'},files.__getitem__)

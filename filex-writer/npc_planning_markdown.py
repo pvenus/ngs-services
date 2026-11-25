@@ -32,14 +32,12 @@ def planning_write_bytes(path,row):
     return {markdown_path(path):raw,path:encoded(pointer)}
 
 def planning_projection(path,body,read):
-    """A projected compatibility row never makes JSON content authoritative."""
-    match=PLANNING.fullmatch(path)
-    if not match:return body
+    """Hydrate a stored Markdown pointer; role semantics belong to its consumer."""
+    if not PLANNING.fullmatch(path):return body
     marked='contentFormat'in body or 'contentSha256'in body
     if not marked:return body
     if ('content'in body or body.get('contentFormat')!=FORMAT or type(body.get('contentSha256'))is not str or
-        not SHA.fullmatch(body['contentSha256']) or (body.get('planningRole') not in ROLES and
-            not (body.get('planningRole')=='custom' and CUSTOM_CATEGORY.fullmatch(match[2]) and body.get('id')==match[2]))):
+        not SHA.fullmatch(body['contentSha256'])):
         raise Conflict('npc planning markdown index')
     raw=read(markdown_path(path))
     if type(raw)is not bytes or not 0<len(raw)<=64000 or sha(raw)!=body['contentSha256']:

@@ -32,3 +32,11 @@ writer running against the same root. Retire legacy writer processes and
 old role source on verified cutover. Preserve existing canonical data,
 durable receipts and recoverable rollback configuration. No move or cleanup
 of canonical assets is part of this change.
+
+### Storage and workflow boundary
+
+The shared planning read path only resolves the stored Markdown representation
+and verifies its content proof. It forwards document-role metadata unchanged.
+Do not add role or feature allowlists to shared file reads: the PDS or workflow
+consuming a document validates the role it needs. A new role must not require a
+writer change or prevent an unrelated document from being read.
