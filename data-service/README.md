@@ -183,3 +183,15 @@ python3 -m unittest discover -s tests -v
 
 테스트는 경로 탈출·심볼릭 링크 탈출, 개정 충돌, 멱등성, 감사 로그, 실제 파일 해시 등록,
 Storage Root 이동, 기반 테이블, HTTP 계약을 검증합니다.
+
+### Folder read contention
+
+The compare pool allows one active recursive comparison; the separate file-read
+pool allows two reads. Both retain immediate `FOLDER_BUSY` responses when full.
+On contention, PDS emits a JSON `pds_folder_busy` event with UTC time, pool,
+limit, the rejected operation and scope, and the current holder(s) with elapsed
+milliseconds. Match the holder's server-generated `requestId` with the
+`pds_folder_busy_holder_released` event to see its full hold time.
+Operation names distinguish MCP and legacy HTTP calls. These IDs are local to
+PDS (not workflow IDs). Normal uncontended reads, file contents, individual file
+paths, hashes and credentials are not logged.

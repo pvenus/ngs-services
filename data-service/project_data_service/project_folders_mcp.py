@@ -68,9 +68,9 @@ def _call(handler,id,folders,name,args):
         return _error(handler,id,-32602,'Invalid tool arguments')
     try:
         if name==_LIST:value={'projects':folders.projects()}
-        elif name==_COMPARE:value=files.compare(folders,args)
+        elif name==_COMPARE:value=files.compare(folders,args,operation='mcp_compare')
         else:
-            with files._capacity(files._FETCH):
+            with files._FETCH.hold('mcp_file_chunk',args['scope']):
                 raw,size=files.fetch_chunk(folders,args['scope'],args['path'],args['sha256'],args['offset'])
                 after=args['offset']+len(raw)
                 value={**args,'size':size,'nextOffset':after if after<size else None,

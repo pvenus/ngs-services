@@ -1,11 +1,15 @@
 """Read-only active canonical tree comparison. Not a filesystem snapshot."""
 import hashlib
+import json
 from collections import OrderedDict
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import os
 import re
 import stat
-from threading import BoundedSemaphore, Lock
+from threading import Lock
+from time import monotonic_ns
+from uuid import uuid4
 from urllib.parse import parse_qs
 
 from .project_folders import DIR_FLAGS,FILE_FLAGS,FolderError,SHA
@@ -20,8 +24,6 @@ MAX_TRANSFER_INTEGER=2**53-1
 MAX_LEGACY_BUFFERED_FILE=64*1024*1024
 MAX_PATH_BYTES=4096
 CHUNK=1024*1024
-_COMPARE=BoundedSemaphore(1)
-_FETCH=BoundedSemaphore(2)
 _HASH_CACHE=OrderedDict()
 _HASH_LOCK=Lock()
 _HASH_MAX=256
@@ -44,11 +46,54 @@ def _parts(path,*,empty=False):
     return parts
 
 
-@contextmanager
-def _capacity(semaphore):
-    if not semaphore.acquire(blocking=False):_bad(503,'FOLDER_BUSY')
-    try:yield
-    finally:semaphore.release()
+def _log_capacity(event,**fields):
+    # Only contention events are logged. A broken log stream must not change the read result.
+    try:print(json.dumps({'event':event,'at':datetime.now(timezone.utc).isoformat(timespec='milliseconds'),**fields},separators=(',',':')),flush=True)
+    except (OSError,ValueError):pass
+
+
+class _FolderCapacity:
+    def __init__(self,name,limit):
+        self.name=name
+        self.limit=limit
+        self.lock=Lock()
+        self.active={}
+
+    @contextmanager
+    def hold(self,operation,scope):
+        # Use a server-generated ID: JSON-RPC IDs are client-local and can repeat.
+        # Never log file paths, hashes, file contents, or caller-supplied metadata.
+        try:
+            _parts(scope,empty=True)
+        except FolderError:
+            scope='<invalid>'
+        if len(scope)>256:scope=scope[:253]+'...'
+        request_id=uuid4().hex
+        request={'requestId':request_id,'operation':operation,'scope':scope}
+        with self.lock:
+            now=monotonic_ns()
+            blocked=len(self.active)>=self.limit
+            if blocked:
+                holders=[]
+                for holder in self.active.values():
+                    holder['contended']=True
+                    holders.append({**holder['request'],'heldMs':(now-holder['started'])//1_000_000})
+            else:
+                self.active[request_id]={'request':request,'started':now,'contended':False}
+        if blocked:
+            _log_capacity('pds_folder_busy',pool=self.name,limit=self.limit,request=request,holders=holders)
+            _bad(503,'FOLDER_BUSY')
+        try:yield
+        finally:
+            with self.lock:
+                holder=self.active.pop(request_id)
+                held_ms=(monotonic_ns()-holder['started'])//1_000_000
+            if holder['contended']:
+                _log_capacity('pds_folder_busy_holder_released',pool=self.name,request=request,heldMs=held_ms)
+
+
+_COMPARE=_FolderCapacity('compare',1)
+_FETCH=_FolderCapacity('fetch',2)
 
 
 @contextmanager
@@ -173,7 +218,7 @@ def _checkpoint(folders,root,paths):
     return tuple(out)
 
 
-def compare(folders,value):
+def compare(folders,value,*,operation):
     fields={'scope','files'}
     include_deleted=(type(value) is dict and set(value)==fields|{'includeDeleted'}
                      and value['includeDeleted'] is True)
@@ -187,7 +232,7 @@ def compare(folders,value):
         key=_parts(item['path'])
         if key in seen or include_deleted and len(paths)+len(key)>64:_bad(400,'FOLDER_COMPARE_INVALID')
         seen[key]=item['sha256']
-    with _capacity(_COMPARE),folders._root() as root:
+    with _COMPARE.hold(operation,value['scope']),folders._root() as root:
         checkpoint=_checkpoint(folders,root,paths)
         opened=False
         try:
@@ -268,14 +313,14 @@ def route(handler,parsed,folders):
             handler.connection.settimeout(15)
             try:payload=handler.read_json(max_body=MAX_BODY)
             except (ValueError,RecursionError):_bad(400,'FOLDER_COMPARE_INVALID')
-            return handler.respond(200,compare(folders,payload))
+            return handler.respond(200,compare(folders,payload,operation='http_compare'))
         if parsed.path==PREFIX+'/file' and handler.command=='GET':
             try:q=parse_qs(parsed.query,keep_blank_values=True,strict_parsing=True,encoding='utf-8',errors='strict',max_num_fields=3)
             except (ValueError,UnicodeError):_bad(400,'FOLDER_QUERY_INVALID')
             if set(q)!={'scope','path','sha256'} or any(len(v)!=1 for v in q.values()):
                 _bad(400,'FOLDER_QUERY_INVALID')
             handler.connection.settimeout(15)
-            with _capacity(_FETCH):
+            with _FETCH.hold('http_whole_file',q['scope'][0]):
                 raw=fetch(folders,*(q[k][0] for k in ('scope','path','sha256')))
                 try:
                     handler.send_response(200)
