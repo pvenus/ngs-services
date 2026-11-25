@@ -328,7 +328,21 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     data=json.loads(raw)
                     if type(data) is not dict or set(data)!={'binding','files'}:
                         raise ValueError('workflow preset envelope')
-                    return self.reply(200,store.workflow_preset(data['binding'],data['files']))
+                    try:
+                        return self.reply(200,store.workflow_preset(data['binding'],data['files']))
+                    except Conflict as error:
+                        binding = data['binding']
+                        task = binding.get('taskId') if isinstance(binding, dict) else None
+                        if not isinstance(task, str) or not re.fullmatch(r'workflow\.task\.[a-f0-9]{64}', task):
+                            task = '-'
+                        reason = {
+                            'workflow preset stale snapshot': 'PRESET_SNAPSHOT_CHANGED',
+                            'workflow preset target exists': 'PRESET_TARGET_EXISTS',
+                            'workflow preset replay binding': 'PRESET_REPLAY_CONFLICT',
+                            'workflow preset previous generation not retired': 'PRESET_GENERATION_ACTIVE',
+                        }.get(str(error), 'PRESET_CONFLICT_UNCLASSIFIED')
+                        print(f'filex_workflow_preset task={task} status=409 reason={reason}', flush=True)
+                        raise
 
                 if url.path == '/v1/workflow/delete-character':
                     if workflow_delete is not True or not hasattr(store,'workflow_delete_character'):

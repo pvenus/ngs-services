@@ -793,9 +793,10 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                     raise Conflict('workflow preset replay binding')
                 return prior
             snap=self.snapshot_unlocked();root=snap['documents']['metadata.json'];rev=binding['expectedRevision']
-            if (snap['sourceVersion']!=binding['expectedSourceVersion'] or root.get('_pdsCurrent',{}).get('revision')!=rev
-                or owner in root['characterOrder'] or self.safe(owner).exists() or self.owner_files(owner)):
-                raise Conflict('workflow preset target not absent or stale')
+            if snap['sourceVersion']!=binding['expectedSourceVersion'] or root.get('_pdsCurrent',{}).get('revision')!=rev:
+                raise Conflict('workflow preset stale snapshot')
+            if owner in root['characterOrder'] or self.safe(owner).exists() or self.owner_files(owner):
+                raise Conflict('workflow preset target exists')
             if old:
                 if old.get('state')!='deleted':raise Conflict('workflow preset previous generation not retired')
                 self.require_no_cleanup(old)

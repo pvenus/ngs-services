@@ -155,6 +155,27 @@ class WorkflowPreset:
                 'verified':True,'receiptId':rid}
 
 
+def _log_outcome(handler, envelope, status, error):
+    claim = envelope.get('claim') if isinstance(envelope, dict) else None
+    task = claim.get('taskId') if isinstance(claim, dict) else None
+    if not isinstance(task, str) or not re.fullmatch(r'workflow\.task\.[a-f0-9]{64}', task):
+        task = '-'
+    # Never emit arbitrary exception text, claim fields, paths, or data.
+    reasons = {
+        'WORKFLOW_PRESET_SOURCE_CHANGED': 'PDS_SNAPSHOT_CHANGED',
+        'WORKFLOW_PRESET_TARGET_EXISTS': 'PDS_TARGET_EXISTS',
+        'WORKFLOW_PRESET_RECEIPT': 'WRITER_RECEIPT_INVALID',
+        'KNOWLEDGE_SOURCE_CHANGED': 'FILEX_HTTP_CONFLICT',
+        'FILEX_CAS_HTTP_400': 'FILEX_REQUEST_REJECTED',
+        'FILEX_CAS_HTTP_503': 'FILEX_OUTCOME_UNCONFIRMED',
+    }
+    raw = error.args[0] if isinstance(error, ValueError) and len(error.args) == 1 else None
+    reason = reasons.get(raw, 'PRESET_VALIDATION_UNCLASSIFIED') if isinstance(raw, str) else 'PRESET_VALIDATION_UNCLASSIFIED'
+    if status == 503:
+        reason = 'PLANNER_DATABASE_ERROR' if isinstance(error, sqlite3.Error) else 'STORAGE_TRANSPORT_UNCONFIRMED'
+    handler.log_error('workflow_preset task=%s status=%d reason=%s', task, status, reason)
+
+
 def serve(handler):
     service=getattr(handler.server,'workflow_preset',None)
     if not isinstance(service,WorkflowPreset):
@@ -165,16 +186,20 @@ def serve(handler):
         or handler.headers.get('Origin') is not None or handler.headers.get('Transfer-Encoding') is not None
         or handler.command=='POST' and handler.headers.get('Content-Type')!='application/json'):
         return handler.respond(403,{'error':'WORKFLOW_PRESET_INTERNAL_ONLY'})
+    envelope = None
     try:
         if handler.command=='GET':
             if not isinstance(service.verify,PrivatePlannerClaim):
                 return handler.respond(404,{'error':'WORKFLOW_PRESET_DISABLED'})
             return handler.respond(200,service.capability())
         handler.connection.settimeout(8)
-        return handler.respond(200,service.apply(handler.read_json(max_body=65536)))
+        envelope = handler.read_json(max_body=65536)
+        return handler.respond(200,service.apply(envelope))
     except (Denied,ClaimDenied):
         return handler.respond(403,{'error':'WORKFLOW_PRESET_CLAIM_DENIED'})
-    except (ValueError,KeyError,TypeError):
+    except (ValueError,KeyError,TypeError) as error:
+        _log_outcome(handler, envelope, 409, error)
         return handler.respond(409,{'error':'WORKFLOW_PRESET_NOT_CONFIRMED'})
-    except (OSError,sqlite3.Error):
+    except (OSError,sqlite3.Error) as error:
+        _log_outcome(handler, envelope, 503, error)
         return handler.respond(503,{'error':'WORKFLOW_PRESET_OUTCOME_UNCONFIRMED'})
