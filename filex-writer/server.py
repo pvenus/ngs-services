@@ -15,6 +15,7 @@ from urllib.parse import urlsplit, parse_qs, unquote
 PREFIX = 'canonical-files/binari/knowledge/'
 
 class Conflict(Exception): pass
+class PresetPrewriteConflict(Conflict): pass
 
 class Store:
     def __init__(self, root):
@@ -342,6 +343,8 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                             'workflow preset previous generation not retired': 'PRESET_GENERATION_ACTIVE',
                         }.get(str(error), 'PRESET_CONFLICT_UNCLASSIFIED')
                         print(f'filex_workflow_preset task={task} status=409 reason={reason}', flush=True)
+                        if isinstance(error, PresetPrewriteConflict):
+                            return self.reply(409, {'error':'WORKFLOW_PRESET_REJECTED_BEFORE_WRITE'})
                         raise
 
                 if url.path == '/v1/workflow/delete-character':

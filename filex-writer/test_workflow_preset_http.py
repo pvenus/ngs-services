@@ -84,3 +84,12 @@ class Tests(DeleteFixture):
         self.assertEqual(self.preset()[0],404)
         self.assertFalse(self.writer.safe(self.writer.state_path('npc.fresh')).exists())
         self.assertFalse((self.writer.root/'npc.fresh').exists())
+
+    def test_stale_preset_has_explicit_no_write_proof(self):
+        from unittest.mock import patch
+        from server import PresetPrewriteConflict
+        with patch.object(self.writer,'workflow_preset',side_effect=PresetPrewriteConflict('workflow preset stale snapshot')):
+            self.assertEqual(self.preset(),
+                             (409,{'error':'WORKFLOW_PRESET_REJECTED_BEFORE_WRITE'}))
+        self.assertFalse((self.writer.root/'npc.fresh').exists())
+        self.assertFalse(self.writer.receipt_path(self.art['taskId']).exists())

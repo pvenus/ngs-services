@@ -55,3 +55,9 @@ empty preset schema, registry and deterministic categories and derives the
 Filex read/CAS itself. The prior Filex receipt is optional storage binding,
 not dependent-task readiness. The transaction remains open through the
 Filex response. A running task is not automatically revoked or retried.
+
+When the current snapshot changes before any write of the exact preset, the
+writer or PDS returns the exact 409 body
+`{"error":"WORKFLOW_PRESET_REJECTED_BEFORE_WRITE"}`. A generic conflict,
+unconfirmed receipt, or transport error is not a no-write proof. Never emit
+the typed rejection after starting a new write for that attempt.

@@ -9,6 +9,7 @@ from .workflow_delete_claim import PrivatePlannerClaim,ClaimDenied
 from .filex_npc_authority import FilexCurrentNPC
 from .filex_npc_files import encode
 from .filex_read import digest, require
+from .filex_cas_transport import PresetPrewriteRejected
 from .pds_owned_transport import OwnedNPCTransport
 from .workflow_pose_recipes import POSE_RECIPES
 
@@ -131,8 +132,8 @@ class WorkflowPreset:
                     require(tx.capabilities().get('workflowCombatPortraitWriteV1') is True,
                             'WORKFLOW_POSE_RECIPES_NOT_READY')
                 snapshot,marker,old=self.source._read()
-                require(snapshot['sourceVersion']==b['expectedSourceVersion'] and marker['revision']==b['expectedRevision'],
-                        'WORKFLOW_PRESET_SOURCE_CHANGED')
+                if snapshot['sourceVersion']!=b['expectedSourceVersion'] or marker['revision']!=b['expectedRevision']:
+                    raise PresetPrewriteRejected('WORKFLOW_PRESET_SOURCE_CHANGED')
                 require(not any(row['id']==b['npcId'] for row in old['characters']),'WORKFLOW_PRESET_TARGET_EXISTS')
                 from .domain_contracts.legacy_http import validate_npcs
                 validate_npcs({**old,'characters':[char]},self.source.asset_get)
@@ -164,6 +165,7 @@ def _log_outcome(handler, envelope, status, error):
     reasons = {
         'WORKFLOW_PRESET_SOURCE_CHANGED': 'PDS_SNAPSHOT_CHANGED',
         'WORKFLOW_PRESET_TARGET_EXISTS': 'PDS_TARGET_EXISTS',
+        'FILEX_PRESET_SNAPSHOT_CHANGED': 'FILEX_PRESET_SNAPSHOT_CHANGED',
         'WORKFLOW_PRESET_RECEIPT': 'WRITER_RECEIPT_INVALID',
         'KNOWLEDGE_SOURCE_CHANGED': 'FILEX_HTTP_CONFLICT',
         'FILEX_CAS_HTTP_400': 'FILEX_REQUEST_REJECTED',
@@ -197,6 +199,9 @@ def serve(handler):
         return handler.respond(200,service.apply(envelope))
     except (Denied,ClaimDenied):
         return handler.respond(403,{'error':'WORKFLOW_PRESET_CLAIM_DENIED'})
+    except PresetPrewriteRejected as error:
+        _log_outcome(handler, envelope, 409, error)
+        return handler.respond(409,{'error':'WORKFLOW_PRESET_REJECTED_BEFORE_WRITE'})
     except (ValueError,KeyError,TypeError) as error:
         _log_outcome(handler, envelope, 409, error)
         return handler.respond(409,{'error':'WORKFLOW_PRESET_NOT_CONFIRMED'})

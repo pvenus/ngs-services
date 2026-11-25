@@ -6,7 +6,7 @@ import hashlib, json, os, re, secrets, threading
 from contextlib import contextmanager
 from owned_store import OwnedNPCStore
 from npc_store import NPC_PREFIX, encoded, digest
-from server import Conflict
+from server import Conflict,PresetPrewriteConflict
 
 from migration_store import MigrationMixin
 from frame_maintenance import FrameMaintenanceMixin
@@ -794,7 +794,7 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                 return prior
             snap=self.snapshot_unlocked();root=snap['documents']['metadata.json'];rev=binding['expectedRevision']
             if snap['sourceVersion']!=binding['expectedSourceVersion'] or root.get('_pdsCurrent',{}).get('revision')!=rev:
-                raise Conflict('workflow preset stale snapshot')
+                raise PresetPrewriteConflict('workflow preset stale snapshot')
             if owner in root['characterOrder'] or self.safe(owner).exists() or self.owner_files(owner):
                 raise Conflict('workflow preset target exists')
             if old:
