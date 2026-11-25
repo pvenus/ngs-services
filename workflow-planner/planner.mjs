@@ -10,7 +10,7 @@ import {npcPlanningAddType,npcPlanningAddTaskKey,validateNPCPlanningAdd} from '.
 import {audioRequestType,audioTaskKey,validateAudioGenerate} from './audio-generate-envelope.mjs';
 import {audioDeleteType,audioDeleteTaskKey,validateAudioDelete} from './audio-delete-envelope.mjs';
 import {audioSeparateType,audioSeparateTaskKey,validateAudioSeparate} from './audio-separate-envelope.mjs';
-import {createWorkflowTasksSql,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,migrateWorkflowAudioTask} from './audio-task-schema.mjs';
+import {createWorkflowTasksSql,PORTRAIT_READ_OWNER_COLUMN,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,migrateWorkflowAudioTask} from './audio-task-schema.mjs';
 
 import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit} from './motion-preset-convert-2d-plan.mjs';
@@ -209,6 +209,18 @@ export function migrateWorkflowRetryCount(db){
  }catch(e){db.exec('ROLLBACK');throw e;}
 }
 
+// For NPC portrait inputs only: populated atomically while reading, reset
+// before rendering. NULL deliberately gives no authority to classify a loss.
+export function migrateNpcPortraitReadOwner(db){
+ db.exec('BEGIN IMMEDIATE');
+ try{
+  const columns=db.prepare('PRAGMA table_info(workflow_tasks)').all();
+  if(!columns.some(c=>c.name==='portrait_read_owner_pid'))
+   db.exec(`ALTER TABLE workflow_tasks ADD COLUMN ${PORTRAIT_READ_OWNER_COLUMN}`);
+  db.exec('COMMIT');
+ }catch(e){db.exec('ROLLBACK');throw e;}
+}
+
 // A legal worker transition cannot make this exact graph runnable again. In
 // particular, a running claim is never inferred to have failed, and a failed
 // task below the cap is still live even while its retry cooldown is in effect.
@@ -306,7 +318,7 @@ export class PlannerStore{
     updated_at INTEGER NOT NULL, reason TEXT
   ) STRICT;
   ${createWorkflowTasksSql};`);
-  try{migrateWorkflowRetryCount(this.db);migrateWorkflowAudioTask(this.db);}catch(e){this.db.close();throw e;}
+  try{migrateWorkflowRetryCount(this.db);migrateWorkflowAudioTask(this.db);migrateNpcPortraitReadOwner(this.db);}catch(e){this.db.close();throw e;}
  }
  stage(row){
   const payload=checkRow(row);

@@ -111,3 +111,16 @@ a combat motion is not a request to create a separate combat portrait.
 Frames depend on the same exact preset/direction animation. PDS enforces
 published source identity at execution. The existing walk/run graph for old
 noncombat rows is unchanged.
+
+### NPC portrait input-read ownership
+
+Planner adds a nullable local ownership marker without changing existing rows'
+status, retry count, timestamps or dependencies. New image workers use it only
+while reading data before rendering. A NULL marker never authorizes an
+abandoned/read failure. On the same Mac, a positively absent process plus an
+unchanged running claim lets the image worker record an ordinary failure.
+
+Deploy Planner compatibility before enabling the new image worker. The
+previous Planner's exact-schema recognizer cannot reopen the extended database.
+To roll back to that version, verify no marked claims are outstanding, stop
+writers, and remove the column through a reviewed maintenance procedure first.
