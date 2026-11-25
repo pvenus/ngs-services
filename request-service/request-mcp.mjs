@@ -1,5 +1,5 @@
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
-import {cancelTool,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
+import {cancelTool,basicSchemaVersion,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema,conceptCategoryAddIdPattern,conceptCategoryIdPattern,conceptCategoryGroupIdPattern} from './concept-category-envelope.mjs';
 import {npcPlanningUpdateType,npcPlanningUpdateSchema,npcPlanningRoles,npcPlanningUpdateIdPattern,
  npcPlanningRequirementsLimit} from './npc-planning-update-envelope.mjs';
@@ -38,6 +38,8 @@ const known={
 };
 const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const npcCommon={projectId:{const:'binari'},intent:{type:'string'},character:{type:'object'},sourceRefs:{type:'array',items:{type:'string'}}};
+const npcBasicPayload={type:'object',properties:{schemaVersion:{const:basicSchemaVersion},...npcCommon,includeCombat:{type:'boolean'}},
+ required:['schemaVersion','projectId','intent','character','sourceRefs','includeCombat'],additionalProperties:false};
 const npcLegacyPayload={type:'object',properties:{schemaVersion:{enum:legacyOneStopSchemas},...npcCommon,
  includeCombat:{type:'boolean'},motionPresets:{type:'object'},combatMotionPresets:{type:'array',items:{type:'string'}}},
  required:['schemaVersion','projectId','intent','character','sourceRefs','includeCombat'],additionalProperties:false};
@@ -108,7 +110,7 @@ const tool={
   sourceId:{const:'local'},requestType:{enum:['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType]},
   idempotencyKey:{type:'string',minLength:1,maxLength:200},payload:{type:'object'},
  },required:['sourceId','requestType','idempotencyKey','payload'],additionalProperties:false,
- oneOf:[{properties:{requestType:{const:'npc.workflow'},payload:{oneOf:[npcLegacyPayload,npcSelectionPayload]}}},
+ oneOf:[{properties:{requestType:{const:'npc.workflow'},payload:{oneOf:[npcLegacyPayload,npcSelectionPayload,npcBasicPayload]}}},
   {properties:{requestType:{const:conceptCategoryRequestType},payload:conceptPayload}},
   {properties:{requestType:{const:npcPlanningUpdateType},payload:npcPlanningUpdatePayload}},
   {properties:{requestType:{const:npcPlanningAddType},payload:npcPlanningAddPayload}},

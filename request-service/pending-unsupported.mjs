@@ -1,5 +1,5 @@
 /** Settle only authoritative, never-planned registration rows unsupported by this release. */
-import {canonical,ident,sha} from './one-stop-envelope.mjs';
+import {canonical,ident,sha,isBasicSchema} from './one-stop-envelope.mjs';
 import {canonicalWorkflowPayload,knownWorkflowSchema} from './request-envelope.mjs';
 import {officialIdFor,spaceQueueIdPattern} from './space-intake.mjs';
 
@@ -10,7 +10,7 @@ const maximumPayloadBytes=64*1024;
 
 /** Current active Planner disallows these otherwise valid historic variants. */
 export function unsupportedPlannerPolicy(type,payload){
- return type==='npc.workflow'&&payload.includeCombat===true||
+ return type==='npc.workflow'&&!isBasicSchema(payload.schemaVersion)&&payload.includeCombat===true||
   type==='concept.category.workflow'&&payload.operation==='replace';
 }
 

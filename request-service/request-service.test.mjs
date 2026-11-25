@@ -799,3 +799,14 @@ test('exact empty selection registers a new NPC without creating a replacement',
  const rows=(await workflow({})).result.structuredContent.requests;
  assert.deepEqual(rows[0].payload,request);
 });
+
+test('basic combat opt-in registers as distinct from unsupported historic combat',async t=>{
+ const {directory}=folder(t),{submit,workflow}=await listener(t,directory);
+ const schemaVersion='ngs.npc-one-stop.basic.v1';
+ const {intent,character,sourceRefs}=payload;
+ const request={schemaVersion,projectId:'binari',intent,character:{...character,actId:'act01'},sourceRefs,includeCombat:true};
+ const receipt=(await submit(input('basic-original',request))).result.structuredContent;
+ assert.equal(receipt.status,'registered');
+ const rows=(await workflow({})).result.structuredContent.requests;
+ assert.deepEqual(rows[0].payload,request);
+});

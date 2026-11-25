@@ -24,7 +24,8 @@ SELECTION_V2_REPLACE='ngs.npc-one-stop.selection.replace.v2'
 SELECTION_V2=(SELECTION_V2_NEW,SELECTION_V2_REPLACE)
 SELECTION_SCHEMAS=(SELECTION_NEW,SELECTION_REPLACE,*SELECTION_V2)
 REPLACE_SCHEMAS=(SCHEMA,SELECTION_REPLACE,SELECTION_V2_REPLACE)
-NPC_SCHEMAS=(SCHEMA,NEW_SCHEMA,*SELECTION_SCHEMAS)
+BASIC_SCHEMA='ngs.npc-one-stop.basic.v1'
+NPC_SCHEMAS=(SCHEMA,NEW_SCHEMA,BASIC_SCHEMA,*SELECTION_SCHEMAS)
 MOTION_ID=r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}'
 POSES=tuple(POSE_RECIPES)
 DIRECTIONS=('n','ne','e','se','s','sw','w','nw')
@@ -244,6 +245,8 @@ class PrivatePlannerClaim:
             payload=json.loads(row['payload'])
             selection=regeneration or row['schema_version'] in SELECTION_SCHEMAS
             replacement=row['schema_version'] in REPLACE_SCHEMAS
+            basic=row['schema_version']==BASIC_SCHEMA
+            if basic:require(direction is None and not media and not pixel and key!='delete')
             if regeneration:
                 require(type(payload) is dict and set(payload)=={'schemaVersion','projectId','npcId','motionSelection'}
                         and payload['schemaVersion']==row['schema_version'] and payload['projectId']=='binari'
@@ -258,7 +261,10 @@ class PrivatePlannerClaim:
                         and bool(payload['intent'].strip()) and type(payload.get('sourceRefs')) is list
                         and bool(payload['sourceRefs'])
                         and all(type(x) is str and 1<=len(x)<=300 and bool(x.strip()) for x in payload['sourceRefs']))
-                if selection:
+                if basic:
+                    require(set(payload)==fields|{'includeCombat'} and type(payload['includeCombat']) is bool)
+                    slots={}
+                elif selection:
                     require(set(payload)==fields|{'motionSelection'})
                     slots=selection_rows(payload, allow_empty=not replacement)
                 else:
@@ -273,6 +279,9 @@ class PrivatePlannerClaim:
                         and all(matches(c[k],r'[A-Za-z0-9._:-]{1,200}') for k in ('actId','chapterId'))
                         and type(c['name']) is str and 1<=len(c['name'])<=60 and bool(c['name'].strip())
                         and type(c['role']) is str and 1<=len(c['role'])<=300 and bool(c['role'].strip()))
+                if basic:
+                    require(matches(c['slug'],r'[a-z0-9][a-z0-9._-]{1,79}') and owner=='npc.'+c['slug']
+                            and c['actId'] in ('act1','act01') and matches(c['chapterId'],r'(?:ch|chapter0)[1-5]'))
                 if owner.startswith('character.'):
                     require(replacement and 12<=len(owner)<=90 and matches(owner,r'character\.[a-z0-9]+(?:[-._][a-z0-9]+)*')
                             and c['slug']==owner.removeprefix('character.') and c['actId'] in ('act1','act01')
@@ -281,7 +290,8 @@ class PrivatePlannerClaim:
                     require(owner.startswith('npc.'))
             selected_poses={'idle',*(v['posePreset'] for v in slots.values())} if row['schema_version'] in SELECTION_V2 else None
             if gated_pose is not None:
-                require(gated_pose in (selected_poses if selected_poses is not None else {'idle'}))
+                require(gated_pose in (selected_poses if selected_poses is not None else
+                    {'idle','combat'} if basic and payload['includeCombat'] else {'idle'}))
             delete_predecessor=None
             if key=='preset' and owner.startswith('character.'):
                 delete_predecessor='workflow.task.'+digest([oid,'delete'])
@@ -418,7 +428,7 @@ class PrivatePlannerClaim:
             if key=='delete':
                 yield identity,c,tuple(slots.values()),selected_poses is not None
             elif key=='preset':
-                yield identity,c,delete_predecessor,selected_poses
+                yield identity,c,delete_predecessor,{'idle','combat'} if basic and payload['includeCombat'] else selected_poses
             elif media_binding is not None:
                 yield identity,c,media_binding
             elif chain_result:

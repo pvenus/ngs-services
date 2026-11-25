@@ -196,3 +196,17 @@ that the Planner or workers infer. An empty array for new creation runs preset, 
 and idle/representative portraits only, including the configured pixel portrait outputs.
 Same-ID replacement and animation-only regeneration still require a motion. This route does not enable the legacy
 combat-portrait workflow or inspect the mutable preset catalog.
+
+Fresh original-only NPC creation uses `npc.workflow` with
+`ngs.npc-one-stop.basic.v1`: exact `schemaVersion`, `projectId`, `character`,
+`intent`, `sourceRefs`, and boolean `includeCombat` keys. The NPC ID must be
+`npc.<slug>`, where slug is a new lowercase 2–80 character ID. The preset
+creation does not read a previous character or recover a backup. Treat a
+variation as a fresh operation with its own name and ID, not a replacement.
+
+The task graph registers the new NPC, then creates overview, portrait art,
+representative pose plan and portrait, and idle pose plan and portrait.
+Combat opt-in adds only the combat plan and original center portrait. This
+schema cannot enqueue direction, pixel or motion stages and never deletes a
+folder. Previously persisted selected-motion workflows use their original
+plan and remain untouched.

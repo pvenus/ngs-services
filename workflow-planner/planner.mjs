@@ -1,5 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
-import {canonical,sha,validateOneStop,isReplaceSchema,isSelectionSchema,isPoseSelectionSchema,motionSelectionSlot,motionPoseRegistry,motionSelectionPoses} from './envelope.mjs';
+import {canonical,sha,validateOneStop,isReplaceSchema,isSelectionSchema,isPoseSelectionSchema,isBasicSchema,motionSelectionSlot,motionPoseRegistry,motionSelectionPoses} from './envelope.mjs';
 
 import {conceptCategoryRequestType,validateConceptCategory} from './concept-category-envelope.mjs';
 
@@ -147,16 +147,17 @@ function materializePlan(row,payload,pixelPortraits=true){
  }
  // Legacy combat envelopes requested an unsupported dedicated portrait workflow.
  // Selected v1 continues to use the original historical idle-portrait graph.
- if(row.payload.includeCombat)throw Error('WORKFLOW_COMBAT_NOT_SUPPORTED');
+ const basic=isBasicSchema(row.schemaVersion);
+ if(!basic&&row.payload.includeCombat)throw Error('WORKFLOW_COMBAT_NOT_SUPPORTED');
  const npcId=row.payload.character.npcId,replace=isReplaceSchema(row.schemaVersion);
  const selected=isSelectionSchema(row.schemaVersion),poseSelection=isPoseSelectionSchema(row.schemaVersion);
  // v2 always uses the canonical pixel appearance chain; the optional graph
  // setting exists solely for verification of historical persisted plans.
  pixelPortraits=poseSelection||pixelPortraits;
- const motions=selected?row.payload.motionSelection.map(({presetId,posePreset,assetSetSha256})=>(
+ const motions=basic?[]:selected?row.payload.motionSelection.map(({presetId,posePreset,assetSetSha256})=>(
   {motion:presetId,key:'motion_'+motionSelectionSlot(presetId),posePreset,assetSetSha256}
  )):['walk','run'].map(motion=>({motion,key:motion}));
- const required=new Set(['idle',...(poseSelection?motions.map(motion=>motion.posePreset):[])]);
+ const required=new Set(['idle',...(basic&&row.payload.includeCombat?['combat']:poseSelection?motions.map(motion=>motion.posePreset):[])]);
  const poses=motionSelectionPoses.filter(pose=>required.has(pose));
  const tasks=[],ids=new Map();
  const add=(key,type,workerType,dep,extra={})=>{
@@ -174,9 +175,10 @@ function materializePlan(row,payload,pixelPortraits=true){
  for(const pose of poses){
   const lane=motionPoseRegistry[pose],pixel='portrait_pixel_'+pose+'_reference';
   add(lane.planKey,lane.planType,'document','planning_representative');
-  add(lane.referenceKey,lane.referenceType,'image',lane.planKey,pixelPortraits?{imageStyle:pixelImageStyle}:{});
-  if(pixelPortraits)add(pixel,portraitPixelTaskType,'postprocess',lane.referenceKey,{posePreset:pose,direction:null});
+  add(lane.referenceKey,lane.referenceType,'image',lane.planKey,!basic&&pixelPortraits?{imageStyle:pixelImageStyle}:{});
+  if(!basic&&pixelPortraits)add(pixel,portraitPixelTaskType,'postprocess',lane.referenceKey,{posePreset:pose,direction:null});
  }
+ if(basic)return {payload,tasks};
  for(const direction of directions){
   const appearance=new Map();
   for(const pose of poses){

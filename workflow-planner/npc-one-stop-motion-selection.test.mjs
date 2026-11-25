@@ -80,3 +80,20 @@ test('zero selected motions keep full planning and portrait DAG only',()=>{
  assert.equal(v2Tasks.filter(t=>t.type==='npc.portrait-pixel').length,9);
  assert(v2Tasks.every(t=>!media.has(t.type)));
 });
+
+test('separate basic schema builds originals only with independent combat opt-in',()=>{
+ const {row}=cases[0],{motionSelection,...common}=row.payload;
+ const schemaVersion='ngs.npc-one-stop.basic.v1';
+ const make=(includeCombat,extra={})=>{const payload={...common,schemaVersion,includeCombat,character:{...common.character,actId:'act01'},...extra};
+   return buildPlan(hashRow({...row,schemaVersion},payload));};
+ for(const combat of [false,true]){
+  const tasks=make(combat).tasks;
+  assert.deepEqual(tasks.map(t=>t.key),['preset','planning_overview','planning_portrait_art','planning_representative',
+    'portrait_representative','planning_idle','portrait_idle_reference',
+    ...(combat?['planning_combat','portrait_combat_reference']:[])]);
+  assert(tasks.every(t=>!t.input.imageStyle&&!t.input.direction));
+  assert.deepEqual(tasks[0].input,{npcId:common.character.npcId,mode:'new',noOldDataReuse:true});
+ }
+ assert.throws(()=>make(false,{motionSelection})); assert.throws(()=>make(undefined));
+ assert.throws(()=>make(false,{character:{...common.character,npcId:'npc.wrong'}}));
+});

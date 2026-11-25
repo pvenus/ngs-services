@@ -203,6 +203,37 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.post(self.corrected(frames,seq),path=media.FRAMES),(200,{'ok':True}))
         self.done(frames)
 
+    def test_new_basic_original_centers_use_only_new_owner_and_no_pixel_artifact(self):
+        fixture.Tests.plan(self)
+        with sqlite3.connect(self.db) as db:
+            src=json.loads(db.execute('SELECT payload FROM workflow_runs').fetchone()[0])
+            src.update(schemaVersion='ngs.npc-one-stop.basic.v1',includeCombat=True)
+            src['character']['slug']='fresh'
+            src['character']['actId']='act01'
+            self.art['character']=src['character']
+            self.c['payloadSha256']=media.digest(src)
+            db.execute('UPDATE workflow_runs SET schema_version=?,payload=?,payload_sha256=?',
+                       (src['schemaVersion'],media.encoded(src).decode(),self.c['payloadSha256']))
+        rows=self.art['profile']['planningCategories']
+        cid='category.preset.'+media.digest(['npc.standard','3',self.c['taskId'],'portrait.combat'])[:32]
+        rows.append({'id':cid,'name':'전투 포즈 기획','content':'','planningRole':'portrait.combat'})
+        self.art['profile']['planningPreset']['visibleCategoryIds'].append(cid)
+        code,body=self.preset()
+        self.assertEqual(code,200,body)
+        self.done(self.c)
+        rep,raw=self.prepare_common()
+        for pose in ('idle','combat'):
+            recipe=POSE_RECIPES[pose]
+            plan=self.plan_write(self.plan_claim(pose,rep),pose)
+            center=self.task_claim(recipe.reference_key,recipe.reference_type,'image',plan)
+            self.image_write(center,pose,45 if pose=='idle' else 46,reference=raw)
+            self.assertEqual(self.post({'claim':self.pixel_claim(pose,None,center)},path=PIXEL+'/read')[0],403)
+        authority=self.pds.workflow_portrait_combat.source
+        npc=next(c for c in authority.current()['document']['characters'] if c['id']==OWNER)
+        self.assertEqual(set(npc['portraitSets']),{'representative','idle','combat'})
+        self.assertTrue(all('pixelAssetId' not in slot for slot in npc['portraitSets'].values()))
+        self.assertFalse(npc.get('poseViews'))
+
     def test_real_mixed_route_same_pose_pixel_barrier_and_actual_raw_bytes(self):
         self.make_run(('combat','idle'))
         rep,ref=self.prepare_common()
