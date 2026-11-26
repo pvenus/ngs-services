@@ -434,3 +434,34 @@ bytes physically reclaimed on APFS.
    LaunchAgent, without touching the OPS web process. Then re-install from
    a new verified OPS archive if needed. Code publication alone does not
    install the macOS job.
+
+### Expanded deployment releases
+
+The same daily job also checks the deployed-release policies in
+\`DEPLOYED_RETENTION_POLICIES\`. These are separate from the generic temporary
+file tuple because each service root needs a proven publisher lock, active
+version, candidate set and rollback version before deletion is safe.
+
+The NGS policy is limited to \`~/Workspaces/NGS/code/releases/project-page-github-<full SHA>\`
+trees with the matching authenticated OPS NGS release journal. It does
+not clean arbitrary legacy/short-SHA folders, preparation archives, runtime
+Miniflare directories, workspace data, or other service release roots. The
+current launcher and all release references in its environments, including
+older brand assets, are protected. Other installed or loaded service
+references, including RS and PDS, are also protected. Candidate/ready/observed
+metadata and the current deployment's exact prior healthy selector are
+protected regardless of age. NGS Local must be running with the deployed
+selector and must be the healthy listener on port 5274; the prior healthy
+release and its execution directory must still exist. Missing or inconsistent
+proof blocks the NGS rule without affecting unrelated temporary-file rules.
+
+The runner takes the same preparation/apply locks as those OPS producers
+and never waits for them. If deployment or preparation is in progress the
+NGS rule reports \`blocked\` and leaves the tree unchanged. A candidate's root
+and all descendants must be at least 10 days old, free of links and open-file
+matches, and have unchanged metadata across the probes. The runner moves
+an eligible tree to a private random sibling name before a descriptor-based
+removal. An interrupted removal can leave a \`.ops-cleanup-*\` sibling; it
+is not retried without operator inspection. Before enabling this or a new
+deployment-root policy, exercise an independent \`--dry-run\` and verify
+all expected current, pending and prior-good references.

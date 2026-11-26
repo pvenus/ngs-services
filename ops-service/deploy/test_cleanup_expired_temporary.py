@@ -1,4 +1,6 @@
 import fcntl
+import hashlib
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -7,6 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import cleanup_expired_temporary as cleanup_module
 from cleanup_expired_temporary import (
     NANOSECONDS_PER_DAY as DAY, RULES, Rule, cleanup, no_open_descriptors,
 )
@@ -124,3 +127,148 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(template['KeepAlive'])
         self.assertNotIn('StartInterval', template)
         self.assertNotIn('--dry-run', template['ProgramArguments'])
+
+
+class ReleaseCleanupTests(unittest.TestCase):
+    def setUp(self):
+        CleanupTests.setUp(self)
+        self.home = self.workspace
+        self.root = self.home / cleanup_module.RELEASES
+        self.control = self.home / cleanup_module.CONTROL
+        self.launch_agents = self.home / 'Library/LaunchAgents'
+        self.launch_agents.mkdir(parents=True)
+        self.root.mkdir(parents=True)
+        self.control.mkdir(parents=True, mode=0o700)
+        self.current, self.rollback, self.pending, self.loaded_only, self.candidate = [str(i)*40 for i in range(1, 6)]
+        for name in ('prepare-ngs-local.lock', 'prepare-ops-candidates.lock', 'prepare-services.lock', 'cycle.lock'):
+            (self.control / name).touch(mode=0o600)
+        for sha in (self.current, self.rollback, self.pending, self.loaded_only, self.candidate):
+            self.make_release(sha)
+        self.brand = 'project-page-git-19d48f1'
+        self.plist = self.ngs_plist(self.current, self.brand)
+        (self.launch_agents / (cleanup_module.NGS_LOCAL + '.plist')).write_bytes(plistlib.dumps(self.plist))
+        prior_plist_obj = self.ngs_plist(self.rollback, self.brand)
+        Path(prior_plist_obj['WorkingDirectory']).mkdir(parents=True)
+        prior_entry = Path(prior_plist_obj['ProgramArguments'][1])
+        prior_entry.parent.mkdir(parents=True)
+        prior_entry.write_text('// prior rollback fixture')
+        prior_plist = plistlib.dumps(prior_plist_obj)
+        self.make_journal(self.current, prior_plist)
+        self.make_journal(self.rollback)
+        self.make_journal(self.pending)
+        self.make_journal(self.loaded_only)
+        self.make_journal(self.candidate)
+        self.jsonfile('prepared.json', 'ops.ngs-prepared-deploy.v1', sha=self.pending)
+        self.jsonfile('ngs-local-preparation-status.json', 'ops.ngs-local-preparation-status.v1',
+                      target='ngs-local', sha=self.pending, state='ready')
+        for target in ('ngs-local', 'rs-mcp'):
+            self.jsonfile('targets/' + target + '/ready.json', 'ops.deploy-target-ready.v1',
+                          target=target, sha=self.pending)
+            self.jsonfile('targets/' + target + '/last-result.json', 'ops.deploy-target-result.v1',
+                          target=target, attemptedSha=self.current,
+                          observed={'sha': self.current, 'deployedAt': '2026-11-01T11:00:00Z'})
+        self.jsonfile('targets/rs-mcp/candidate.json', 'ops.mac-target-candidate.v1',
+                      target='rs-mcp', sha=self.pending)
+
+    def make_release(self, sha, age=20, prefix=cleanup_module.RELEASE_PREFIX):
+        path = self.root / (prefix + sha)
+        path.mkdir()
+        payload = path / 'bundle.js'
+        payload.write_bytes(b'release fixture')
+        stamp = self.now - age * DAY
+        os.utime(payload, ns=(stamp, stamp))
+        os.utime(path, ns=(stamp, stamp))
+        return path
+
+    def jsonfile(self, path, schema, **entries):
+        p = self.control / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({'schemaVersion': schema, **entries}))
+
+    def make_journal(self, sha, prior=None):
+        journal = self.control / 'mac-releases' / sha
+        journal.mkdir(parents=True)
+        if prior is not None:
+            (journal / 'prior.plist').write_bytes(prior)
+        self.jsonfile(f'mac-releases/{sha}/manifest.json', 'ops.ngs-mac-release.v1', sha=sha,
+                      repo='pvenus/ngs-platform', ref='refs/heads/main', archiveSha256='c'*64,
+                      treeSha256='d'*64, expectedPriorPlistSha256=hashlib.sha256(prior or b'').hexdigest())
+        (journal / 'result.json').write_text(json.dumps(dict(state='deployed', target='mac', sha=sha,
+            health='verified', deployedAt='2026-11-01T11:00:00Z')))
+
+    def ngs_plist(self, sha, brand):
+        return {'Label': cleanup_module.NGS_LOCAL,
+                'ProgramArguments': ['/bin/node', str(self.path(sha)) + cleanup_module.LOCAL_ENTRY],
+                'WorkingDirectory': str(self.root.parent.parent / 'runtime/local-miniflare-execution' / sha),
+                'EnvironmentVariables': {'NGS_BRAND_MARK_PATH': str(self.root / brand / 'brand.png')}}
+
+    def path(self, sha):
+        return self.root / (cleanup_module.RELEASE_PREFIX + sha)
+
+    def launch(self, target):
+        if target.endswith('/' + cleanup_module.NGS_LOCAL):
+            return ('service = {\n\tstate = running\n\tpid = 501\n\t' +
+                    self.plist['ProgramArguments'][1] + '\n}\n')
+        if target.endswith('/com.vinus.ngs.extra'):
+            return f'service = {{\n\tstate = running\n\t{self.path(self.loaded_only)}/bundle.js\n}}\n'
+        return ('domain = {\n\tservices = {\n\t501 - com.vinus.ngs.local-mcp\n'
+                '\t502 - com.vinus.ngs.extra\n\t}\n}\n')
+
+    def run_release(self, *, dry_run=False, health=True, open_check=lambda path: True):
+        def launch(home, releases):
+            return cleanup_module.active_releases(home, releases, launch=self.launch, health=lambda pid: health)
+        return cleanup_module.cleanup_ngs(
+            self.home, now_ns=self.now, dry_run=dry_run, active=launch, open_check=open_check)
+
+    def test_old_candidate_only_and_dry_run(self):
+        legacy = self.make_release('1234', prefix='project-page-old-')
+        no_proof = self.make_release('f'*40)
+        recent = self.make_release('e'*40, age=9)
+        self.make_journal('e'*40)
+        report = self.run_release(dry_run=True)
+        self.assertFalse(report['blocked'])
+        self.assertEqual((report['eligible'], report['removed']), (1, 0))
+        self.assertTrue(self.path(self.candidate).exists())
+        report = self.run_release()
+        self.assertEqual(report['removed'], 1)
+        self.assertFalse(self.path(self.candidate).exists())
+        for sha in (self.current, self.rollback, self.loaded_only, self.pending):
+            self.assertTrue(self.path(sha).exists())
+        self.assertTrue(all(path.exists() for path in (legacy, no_proof, recent)))
+
+    def test_bad_health_or_missing_rollback_blocks_all(self):
+        self.assertTrue(self.run_release(health=False)['blocked'])
+        (self.control / 'mac-releases' / self.current / 'prior.plist').unlink()
+        self.assertTrue(self.run_release()['blocked'])
+        self.assertTrue(self.path(self.candidate).exists())
+
+    def test_recent_child_symlink_open_or_drift_blocks_removal(self):
+        release = self.path(self.candidate)
+        self.assertEqual(self.run_release(open_check=lambda path: False)['removed'], 0)
+
+        def mutate(path):
+            child = path / 'bundle.js'
+            child.write_bytes(b'edit with same size? no')
+            os.utime(child, ns=(self.now - 20*DAY, self.now - 20*DAY))
+            return True
+        self.assertEqual(self.run_release(open_check=mutate)['removed'], 0)
+        child = release / 'bundle.js'
+        os.utime(child, ns=(self.now, self.now))
+        self.assertEqual(self.run_release()['removed'], 0)
+        child.unlink()
+        child.symlink_to(self.path(self.current) / 'bundle.js')
+        old = self.now - 20*DAY
+        os.utime(release, ns=(old, old))
+        self.assertEqual(self.run_release()['removed'], 0)
+        self.assertTrue(child.is_symlink())
+
+    def test_deploy_or_prepare_lock_and_invalid_metadata_block_all(self):
+        (self.control / 'active.json').touch()
+        self.assertTrue(self.run_release()['blocked'])
+        (self.control / 'active.json').unlink()
+        with (self.control / 'prepare-ngs-local.lock').open('rb') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertTrue(self.run_release()['blocked'])
+        (self.control / 'targets/rs-mcp/candidate.json').write_text('not json')
+        self.assertTrue(self.run_release()['blocked'])
+        self.assertTrue(self.path(self.candidate).exists())
