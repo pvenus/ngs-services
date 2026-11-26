@@ -191,7 +191,8 @@ or one path component allows one scan and two file reads; narrower scopes
 allow four compares and six file reads. MCP and HTTP share these limits.
 Contention waits in arrival order within the appropriate pool for at most
 five seconds, without marking the workflow failed or restarting the read.
-Only an expired wait returns the existing `503 FOLDER_BUSY`; no snapshot,
+Only an expired wait returns `503 FOLDER_WAIT_TIMEOUT` instead of immediate
+`FOLDER_BUSY`, so legacy busy retries do not multiply this deadline. No snapshot,
 hash, or deletion checks are relaxed. This wait covers admission to the
 read, not the time allowed for an acquired operation to finish.
 

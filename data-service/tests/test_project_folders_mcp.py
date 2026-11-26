@@ -86,7 +86,7 @@ class Tests(unittest.TestCase):
                 rejected=self.tool('npc_folders_compare',scope='binari',files=[],includeDeleted=True)
                 self.assertGreaterEqual(monotonic()-began,.10)
                 self.assertTrue(rejected['isError'])
-                self.assertEqual(json.loads(rejected['content'][0]['text']),{'error':'FOLDER_BUSY','status':503})
+                self.assertEqual(json.loads(rejected['content'][0]['text']),{'error':'FOLDER_WAIT_TIMEOUT','status':503})
                 busy=log.call_args
                 self.assertEqual(busy.args,('pds_folder_busy',))
                 data=busy.kwargs
@@ -119,7 +119,7 @@ class Tests(unittest.TestCase):
             self.assertEqual(base64.b64decode(reply['base64']),b'{}')
             blocked=self.tool('npc_folder_file_chunk',scope='binari',path='guide.bin',sha256=self.sha,offset=0)
             self.assertTrue(blocked['isError'])
-            self.assertEqual(json.loads(blocked['content'][0]['text']),{'error':'FOLDER_BUSY','status':503})
+            self.assertEqual(json.loads(blocked['content'][0]['text']),{'error':'FOLDER_WAIT_TIMEOUT','status':503})
         self.assertEqual(self.value('npc_folder_file_chunk',scope='binari',path='guide.bin',sha256=self.sha,offset=0)['size'],len(self.data))
 
     def test_scoped_comparisons_have_four_slots_and_keep_root_independent(self):
@@ -133,7 +133,7 @@ class Tests(unittest.TestCase):
                 with capacity.hold('fixture','binari/cinematics'):
                     blocked=self.tool('npc_folders_compare',scope='binari/concept',files=[])
                     self.assertTrue(blocked['isError'])
-                    self.assertEqual(json.loads(blocked['content'][0]['text']),{'error':'FOLDER_BUSY','status':503})
+                    self.assertEqual(json.loads(blocked['content'][0]['text']),{'error':'FOLDER_WAIT_TIMEOUT','status':503})
                     self.value('npc_folders_compare',scope='binari',files=[])
 
     def test_waiting_compare_succeeds_on_release_with_same_request(self):
@@ -166,7 +166,7 @@ class Tests(unittest.TestCase):
             with capacity.hold('http_whole_file','binari/a'):
                 with self.assertRaisesRegex(RuntimeError,'test exit'):
                     with capacity.hold('mcp_file_chunk','binari/b'):
-                        with self.assertRaisesRegex(recursive_folders.FolderError,'FOLDER_BUSY'):
+                        with self.assertRaisesRegex(recursive_folders.FolderError,'FOLDER_WAIT_TIMEOUT'):
                             with capacity.hold('mcp_file_chunk','binari/c'):self.fail('acquired third slot')
                         raise RuntimeError('test exit')
                 with capacity.hold('mcp_file_chunk','binari/c'):pass

@@ -112,7 +112,7 @@ class _FolderCapacity:
             waited=(now-began)//1_000_000
             if not acquired:
                 _log_capacity('pds_folder_busy',**headers,holders=final,waitedMs=waited)
-                _bad(503,'FOLDER_BUSY')
+                _bad(503,'FOLDER_WAIT_TIMEOUT')
             _log_capacity('pds_folder_wait_acquired',**headers,waitedMs=waited)
         try:yield
         finally:
