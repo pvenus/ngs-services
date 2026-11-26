@@ -127,3 +127,31 @@ store.close();"""
         delete=self.stage(oid('1'),f'sources/{self.source}.json')
         self.assertEqual(self.pds_call(PATH,delete,status=403)['error'],'STORAGE_DELETE_CLAIM_DENIED')
         self.assertTrue((self.root_scope/'sources'/(self.source+'.json')).exists())
+
+    def test_legacy_pair_and_newly_published_sequence_recheck_membership(self):
+        import struct
+        self.setup_scope()
+        legacy_id=oid('6')
+        def box(kind,data):return struct.pack('>I4s',len(data)+8,kind)+data
+        movie=box(b'ftyp',b'isom0000')+box(b'mdat',b'A')+box(b'moov',b'B')
+        self.store.cinematic_publish({'manifest':{'schemaVersion':'ngs.cinematic-result.v1','projectId':'binari',
+            'officialRequestId':legacy_id,'sourceSha256':self.source,'sha256':sha(movie),'bytes':len(movie),
+            'mimeType':'video/mp4','width':128,'height':128,'fps':24,'frameCount':45},'base64':base64.b64encode(movie).decode()})
+        self.assertEqual([t['path'] for t in self.pds_call(CINEMATIC_INVENTORY+'?sourceSha256='+self.source)['targets']],
+            [f'results/{legacy_id}.mp4',f'results/{legacy_id}.json',f'sources/{self.source}.json',f'sources/{self.source}.png'])
+        src=self.stage(oid('1'),f'sources/{self.source}.json')
+        vid=self.stage(oid('2'),f'results/{legacy_id}.mp4')
+        meta=self.stage(oid('3'),f'results/{legacy_id}.json')
+        self.pds_call(PATH,meta,status=409)
+        self.pds_call(PATH,vid)
+        self.pds_call(PATH,meta)
+        racing_id=oid('7')
+        path=self.seq(self.source,racing_id)
+        manifest=json.loads((path/'manifest.json').read_bytes())
+        self.pds_call(PATH,src,status=409)
+        self.assertTrue(path.exists())
+        self.pds_call(PATH,self.stage(oid('4'),f'sequences/{racing_id}'))
+        self.pds_call(PATH,src)
+        from server import Conflict
+        with self.assertRaisesRegex(Conflict,'cinematic source retired'):
+            self.store.cinematic_sequence_publish({'manifest':manifest})

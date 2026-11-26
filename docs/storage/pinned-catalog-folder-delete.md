@@ -65,3 +65,32 @@ roots; a full item has no exact single folder to move. Cinematic clips may
 also exist under separate immutable sequence or legacy result IDs. Do not
 substitute archival/hiding or deletion of the broad shared directory for
 full-item deletion.
+
+## Cinematic scene selection (split physical units)
+
+A cinematic source and its animation results are not stored in a single folder.
+An owner-local caller first obtains authoritative membership from
+`GET /v1/storage/delete-target/cinematic-inventory?sourceSha256=<sha256>`;
+the dedicated capability is `GET /v1/storage/delete-target/cinematic`. These
+are PDS loopback endpoints, not browser or public writer access. This feature
+is disabled unless `PDS_WORKFLOW_CINEMATIC_DELETE=1` and the existing cinematic
+Filex scope advertises `workflowPinnedCinematicTargetDeleteV1`.
+
+Each returned `{root,path,kind}` is submitted individually as `file.delete`
+with `expected:{sourceSha256}`. Root is
+`canonical-files/binari/cinematics`. The inventory includes archived
+sequence folders, legacy result files, and the canonical source sidecar/PNG.
+Queue animation removals first (legacy video before its sidecar), then source
+sidecar, then source PNG. The file worker defers a dependent delete if the
+corresponding earlier requests are in progress or retryable. Individual
+requests retain individual outcomes; no batch delete, no new service, no
+shared quarantine or archive index removal.
+
+Inventory and exact deletion require a verifiable source/reference; in-use
+cinematic render/playback, shared source aliases, or ambiguous legacy output
+fail closed. The same Filex writer lock fences late publication and rechecks
+that no public child remains before retiring a source. A race can produce
+a safe partial outcome (remaining source or animation still present); it
+cannot silently detach a concurrently committed animation. Retry from fresh
+authoritative membership, not visible-only UI copies. Recovery remains the
+common writer quarantine for each exact target.
