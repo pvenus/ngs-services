@@ -18,7 +18,7 @@ jobs:
           cd ../../ops-service
           python3 -B -m unittest -q
           node --check deployments.js
-          node --test test_alarms_ui.mjs test_deployments_ui.mjs test_services_ui.mjs
+          node --test test_alarms_ui.mjs test_deployments_ui.mjs test_services_ui.mjs test_requests_ui.mjs
           cd deploy
           python3 -B -m unittest -q
       - name: Produce OPS-only source release evidence

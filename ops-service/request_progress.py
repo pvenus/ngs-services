@@ -73,9 +73,13 @@ def read_progress(request_id, path=WORKFLOW_DB):
             else:
                 if run[0] not in RUN_STATES:
                     raise ProgressUnavailable()
-                rows = db.execute('''
+                fields = {r[1] for r in db.execute('PRAGMA table_info(workflow_tasks)')}
+                # Select only fixed expressions; old Planner schemas remain readable.
+                retry = 't.retry_count' if 'retry_count' in fields else 'NULL'
+                limit = 't.retry_limit' if 'retry_limit' in fields else '3' if 'retry_count' in fields else 'NULL'
+                rows = db.execute(f'''
                     SELECT t.task_key,t.task_type,t.worker_type,t.status,p.task_key,t.updated_at,
-                           t.depends_on_task_id IS NOT NULL
+                           t.depends_on_task_id IS NOT NULL,{retry},{limit}
                     FROM workflow_tasks AS t
                     LEFT JOIN workflow_tasks AS p ON p.task_id=t.depends_on_task_id
                          AND p.official_request_id=t.official_request_id
@@ -86,14 +90,16 @@ def read_progress(request_id, path=WORKFLOW_DB):
                 if len(rows) > MAX_TASKS:
                     raise ProgressUnavailable()
                 tasks = []
-                for key, task_type, worker, status, depends, updated_at, has_dependency in rows:
+                for key, task_type, worker, status, depends, updated_at, has_dependency, count, retry_limit in rows:
                     if (any(not isinstance(v, str) or not TASK_LABEL.fullmatch(v) for v in (key, task_type))
                         or (has_dependency and (not isinstance(depends, str) or not TASK_LABEL.fullmatch(depends)))
                         or worker not in WORKERS or status not in TASK_STATES or type(updated_at) is not int
-                        or not 0 <= updated_at <= 2**53-1):
+                        or not 0 <= updated_at <= 2**53-1
+                        or any(v is not None and (type(v) is not int or not 0 <= v <= 2**53-1) for v in (count,retry_limit))):
                         raise ProgressUnavailable()
                     tasks.append({'key':key, 'type':task_type, 'workerType':worker,
-                                  'status':status, 'dependsOn':depends, 'updatedAt':updated_at})
+                                  'status':status, 'dependsOn':depends, 'updatedAt':updated_at,
+                                  'retryCount':count, 'retryLimit':retry_limit})
                 payload = {'workflowState':run[0], 'tasks':tasks}
             if _identity(path) != identity:
                 raise ProgressUnavailable()

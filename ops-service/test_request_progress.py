@@ -50,9 +50,9 @@ class ProgressTests(unittest.TestCase):
             status,body=get(p,ROOT+'?requestId='+A)
             self.assertEqual(status,200)
             self.assertEqual(json.loads(body),{'workflowState':'planned','tasks':[
-                {'key':'delete','type':'npc.delete-folder','workerType':'file','status':'completed','dependsOn':None,'updatedAt':40},
-                {'key':'preset','type':'npc.preset','workerType':'document','status':'running','dependsOn':'delete','updatedAt':30},
-                {'key':'planning_representative','type':'npc.plan-representative','workerType':'document','status':'pending','dependsOn':'preset','updatedAt':10},
+                {'key':'delete','type':'npc.delete-folder','workerType':'file','status':'completed','dependsOn':None,'updatedAt':40,'retryCount':None,'retryLimit':None},
+                {'key':'preset','type':'npc.preset','workerType':'document','status':'running','dependsOn':'delete','updatedAt':30,'retryCount':None,'retryLimit':None},
+                {'key':'planning_representative','type':'npc.plan-representative','workerType':'document','status':'pending','dependsOn':'preset','updatedAt':10,'retryCount':None,'retryLimit':None},
             ]})
             self.assertNotIn(b'PRIVATE',body)
             self.assertNotIn(b'NEIGHBOR',body)
@@ -75,9 +75,21 @@ class ProgressTests(unittest.TestCase):
             status,body=get(p,ROOT+'?requestId='+UNKNOWN)
         self.assertEqual(status,200)
         self.assertEqual(json.loads(body),{'workflowState':'planned','tasks':[
-            {'key':'audio_generate','type':'audio.generate','workerType':'audio','status':'running','dependsOn':None,'updatedAt':77}
+            {'key':'audio_generate','type':'audio.generate','workerType':'audio','status':'running','dependsOn':None,'updatedAt':77,'retryCount':None,'retryLimit':None}
         ]})
         self.assertNotIn(b'PRIVATE',body)
+
+    def test_reads_real_retry_count_and_limit_and_uses_legacy_cap_only_when_absent(self):
+        with sqlite3.connect(self.db) as db:
+            db.execute('ALTER TABLE workflow_tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0')
+            db.execute("UPDATE workflow_tasks SET retry_count=2 WHERE task_id='a.a'")
+        self.assertEqual([(r['retryCount'],r['retryLimit']) for r in self.reader(A)['tasks']],
+                         [(0,3),(2,3),(0,3)])
+        with sqlite3.connect(self.db) as db:
+            db.execute('ALTER TABLE workflow_tasks ADD COLUMN retry_limit INTEGER NOT NULL DEFAULT 3')
+            db.execute("UPDATE workflow_tasks SET retry_limit=30 WHERE task_id='a.a'")
+        self.assertEqual([(r['retryCount'],r['retryLimit']) for r in self.reader(A)['tasks']],
+                         [(0,3),(2,30),(0,3)])
 
     def test_multi_selection_projection_exceeds_past_256_task_guard(self):
         with sqlite3.connect(self.db) as db:

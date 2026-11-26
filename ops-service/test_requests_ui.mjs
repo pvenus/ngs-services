@@ -32,7 +32,7 @@ test('request list asks for resubmission only for the exact unsupported failed r
 test('2D split progress distinguishes generation, encode and the exact eight-direction publish barrier',()=>{
  const node=()=>({children:[],textContent:'',dataset:{},append(){},replaceChildren(){},addEventListener(){},setAttribute(){}});
  const document={getElementById:node,createElement:node,addEventListener(){}};
- const api=runInNewContext(code+'\n;({stateFor,taskName});',{document,AbortController,URLSearchParams,location:{search:''},
+ const api=runInNewContext(code+'\n;({stateFor,taskName,retryLabel});',{document,AbortController,URLSearchParams,location:{search:''},
   fetch:async()=>Response.json({requests:[],nextCursor:null})});
  const final={key:'motion_2d_finalize',type:'motion-preset.convert-2d.finalize',workerType:'postprocess',
   status:'pending',dependsOn:null};
@@ -47,4 +47,15 @@ test('2D split progress distinguishes generation, encode and the exact eight-dir
  assert.equal(api.stateFor(final,parents,'planned'),'ready');
  parents.delete('motion_2d_encode_ne');
  assert.equal(api.stateFor(final,parents,'planned'),'pending');
+});
+
+test('request details show actual retry count over the stored limit',()=>{
+ const el=()=>({append(){},replaceChildren(){},addEventListener(){},setAttribute(){},children:[]});
+ const api=runInNewContext(code+'\n;retryLabel;',{
+  document:{getElementById:el,createElement:el,addEventListener(){}},AbortController,URLSearchParams,location:{search:''},
+  fetch:async()=>Response.json({requests:[],nextCursor:null})});
+ assert.equal(api({retryCount:0,retryLimit:30}),'0 / 30');
+ assert.equal(api({retryCount:5,retryLimit:30}),'5 / 30');
+ assert.equal(api({retryCount:null,retryLimit:null}),'—');
+ assert.match(readFileSync(new URL('./index.html',import.meta.url),'utf8'),/>재시도<\/th>/);
 });

@@ -112,6 +112,10 @@ function dependencyCell(task,keys,selection){
  });
  td.replaceChildren(link);return td;
 }
+function retryLabel({retryCount,retryLimit}){
+ if(!Number.isSafeInteger(retryCount)||retryCount<0)return '—';
+ return Number.isSafeInteger(retryLimit)&&retryLimit>=0?retryCount+' / '+retryLimit:retryCount+'회';
+}
 function drawProgress(data){
  const selection=progressSelection;
  const signature=JSON.stringify([data.workflowState,data.tasks]);
@@ -130,7 +134,7 @@ function drawProgress(data){
   row.classList.toggle('dependency-target',task.key===selection.highlighted);
   const badge=cell(progressLabels[state]||task.status);badge.className='progress-state';
   const label=cell(taskName(task.key));label.title=task.key;
-  row.append(label,cell(workerNames[task.workerType]||task.workerType),badge,dependencyCell(task,keys,selection),cell(task.updatedAt==null?'—':date(task.updatedAt)));
+  row.append(label,cell(workerNames[task.workerType]||task.workerType),badge,cell(retryLabel(task)),dependencyCell(task,keys,selection),cell(task.updatedAt==null?'—':date(task.updatedAt)));
   return row;
  });
  summary.className='';
