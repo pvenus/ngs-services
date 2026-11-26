@@ -61,8 +61,8 @@ class Handler(DomainHandler):
         if media_path in (npc_planning_add_path,npc_planning_add_path+'/read'):
             return npc_planning_add(self)
 
-        from .single_target_delete import PATH as single_delete_path,NPC_STANDALONE_CAPABILITY,BACKGROUND_CAPABILITY,serve as single_delete
-        if media_path in (single_delete_path,NPC_STANDALONE_CAPABILITY,BACKGROUND_CAPABILITY):return single_delete(self)
+        from .single_target_delete import PATH as single_delete_path,NPC_STANDALONE_CAPABILITY,BACKGROUND_CAPABILITY,CINEMATIC_CAPABILITY,CINEMATIC_INVENTORY,serve as single_delete
+        if media_path in (single_delete_path,NPC_STANDALONE_CAPABILITY,BACKGROUND_CAPABILITY,CINEMATIC_CAPABILITY,CINEMATIC_INVENTORY):return single_delete(self)
 
         from .workflow_motion_2d import ROUTES as motion_2d_routes,serve as motion_2d
         if media_path in motion_2d_routes:return motion_2d(self)
@@ -688,7 +688,9 @@ def serve(storage_root: Path, host: str, port: int):
     background_delete=os.getenv('PDS_WORKFLOW_BACKGROUND_DELETE',
         '1' if host=='127.0.0.1' and hasattr(server,'workflow_delete') else '0')
     if background_delete not in ('0','1'):raise ValueError('WORKFLOW_BACKGROUND_DELETE_OPT_IN')
-    if npc_folder_delete=='1' or concept_folder_delete=='1' or audio_delete=='1' or prop_folder_delete=='1' or background_delete=='1':
+    cinematic_delete=os.getenv('PDS_WORKFLOW_CINEMATIC_DELETE','1' if host=='127.0.0.1' and hasattr(server,'workflow_delete') else '0')
+    if cinematic_delete not in ('0','1'):raise ValueError('WORKFLOW_CINEMATIC_DELETE_OPT_IN')
+    if npc_folder_delete=='1' or concept_folder_delete=='1' or audio_delete=='1' or prop_folder_delete=='1' or background_delete=='1' or cinematic_delete=='1':
         from .single_target_delete import SingleTargetDelete
         roots={}
         if npc_folder_delete=='1':
@@ -722,7 +724,16 @@ def serve(storage_root: Path, host: str, port: int):
             def background_delete_ready():
                 with writer('cinematics') as conn:return conn.capabilities().get('workflowPinnedBackgroundFileDeleteV1') is True
             roots[BACKGROUND_ROOT]=storage_provider(planner,lambda:writer('cinematics'),background_delete_ready,root=BACKGROUND_ROOT)
-        server.single_target_delete=SingleTargetDelete(roots,dedicated=[BACKGROUND_ROOT] if background_delete=='1' else [])
+        if cinematic_delete=='1':
+            from .workflow_file_delete import CINEMATIC_ROOT,cinematic_storage_provider,cinematic_inventory
+            from .filex_writer_binding import writer
+            if not hasattr(server,'workflow_delete'):raise ValueError('WORKFLOW_CINEMATIC_DELETE_PLANNER_PIN_REQUIRED')
+            def cinematic_ready():
+                with writer('cinematics') as conn:return conn.capabilities().get('workflowPinnedCinematicTargetDeleteV1') is True
+            def cinematic_writer():return writer('cinematics')
+            roots[CINEMATIC_ROOT]=cinematic_storage_provider(planner,cinematic_writer,cinematic_ready)
+            server.cinematic_delete_inventory=lambda sha:cinematic_inventory(planner,cinematic_writer,sha)
+        server.single_target_delete=SingleTargetDelete(roots,dedicated=[k for k in roots if k in (BACKGROUND_ROOT,'canonical-files/binari/cinematics')])
     representative_enabled=os.environ.get('PDS_WORKFLOW_PLAN_REPRESENTATIVE','0')
     if representative_enabled not in ('0','1'):raise ValueError('WORKFLOW_REPRESENTATIVE_OPT_IN')
     if representative_enabled=='1':

@@ -87,6 +87,9 @@ def validate_cinematic_mp4(data,m):
 
 class CinematicStore(Store):
  namespace='canonical-files/binari/cinematics/'
+ def _ensure_unretired_source(self,sha256):
+  from cinematic_target_delete import CinematicTargetDelete
+  CinematicTargetDelete(self).ensure_source_active(sha256)
  def _path(self,folder,name):
   require(folder in ('sources','results','backgrounds') and not (self.root/folder).is_symlink(),'cinematic folder')
   p=self.root/folder/name
@@ -108,6 +111,7 @@ class CinematicStore(Store):
   require(type(p)is dict and set(p)=={'sourceSha256'} and cinematic_match(p['sourceSha256'],CINEMATIC_DIGEST),'cinematic source')
   h=p['sourceSha256']
   with self.lock():
+   self._ensure_unretired_source(h)
    raw=self._read(self._path('sources',h+'.png'),CINEMATIC_MAX)
    require(raw[:16]==b'\x89PNG\r\n\x1a\n\0\0\0\rIHDR' and len(raw)>=33 and sha(raw)==h,'cinematic source integrity')
    w,y=struct.unpack_from('>II',raw,16)
@@ -138,6 +142,7 @@ class CinematicStore(Store):
   raw=base64.b64decode(p['base64'],validate=True);validate_cinematic_mp4(raw,m)
   oid=m['officialRequestId']
   with self.lock():
+   self._ensure_unretired_source(m['sourceSha256'])
    video=self._path('results',oid+'.mp4'); metadata=self._path('results',oid+'.json')
    if metadata.exists():
     if self._result(oid)!=m:raise Conflict('cinematic immutable receipt conflict')
@@ -283,6 +288,7 @@ class CinematicSequenceStore(CinematicStore):
   require(type(p)is dict and set(p)=={'manifest'},'sequence publish request')
   manifest=seq_manifest(p['manifest']);oid=manifest['officialRequestId']
   with self.lock():
+   self._ensure_unretired_source(manifest['sourceSha256'])
    final=self._seq_dir(oid)
    if final.exists():
     if self._seq_result(oid)!=manifest:raise Conflict('immutable sequence manifest')
@@ -513,6 +519,7 @@ class CinematicProjectStore(CinematicPlaybackStore):
     try:self._read(self._background_delete_marker(s),8192)
     except FileNotFoundError:pass
     else:raise Conflict('background source retired')
+   else:self._ensure_unretired_source(s)
    _,fence=self._source_fence(oid,background)
    if p['claimStamp']<=fence:raise Conflict('source claim fenced')
    receipt=self._private_result('.background-receipts' if background else '.source-receipts',oid)

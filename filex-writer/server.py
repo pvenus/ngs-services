@@ -219,13 +219,17 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(result)
                         return
                     return self.reply(200,result)
-                if url.path=='/v1/storage/delete-target':
+                if url.path in ('/v1/storage/delete-target','/v1/storage/delete-target/cinematic-inventory'):
                     from single_target_delete import PinnedDeleteRejected,SingleTargetDelete
                     ordinary=isinstance(single_target_delete,SingleTargetDelete) and single_target_delete.store is store
                     audio=workflow_audio_delete is True and workflow_audio is not None and workflow_audio.store is store
+                    from media_store import CinematicProjectStore
+                    cinematic=isinstance(store,CinematicProjectStore)
                     background=hasattr(store,'remove_background_file')
-                    if not (ordinary or audio or workflow_props is store or background):
+                    if not (ordinary or audio or workflow_props is store or cinematic):
                         return self.reply(404,{'error':'NOT_FOUND'})
+                    inventory=url.path.endswith('/cinematic-inventory')
+                    if inventory and not cinematic:return self.reply(404,{'error':'NOT_FOUND'})
                     headers=self.headers
                     if (self.command!='POST' or url.query or headers.get('Origin') is not None or
                         headers.get('Transfer-Encoding') is not None or headers.get('Content-Type')!='application/json'):
@@ -239,6 +243,15 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     target=command.get('target',{}) if type(command) is dict else {}
                     if audio and type(target) is dict and target.get('root')=='canonical-files/binari/audio':
                         return self.reply(200,workflow_audio.remove_result(command))
+                    if cinematic and (inventory or (type(target) is dict and target.get('root')=='canonical-files/binari/cinematics')):
+                        from cinematic_target_delete import CinematicTargetDelete
+                        try:
+                            deleter=CinematicTargetDelete(store)
+                            if inventory:
+                                if type(command)is not dict or set(command)!={'sourceSha256'}:raise ValueError('cinematic inventory request')
+                                return self.reply(200,deleter.inventory(command['sourceSha256']))
+                            return self.reply(200,deleter.remove(command))
+                        except PinnedDeleteRejected:return self.reply(409,{'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'})
                     if workflow_props is store:
                         try:return self.reply(200,workflow_props.remove_package(command))
                         except PinnedDeleteRejected:return self.reply(409,{'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'})

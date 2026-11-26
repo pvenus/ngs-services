@@ -1,4 +1,4 @@
-import {fileDeleteType,fileDeleteSchema,propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
+import {fileDeleteType,fileDeleteSchema,propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot,cinematicDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
 import {cancelTool,basicSchemaVersion,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema,conceptCategoryAddIdPattern,conceptCategoryIdPattern,conceptCategoryGroupIdPattern} from './concept-category-envelope.mjs';
@@ -114,6 +114,11 @@ const backgroundFileDeletePayload={...fileDeletePayload,properties:{...fileDelet
   root:{const:backgroundDeleteRoot},path:{type:'string',pattern:'^[a-f0-9]{64}\\.(?:png|json)$'},kind:{const:'file'}}},
  expected:{type:'object',properties:{sourceRequestId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'}},
   required:['sourceRequestId'],additionalProperties:false},
+}};
+const cinematicFileDeletePayload={...fileDeletePayload,properties:{...fileDeletePayload.properties,
+ target:{...fileDeletePayload.properties.target,properties:{root:{const:cinematicDeleteRoot},
+  kind:{enum:['file','directory']},path:{type:'string',pattern:'^(?:sources/[a-f0-9]{64}\\.(?:json|png)|sequences/request\\.official\\.[a-f0-9]{64}|results/request\\.official\\.[a-f0-9]{64}\\.(?:json|mp4))$'}}},
+ expected:{type:'object',properties:{sourceSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['sourceSha256'],additionalProperties:false},
 }};
 const audioDeletePayload={type:'object',properties:{
  schemaVersion:{const:audioDeleteSchema},projectId:{const:'binari'},officialRequestId:{type:'string',pattern:audioOfficialIdPattern,minLength:81,maxLength:81},
@@ -280,6 +285,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
   if(await deleteReady(propDeleteRoot))deleteShapes.push(fileDeletePayload);
   if(await deleteReady(npcDeleteRoot))deleteShapes.push(npcFileDeletePayload);
   if(await deleteReady(backgroundDeleteRoot))deleteShapes.push(backgroundFileDeletePayload);
+  if(await deleteReady(cinematicDeleteRoot))deleteShapes.push(cinematicFileDeletePayload);
   if(deleteShapes.length)submit=addPropFamily(submit,fileDeleteType,deleteShapes.length===1?deleteShapes[0]:{oneOf:deleteShapes});
   if(cinematicLegacyAdmission&&await cinematicReady())submit=addPropFamily(submit,cinematicType,cinematicPayloadSchema);
   if(await sequenceReady())submit=addPropFamily(submit,cinematicSequenceType,cinematicSequencePayloadSchema);

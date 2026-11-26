@@ -1,5 +1,6 @@
 """Generic request boundary; configured authorities, not PDS domain decisions."""
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 import re
 import sqlite3
 
@@ -9,6 +10,8 @@ from .filex_cas_transport import PinnedDeleteRejected
 PATH='/v1/storage/delete-target'
 NPC_STANDALONE_CAPABILITY=PATH+'/npc-standalone'
 BACKGROUND_CAPABILITY=PATH+'/background'
+CINEMATIC_CAPABILITY=PATH+'/cinematic'
+CINEMATIC_INVENTORY=PATH+'/cinematic-inventory'
 SCHEMA='workflow.single-target-delete.v1'
 SEGMENT=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',re.ASCII)
 OPERATION=re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,179}',re.ASCII)
@@ -73,7 +76,9 @@ def serve(handler):
     if not isinstance(svc,SingleTargetDelete):return handler.respond(404,{'error':'STORAGE_DELETE_DISABLED'})
     npc_only=handler.path==NPC_STANDALONE_CAPABILITY and handler.command=='GET'
     background_only=handler.path==BACKGROUND_CAPABILITY and handler.command=='GET'
-    if (not (npc_only or background_only) and (handler.path!=PATH or handler.command not in ('GET','POST')) or
+    cinematic_only=handler.path==CINEMATIC_CAPABILITY and handler.command=='GET'
+    inventory=urlsplit(handler.path).path==CINEMATIC_INVENTORY and handler.command=='GET'
+    if (not (npc_only or background_only or cinematic_only or inventory) and (handler.path!=PATH or handler.command not in ('GET','POST')) or
         handler.server.server_address[0]!='127.0.0.1' or handler.client_address[0]!='127.0.0.1' or
         handler.headers.get_all('Host')!=['127.0.0.1:'+str(handler.server.server_port)] or
         handler.headers.get('Origin') is not None or handler.headers.get('Transfer-Encoding') is not None or
@@ -85,6 +90,17 @@ def serve(handler):
             from .workflow_file_delete import BACKGROUND_ROOT
             enabled=BACKGROUND_ROOT in svc.roots and svc.roots[BACKGROUND_ROOT].ready() is True
             return handler.respond(200,{'enabled':enabled,'schemaVersion':SCHEMA,'roots':[BACKGROUND_ROOT] if enabled else []})
+        if inventory or cinematic_only:
+            from .workflow_file_delete import CINEMATIC_ROOT
+            provider=svc.roots.get(CINEMATIC_ROOT)
+            inventory_fn=getattr(handler.server,'cinematic_delete_inventory',None)
+            enabled=provider is not None and provider.ready() is True and callable(inventory_fn)
+            if cinematic_only:return handler.respond(200,{'enabled':enabled,'schemaVersion':SCHEMA,'roots':[CINEMATIC_ROOT] if enabled else []})
+            if not enabled:
+                return handler.respond(404,{'error':'STORAGE_DELETE_DISABLED'})
+            match=re.fullmatch('sourceSha256=([a-f0-9]{64})',urlsplit(handler.path).query)
+            if not match:return handler.respond(400,{'error':'STORAGE_DELETE_SOURCE_INVALID'})
+            return handler.respond(200,inventory_fn(match[1]))
         if npc_only:
             from .workflow_file_delete import NPC_ROOT
             enabled=getattr(handler.server,'npc_standalone_delete',False) is True and NPC_ROOT in svc.roots and svc.roots[NPC_ROOT].ready() is True
