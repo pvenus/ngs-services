@@ -188,7 +188,7 @@ function serviceCard({serverName,state,missed,lastReceivedAt,commitSha}){
  const item=document.createElement('li'),name=document.createElement('strong');
  const badge=document.createElement('span'),detail=document.createElement('small');
  const observation=serverName==='ngs-local'||serverName==='ngs-space';
- name.textContent=observation?(serverName==='ngs-local'?'NGS Local':'NGS Space'):serverName;
+ name.textContent=serverName==='image-worker'?'이미지 워커 1':/^image-worker-[234]$/.test(serverName)?'이미지 워커 '+serverName.at(-1):observation?(serverName==='ngs-local'?'NGS Local':'NGS Space'):serverName;
  badge.className='service-state';badge.dataset.state=state;badge.textContent=serviceLabels[state];
  detail.textContent=(observation?'마지막 연락 ':'최근 수신 ')+
   (observation?new Date(lastReceivedAt).toLocaleString('ko-KR',{hour12:false}):shortTime(lastReceivedAt))+
@@ -207,7 +207,7 @@ function serviceGroups(rows){
  for(const row of rows){
   const name=row.serverName;
   const group=name==='ngs-local'||name==='ngs-space'?'ngs':
-   (name.endsWith('-worker')||name.startsWith('worker-'))?'workers':'services';
+   (name.endsWith('-worker')||name.startsWith('worker-')||/^image-worker-[234]$/.test(name))?'workers':'services';
   byGroup[group].push(row);
  }
  return Object.entries(byGroup).filter(([,items])=>items.length).map(([group,items])=>{

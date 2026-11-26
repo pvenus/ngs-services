@@ -11,6 +11,7 @@ import plistlib
 import re
 import subprocess
 import sys
+import sqlite3
 import time
 import urllib.request
 
@@ -39,6 +40,7 @@ TARGETS = {
     'worker-document': worker('document', 'document/cli.mjs'),
     'worker-file': worker('file', 'file/cli.mjs'),
     'worker-image': worker('image', 'image/image-cli.mjs'),
+    **{f'worker-image-{slot}':Target(f'com.vinus.workflow.image-worker-{slot}','Workers',f'workflows-image{slot}-github-','image/image-cli.mjs',f'image-worker-{slot}') for slot in (2,3,4)},
     'worker-animation': worker('animation', 'animation/animation-cli.mjs'),
     'worker-postprocess': worker('postprocess', 'postprocess/postprocess-cli.mjs'),
     'worker-audio': worker('audio', 'candidate-audio-resident/audio-cli.mjs'),
@@ -65,6 +67,9 @@ def validate_and_rewrite(prior, release, catalog, base, *, audio_config=None):
     rel = source.relative_to(root).parts if source.is_relative_to(root) else ()
     need(len(rel) >= 2 and re.fullmatch(re.escape(catalog.release_prefix) + r'[a-f0-9]{7,40}', rel[0])
          and '/'.join(rel[1:]) == catalog.entry, 'TARGET_SELECTOR_ENTRY')
+    if catalog.heartbeat in ('image-worker-2','image-worker-3','image-worker-4'):
+        env=v.get('EnvironmentVariables',{})
+        need(env.get('WORKFLOW_IMAGE_WORKER_SLOT')==catalog.heartbeat[-1], 'TARGET_IMAGE_SLOT_IDENTITY')
     old = root / rel[0]
     changes = {str(old / catalog.entry): str(release / catalog.entry)}
     if catalog.heartbeat == 'rs-mcp':
@@ -247,6 +252,7 @@ def apply_target(target, sha, archive_sha, directory, home, host):
                                 database_identity=lambda: planner_identity(definition, home)[2])
         return host.wait_healthy(catalog, since, old_pid)
 
+    pause = legacy_fence = None
     lock_fd = os.open(directory / '.apply.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         private_file(directory / '.apply.lock', 0o600)
@@ -263,10 +269,41 @@ def apply_target(target, sha, archive_sha, directory, home, host):
                      'TARGET_AUDIO_BINDING_CHANGED')
             pid = host.pid(catalog.label)
         need(pid is not None, 'TARGET_PRIOR_NOT_RUNNING')
+        if target in ('worker-image','worker-image-2','worker-image-3','worker-image-4'):
+            old_entry=Path(plistlib.loads(prior)['ProgramArguments'][1])
+            need((release/'image/image-slot.mjs').is_file(),'TARGET_IMAGE_ADMISSION_UNSUPPORTED')
+            slot='1' if target=='worker-image' else target[-1]
+            gate=home/'Workspaces/Workers/runtime/image-worker-slots'/slot
+            if (old_entry.with_name('image-slot.mjs')).is_file():
+                private_directory(gate)
+                address=gate/'pause'
+                fd=os.open(address,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+                pause=address
+                os.close(fd)
+                # A late worker lease sees the pause before it can claim.
+                deadline=time.monotonic()+25
+                while os.path.lexists(gate/'active'):
+                    need(time.monotonic()<deadline,'TARGET_IMAGE_DRAIN_PENDING')
+                    time.sleep(.2)
+            else:
+                # The original 1-slot worker predates the private slot lease.
+                # Its first cutover fences SQLite writer admission without
+                # modifying any rows; keep the transaction until it is gone.
+                # If any image work was already claimed, do not stop anything.
+                need(target=='worker-image','TARGET_IMAGE_ADMISSION_UNSUPPORTED')
+                db=home/'Workspaces/Workers/data/workflow-planner/workflow.sqlite'
+                need(plistlib.loads(prior)['ProgramArguments'][2:]==['--run','--db',str(db)],'TARGET_IMAGE_SLOT_IDENTITY')
+                private_file(db,0o600)
+                legacy_fence=sqlite3.connect(db.as_uri()+'?mode=rw',uri=True,timeout=1,isolation_level=None)
+                legacy_fence.execute('BEGIN IMMEDIATE')
+                running=legacy_fence.execute("SELECT 1 FROM workflow_tasks WHERE worker_type='image' AND status='running' LIMIT 1").fetchone()
+                need(running is None,'TARGET_IMAGE_DRAIN_PENDING')
         try:
             host.remove(catalog.label)
         except Exception as error:
             raise ApplyFailure('unload', diagnostic_code(error)) from None
+        if legacy_fence is not None:
+            legacy_fence.close();legacy_fence=None
         phase = 'selector'
         try:
             atomic_write(selector, desired)
@@ -289,13 +326,17 @@ def apply_target(target, sha, archive_sha, directory, home, host):
                 pass
             raise ApplyFailure(phase, diagnostic_code(error), rollback) from None
     finally:
-        os.close(lock_fd)
+        try:
+            if legacy_fence is not None:legacy_fence.close()
+            if pause is not None:pause.unlink()
+        finally:os.close(lock_fd)
     return dict(schemaVersion='ops.deploy-target-receipt.v1', target=target, sha=sha,
                 deployedAt=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
                 state='deployed', health='verified')
 
 
 DIAGNOSTIC_CODES = frozenset({
+    'TARGET_IMAGE_ADMISSION_UNSUPPORTED', 'TARGET_IMAGE_DRAIN_PENDING', 'TARGET_IMAGE_SLOT_IDENTITY',
     'TARGET_INPUT_INVALID', 'TARGET_UNSUPPORTED', 'TARGET_CANDIDATE_MISMATCH',
     'TARGET_RELEASE_TREE_MISMATCH', 'TARGET_SELECTOR_CHANGED', 'TARGET_PRIOR_NOT_RUNNING',
     'TARGET_SELECTOR_LABEL', 'TARGET_SELECTOR_ARGUMENTS', 'TARGET_SELECTOR_ENTRY',

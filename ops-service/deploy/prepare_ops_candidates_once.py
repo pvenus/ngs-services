@@ -40,7 +40,7 @@ FILEX_UNIFIED_HELPER = 'filex_unified_runtime'
 SERVICES = 'pvenus/ngs-services'
 WORKERS = 'pvenus/ngs-workers'
 SERVICE_TARGETS = ('request-service', 'workflow-planner', 'backend-stack')
-WORKER_TARGETS = tuple('worker-' + key for key in ('document','image','animation','postprocess','audio','file'))
+WORKER_TARGETS = tuple('worker-' + key for key in ('document','image','animation','postprocess','audio','file'))+tuple(f'worker-image-{slot}' for slot in (2,3,4))
 RELAY = 'rs-mcp'
 FILEX = 'filex-writer'
 TARGETS = (*SERVICE_TARGETS, *WORKER_TARGETS, RELAY, FILEX)
@@ -319,6 +319,13 @@ def worker_loaded(deps, home, host, target, expected, *, idle=False):
                 or args[args.index('--db')+1]!=str(database)):
             return False
         pid, report = host.launch_report(cat.label)
+        if target in ('worker-image','worker-image-2','worker-image-3','worker-image-4') and (Path(args[1]).with_name('image-slot.mjs')).is_file():
+            slot='1' if target=='worker-image' else target[-1]
+            gate=home/'Workspaces/Workers/runtime/image-worker-slots'/slot
+            require(gate.is_dir() and not gate.is_symlink(),'WORKER_IDLE_UNPROVEN')
+            # The apply adapter owns the pause-and-drain barrier. This
+            # predicate only establishes that the loaded worker can honor it.
+            idle=False
         if not pid or not deps.loaded_selector(report,args,wd) or (idle and running_count(database,target.removeprefix('worker-'))):
             return False
         confirmed, latest = host.launch_report(cat.label)
@@ -352,8 +359,8 @@ def loaded_image_selector(report,args,working_directory):
 
 def current_worker_idle(home,target,selector_sha):
     if target not in WORKER_TARGETS:return False
-    deps=SimpleNamespace(target_specs={target:SimpleNamespace(
-        label='com.vinus.workflow.'+target.removeprefix('worker-')+'-worker')},loaded_selector=loaded_image_selector)
+    label='com.vinus.workflow.image-worker-'+target[-1] if target in ('worker-image-2','worker-image-3','worker-image-4') else 'com.vinus.workflow.'+target.removeprefix('worker-')+'-worker'
+    deps=SimpleNamespace(target_specs={target:SimpleNamespace(label=label)},loaded_selector=loaded_image_selector)
     return worker_idle(deps,home,ReadonlyHost(),target,selector_sha)
 
 

@@ -1,3 +1,4 @@
+import shutil
 """Offline Git evidence and six-role registration; no worker or deploy runner starts."""
 import fcntl
 import io
@@ -167,9 +168,14 @@ class WorkerCandidates(unittest.TestCase):
         outer=write(self.runtime/'audio-outer.json',json_bytes({'schemaVersion':audio.OUTER,'hqBinding':str(inner)}))
         self.old_bindings={p:p.read_bytes() for p in (inner,outer)}
         self.trusted=Path(workers.__file__).parent
+        extra={}
+        for target in workers.IMAGE_COMPANIONS:
+            prior_slot=self.prior.with_name(self.prior.name.replace('workflows-github-',f'workflows-image{target[-1]}-github-',1))
+            shutil.copytree(self.prior,prior_slot)
+            extra[target]=prior_slot
         for target in workers.TARGET_IDS:
             definition=workers.TARGETS[target]
-            old=self.prior/definition.entry
+            old=extra.get(target,self.prior)/definition.entry
             args=[str(exe),str(old),'--run','--db',str(db)]
             env={}
             if target=='worker-file': args=[str(exe),str(old),'--single-target','--resident','--db',str(db)]
@@ -177,9 +183,10 @@ class WorkerCandidates(unittest.TestCase):
                 bind=write(self.runtime/'wan-binding.json',b'{}')
                 env={'WORKFLOW_WAN_RELEASE':str(self.prior/'native-wan'),
                      'WORKFLOW_WAN_PYTHON':str(exe),'WORKFLOW_WAN_BINDING':str(bind)}
-            if target=='worker-image':
+            if target in ('worker-image',*workers.IMAGE_COMPANIONS):
                 config=write(self.runtime/'image-config.json',b'{}')
                 env={'WORKFLOW_IMAGE_HOST_CONFIG':str(config),'WORKFLOW_IMAGE_HOST_CONFIG_SHA256':digest(config.read_bytes())}
+                if target in workers.IMAGE_COMPANIONS:env['WORKFLOW_IMAGE_WORKER_SLOT']=target[-1]
             if target=='worker-postprocess':
                 sam=self.runtime/'sam'
                 sam.mkdir(mode=0o700)

@@ -6,6 +6,8 @@ from pathlib import Path
 import plistlib
 import stat
 import re
+import shutil
+import tempfile
 import subprocess
 
 from mac_target_apply import TARGETS, validate_and_rewrite
@@ -15,7 +17,11 @@ from prepare_ngs_release import (Refused, atomic_write, digest, json_bytes, json
 from prepare_service_targets import (SPECS, WORKERS, assemble_source, git, prepare_audio_candidate,
                                      tracked_targets, tracked_tree, verify_target_artifact)
 
-TARGET_IDS = tuple(SPECS[WORKERS])
+IMAGE_COMPANIONS=('worker-image-2','worker-image-3','worker-image-4')
+TARGET_IDS = (*SPECS[WORKERS], *IMAGE_COMPANIONS)
+
+def source_target(target):
+    return 'worker-image' if target in IMAGE_COMPANIONS else target
 READY = 'ops.deploy-target-ready.v1'
 CANDIDATE = 'ops.mac-target-candidate.v1'
 TERMINAL = 'ops.deploy-target-result.v1'
@@ -111,10 +117,11 @@ def _selector(target, home, release):
     old = old_entry.parents[len(Path(catalog.entry).parts)-1]
     need(old_entry==old/catalog.entry and current.get('Label')==catalog.label and
          current.get('WorkingDirectory')==str(old_entry.parent),'WORKER_SELECTOR_INVALID')
-    active_suffix=old.name.removeprefix('workflows-github-')
-    if (old.parent==release.parent and old.name.startswith('workflows-github-')
+    prefix=catalog.release_prefix
+    active_suffix=old.name.removeprefix(prefix)
+    if (old.parent==release.parent and old.name.startswith(prefix)
             and re.fullmatch(r'[a-f0-9]{7,40}',active_suffix)
-            and release.name.removeprefix('workflows-github-').startswith(active_suffix)):
+            and release.name.removeprefix(prefix).startswith(active_suffix)):
         # Historical seven-character names share a literal prefix with the
         # full immutable release, but this is an observation, never a rewrite.
         return prior, current, old, None
@@ -144,7 +151,8 @@ def verify_worker_runtime(target, proposed):
     need(args.count('--db') == 1 and args.index('--db') + 1 < len(args), 'WORKER_DATABASE_UNVERIFIED')
     db = _accessible(args[args.index('--db')+1])
     private_file(db, 0o600)
-    if target == 'worker-image':
+    if target in ('worker-image',*IMAGE_COMPANIONS):
+        if target in IMAGE_COMPANIONS:need(env.get('WORKFLOW_IMAGE_WORKER_SLOT')==target[-1],'WORKER_IMAGE_CONFIG_UNVERIFIED')
         _accessible('/opt/homebrew/bin/python3.12', executable=True)
         config = _abs(env.get('WORKFLOW_IMAGE_HOST_CONFIG'))
         pin = env.get('WORKFLOW_IMAGE_HOST_CONFIG_SHA256')
@@ -192,14 +200,14 @@ def _recorded_observation(directory):
 
 def _observation(directory,target,old):
     observed=_recorded_observation(directory)
-    hint=old.name.removeprefix('workflows-github-')
+    hint=old.name.removeprefix(TARGETS[target].release_prefix)
     need(re.fullmatch(r'[a-f0-9]{7,40}',hint) is not None and observed.startswith(hint),
          'WORKER_ACTIVE_PROOF_UNAVAILABLE')
     return observed
 
 
 def _history(repo, revision, target):
-    declared, entries=SPECS[WORKERS][target]
+    declared, entries=SPECS[WORKERS][source_target(target)]
     root={r:git(repo,'rev-parse',revision+':'+r).decode().strip() for r in declared}
     files,_=tracked_tree(repo,revision,WORKERS,root)
     need(all(x in files for x in entries),'WORKER_ACTIVE_PROOF_UNAVAILABLE')
@@ -210,7 +218,7 @@ def _active_paths(target, selector, old):
     args=selector['ProgramArguments']
     env=selector.get('EnvironmentVariables',{})
     names={p.removeprefix('workflow-production/'):old/p.removeprefix('workflow-production/')
-           for p in SPECS[WORKERS][target][0]}
+           for p in SPECS[WORKERS][source_target(target)][0]}
     if target=='worker-animation':
         need(env.get('WORKFLOW_WAN_RELEASE')==str(names['native-wan']),'WORKER_ACTIVE_PROOF_UNAVAILABLE')
     if target=='worker-postprocess':
@@ -307,7 +315,7 @@ def _plan(verified, repo, home, control, release, full_tree, target, trusted_dep
     need(loaded(target,prior_hash) is True,'WORKER_LOADED_UNPROVEN')
     verify_worker_runtime(target,selector)
     try:
-        comparison=_comparison(prior_repo,target,selector,old,tracked[target],directory,head,prior_hash)
+        comparison=_comparison(prior_repo,target,selector,old,tracked[source_target(target)],directory,head,prior_hash)
     except (OSError,ValueError,KeyError,IndexError,TypeError,subprocess.SubprocessError) as error:
         if not failed:
             code='WORKER_ACTIVE_TREE_DRIFT' if getattr(error,'args',())==('WORKER_ACTIVE_TREE_DRIFT',) else 'WORKER_ACTIVE_PROOF_UNAVAILABLE'
@@ -466,10 +474,23 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
         if not os.path.lexists(release):
             need(assemble_source(verified, repo, releases) == release, 'WORKER_RELEASE_PATH_MISMATCH')
         full_tree = _exact_source(release, tracked)
+        alternates={}
+        for target in IMAGE_COMPANIONS:
+            slot=target[-1]
+            alternate=releases/(f'workflows-image{slot}-github-'+head)
+            alternates[target]=alternate
+            # Use the one verified image source closure, materialized into
+            # independently selectable release roots (no symlinks).
+            if (home/'Library/LaunchAgents'/f'com.vinus.workflow.image-worker-{slot}.plist').is_file() and not os.path.lexists(alternate):
+                with tempfile.TemporaryDirectory(prefix='.ops-image-slot-',dir=releases) as staging:
+                    staged=Path(staging)/'src'
+                    shutil.copytree(release,staged)
+                    need(_exact_source(staged,tracked)==full_tree,'WORKER_RELEASE_SOURCE_DRIFT')
+                    os.rename(staged,alternate)
         plans, rows = {}, {}
         for target in TARGET_IDS:
             try:
-                state, plan = _plan(verified, repo, home, control, release, full_tree, target, trusted_deploy, idle, retry_probe, loaded, prior_repo, tracked)
+                state, plan = _plan(verified, repo, home, control, alternates.get(target,release), full_tree, target, trusted_deploy, idle, retry_probe, loaded, prior_repo, tracked)
                 rows[target] = {'state': state}
                 if plan:
                     plans[target] = plan
@@ -483,7 +504,7 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
             verified_plans = {}
             for target, (candidate, pins, prior, failed, comparison) in plans.items():
                 try:
-                    updated_state, updated_plan = _plan(verified, repo, home, control, release, full_tree,
+                    updated_state, updated_plan = _plan(verified, repo, home, control, alternates.get(target,release), full_tree,
                                                        target, trusted_deploy, idle, retry_probe, loaded, prior_repo, tracked)
                     need(updated_state == 'verified' and updated_plan == (candidate,pins,prior,failed,comparison),
                          'WORKER_ADMISSION_INPUT_DRIFT')
@@ -496,7 +517,8 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
                 for target, (candidate, runner, failed, comparison) in verified_plans.items():
                     directory = control/'targets'/target
                     try:
-                        prior, _, _, proposed = _selector(target, home, release)
+                        if target in IMAGE_COMPANIONS:need(_exact_source(alternates[target],tracked)==full_tree,'WORKER_RELEASE_SOURCE_DRIFT')
+                        prior, _, _, proposed = _selector(target, home, alternates.get(target,release))
                         pin=candidate['expectedPriorPlistSha256']
                         need(proposed is not None and digest(prior)==pin and loaded(target,pin) is True
                              and _prior_attempt(directory,target,head)==failed,'WORKER_ADMISSION_INPUT_DRIFT')

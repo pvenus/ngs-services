@@ -10,7 +10,7 @@ const stateLabels={
 const groupLayout={
  ngs:{label:'NGS',targets:[['ngs-local','로컬'],['ngs-space','스페이스']]},
  services:{label:'서비스',targets:[['request-service','RS'],['rs-mcp','RS-MCP'],['workflow-planner','Workflow Planner'],['filex-writer','Filex 저장기'],['backend-stack','백엔드 스택 · PDS 포함']]},
- workers:{label:'워커',targets:[['worker-document','문서'],['worker-file','파일'],['worker-image','이미지'],
+ workers:{label:'워커',targets:[['worker-document','문서'],['worker-file','파일'],['worker-image','이미지 1'],['worker-image-2','이미지 2'],['worker-image-3','이미지 3'],['worker-image-4','이미지 4'],
   ['worker-animation','애니메이션'],['worker-postprocess','후처리'],['worker-audio','음악']]},
 };
 const preparationLabels={ready:'후보 검증 완료',current:'현재 배포와 동일',equivalent:'현재 배포와 동일',

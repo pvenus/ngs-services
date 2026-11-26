@@ -61,6 +61,12 @@ class TargetTests(unittest.TestCase):
         selector.parent.mkdir(mode=0o700, parents=True)
         env = {'X':'same'}
         wd = old / Path(item.entry).parent
+        if target in ('worker-image','worker-image-2','worker-image-3','worker-image-4'):
+            (old/'image').mkdir(mode=0o700,parents=True)
+            for root in (old,release):(root/'image/image-slot.mjs').write_text('fixture')
+            slot='1' if target=='worker-image' else target[-1]
+            (home/'Workspaces/Workers/runtime/image-worker-slots'/slot).mkdir(mode=0o700,parents=True)
+            if slot!='1':env['WORKFLOW_IMAGE_WORKER_SLOT']=slot
         if target == 'worker-animation':
             (old / 'native-wan').mkdir(mode=0o700, parents=True)
             (release / 'native-wan').mkdir(mode=0o700)

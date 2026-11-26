@@ -7,6 +7,7 @@ import time
 import unittest
 
 import deploy_cycle as C
+from release_equivalence import SELECTORS
 from deploy_control import Rejected
 
 
@@ -37,7 +38,7 @@ class Cycle(unittest.TestCase):
             old='e'*40
             ready['manualOnly']=True
             role=id.removeprefix('worker-')
-            selector=self.root/'Library/LaunchAgents'/('com.vinus.workflow.'+role+'-worker.plist')
+            selector=self.root/'Library/LaunchAgents'/(SELECTORS[id]+'.plist')
             selector.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
             C.persist(selector,{'fixtureSelector':id})
             pin=hashlib.sha256(selector.read_bytes()).hexdigest()
@@ -72,7 +73,7 @@ class Cycle(unittest.TestCase):
     def test_bulk_uses_only_ready_rows_and_does_not_include_space(self):
         c=self.cycle(runner=self.receipt)
         self.assertEqual({r['id'] for r in c.status()['targets']},C.IDS)
-        self.assertEqual(len(C.IDS),13)
+        self.assertEqual(len(C.IDS),16)
         self.assertNotIn('ops',C.IDS)
         target='worker-document'
         self.stage(target)
