@@ -13,7 +13,7 @@ test('service tab shows observed NGS, services and workers in deployment order w
  const ids=Object.fromEntries(['service-rows','service-empty','service-checked-at','refresh'].map(k=>[k,node()]));
  const stamp='2026-11-20T04:02:00Z',sha='a'.repeat(40);
  const state={state:'connected',missed:0,lastReceivedAt:stamp};
- let services=[{...state,serverName:'document-worker'},{...state,serverName:'unknown-service'},
+ let services=[{...state,serverName:'document-worker'},{...state,serverName:'document-worker-2'},{...state,serverName:'unknown-service'},
   {...state,serverName:'ngs-local',commitSha:sha},{...state,serverName:'ngs-space',commitSha:null}];
  runInNewContext(app,{document:{getElementById:k=>ids[k],createElement:node,addEventListener(){}},AbortSignal,
   fetch:async path=>{assert.equal(path,'/api/service-status');return {ok:true,json:async()=>({services,checkedAt:stamp})}},
@@ -24,7 +24,7 @@ test('service tab shows observed NGS, services and workers in deployment order w
   [['deploy-group','ngs','NGS'],['deploy-group','services','서비스'],['deploy-group','workers','워커']]);
  const cards=groups.map(g=>g.children[1].children.map(r=>r.children.map(c=>c.textContent)));
  assert.deepEqual(cards.map(group=>group.map(row=>row[0])),
-  [['NGS Local','NGS Space'],['unknown-service'],['document-worker']]);
+  [['NGS Local','NGS Space'],['unknown-service'],['문서 워커 1','문서 워커 2']]);
  assert.match(cards[0][0][2],/^마지막 연락 /);
  assert.equal(cards[0][0][3],'커밋 '+sha);
  assert.equal(cards[0][1][3],'커밋 확인 안 됨');
