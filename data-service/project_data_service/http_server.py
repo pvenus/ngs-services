@@ -685,7 +685,8 @@ def serve(storage_root: Path, host: str, port: int):
     if npc_standalone_delete not in ('0','1') or npc_standalone_delete=='1' and npc_folder_delete!='1':
         raise ValueError('WORKFLOW_NPC_STANDALONE_DELETE_OPT_IN')
     if prop_folder_delete not in ('0','1'):raise ValueError('WORKFLOW_PROP_FOLDER_DELETE_OPT_IN')
-    background_delete=os.getenv('PDS_WORKFLOW_BACKGROUND_DELETE','0')
+    background_delete=os.getenv('PDS_WORKFLOW_BACKGROUND_DELETE',
+        '1' if host=='127.0.0.1' and hasattr(server,'workflow_delete') else '0')
     if background_delete not in ('0','1'):raise ValueError('WORKFLOW_BACKGROUND_DELETE_OPT_IN')
     if npc_folder_delete=='1' or concept_folder_delete=='1' or audio_delete=='1' or prop_folder_delete=='1' or background_delete=='1':
         from .single_target_delete import SingleTargetDelete
