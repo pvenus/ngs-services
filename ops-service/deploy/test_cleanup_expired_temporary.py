@@ -272,3 +272,100 @@ class ReleaseCleanupTests(unittest.TestCase):
         (self.control / 'targets/rs-mcp/candidate.json').write_text('not json')
         self.assertTrue(self.run_release()['blocked'])
         self.assertTrue(self.path(self.candidate).exists())
+
+    def make_legacy(self, kind, sha, age=20, **overrides):
+        rel = self.root / f'{kind}-{sha[:7]}'
+        child = rel / dict(cleanup_module.LEGACY_RELEASES)[kind]
+        child.mkdir(parents=True)
+        (child / 'bundle.js').write_bytes(b'tracked fixture')
+        data = dict(commit=sha, files={'bundle.js': hashlib.sha256(b'tracked fixture').hexdigest()})
+        if kind == 'runtime-space':
+            data['baseCommit'] = 'a' * 40
+        data.update(overrides)
+        (rel / 'git-release.json').write_text(json.dumps(data))
+        stamp = self.now - age * DAY
+        for p in [child / 'bundle.js', rel / 'git-release.json', child, rel]:
+            os.utime(p, ns=(stamp, stamp))
+        return rel
+
+    def setup_legacy(self):
+        target = self.control / 'targets/ngs-space'
+        target.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (target / 'publish-queue.lock').touch(mode=0o600)
+        self.jsonfile('targets/ngs-space/publication.json', 'ops.ngs-space-publication.v1',
+                      provider='chatgpt-sites', projectId='appgprj_test')
+        self.space_commit = '8' * 40
+        self.space_provider = 'b' * 40
+        self.space_result = dict(commitSha=self.space_commit, providerSha=self.space_provider,
+                                 state='succeeded', versionId='appgprj_test~version',
+                                 deployedAt='2026-11-01T11:00:00Z')
+        self.jsonfile('targets/ngs-space/publish-queue.json', 'ops.space-publish-queue.v1',
+                      items=[dict(state='succeeded', commitSha=self.space_commit, result=self.space_result)])
+        self.legacy_backup = self.make_legacy('runtime-space', 'e' * 40, age=12)
+        self.source_backup = self.make_legacy('source-git', 'e' * 40, age=11)
+        self.runtime_backup = self.make_legacy('runtime-git', 'e' * 40, age=12)
+
+    def run_legacy(self, *, dry_run=False, open_paths=lambda path: set()):
+        def active(home, releases):
+            return cleanup_module.active_releases(home, releases, launch=self.launch, health=lambda pid: True)
+        return cleanup_module.cleanup_legacy_ngs(self.home, now_ns=self.now, dry_run=dry_run,
+                                                active=active, open_paths=open_paths)
+
+    def test_legacy_scope_and_live_last_good_startup_refs(self):
+        self.setup_legacy()
+        eligible = [self.make_legacy(prefix, 'a'*40)
+                    for prefix in ('runtime-space', 'runtime-git', 'source-git')]
+        pinned = [self.make_legacy('runtime-space', self.space_commit),
+                  self.make_legacy('runtime-space', self.space_provider),
+                  self.make_legacy('source-git', '9'*40),
+                  self.make_legacy('runtime-git', 'c'*40)]
+        (self.home / '.zprofile').write_text('export RUNTIME="$HOME/some/path/' + pinned[2].name + '"')
+        unknown = self.make_legacy('source-git', '0'*40, commit='1'*40)
+        report = self.run_legacy(dry_run=True, open_paths=lambda path: {pinned[3].name})
+        self.assertEqual((report['blocked'], report['eligible'], report['removed']), (False, 3, 0))
+        self.assertTrue(all(p.exists() for p in eligible))
+        self.assertEqual(self.run_legacy(open_paths=lambda path: {pinned[3].name})['removed'], 3)
+        self.assertTrue(all(not p.exists() for p in eligible))
+        self.assertTrue(all(p.exists() for p in (*pinned, unknown, self.legacy_backup,
+                                                  self.source_backup, self.runtime_backup)))
+
+    def test_legacy_protects_busy_space_and_files_opening_during_probe(self):
+        self.setup_legacy()
+        candidate = self.make_legacy('runtime-space', 'a'*40)
+        self.jsonfile('targets/ngs-space/publish-queue.json', 'ops.space-publish-queue.v1',
+                      items=[dict(state='claimed', commitSha=self.space_commit)])
+        self.assertTrue(self.run_legacy()['blocked'])
+        self.assertTrue(candidate.exists())
+        self.jsonfile('targets/ngs-space/publish-queue.json', 'ops.space-publish-queue.v1',
+                      items=[dict(state='succeeded', commitSha=self.space_commit, result=self.space_result)])
+        paths = iter([set(), {candidate.name}])
+        self.assertEqual(self.run_legacy(open_paths=lambda path: next(paths))['removed'], 0)
+        self.assertTrue(candidate.exists())
+
+    def test_legacy_batch_is_bounded(self):
+        self.setup_legacy()
+        for index in range(cleanup_module.BATCH_COUNT + 3):
+            self.make_legacy('runtime-space', f'{index:07x}' + '1'*33)
+        report = self.run_legacy(dry_run=True)
+        self.assertEqual(report['eligible'], cleanup_module.BATCH_COUNT)
+        self.assertEqual(report['deferred'], 3)
+        self.assertEqual(report['removed'], 0)
+
+    def test_manual_drain_rechecks_and_aggregates_actual_removals(self):
+        def row(removed, deferred, blocked=False):
+            return dict(removed=removed, eligible=removed, skipped=0, allocatedBytes=removed * 4096,
+                        errors=0, blocked=blocked, deferred=deferred, scanned=removed,
+                        eligibleAllocatedBytes=removed * 4096)
+        pending = iter([row(8, 10), row(8, 2), row(0, 2, blocked=True)])
+        checks = []
+        def policy(home, *, dry_run):
+            self.assertEqual(home, self.home)
+            self.assertFalse(dry_run)
+            checks.append(True)
+            return next(pending)
+        report = cleanup_module.drain_legacy_backlog(self.home, policy=policy, pause=lambda sec: None,
+                                                    monotonic=lambda: 0)
+        self.assertEqual((len(checks), report['batches'], report['removed'], report['allocatedBytes']),
+                         (3, 3, 16, 16 * 4096))
+        self.assertEqual(report['deferred'], 2)
+        self.assertTrue(report['blocked'])

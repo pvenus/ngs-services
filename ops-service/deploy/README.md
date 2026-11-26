@@ -465,3 +465,35 @@ removal. An interrupted removal can leave a \`.ops-cleanup-*\` sibling; it
 is not retried without operator inspection. Before enabling this or a new
 deployment-root policy, exercise an independent \`--dry-run\` and verify
 all expected current, pending and prior-good references.
+
+The separate legacy NGS rule recognizes only these three exact publisher
+layouts below the same NGS/code/releases root:
+
+| Name | Layout |
+|:---|:---|
+| runtime-space-<7 hex> | git-release.json and runtime/ |
+| runtime-git-<7 hex> | git-release.json and runtime/ |
+| source-git-<7 hex> | git-release.json and source/ |
+
+A matching full commit, safe manifest file map and actual file digest
+witness are required. Space runtime also requires its publisher's
+baseCommit field. Missing/nonmatching manifests and unknown layouts
+are never deletion candidates. The newest verified expansion from each
+family remains available. Runtime startup profiles, installed and loaded
+service refs, live open paths, the active NGS release, its recorded
+rollback, and recent Space publication commit/provider references are
+protected. Pending, claimed or uncertain Space publication or missing
+publication proof blocks legacy retention. A readable owner path with an
+active terminal working directory is covered by the process-open pins.
+
+Legacy inspection takes the normal OPS locks and the Space publication
+queue lock nonblocking, bounds the scan and stages at most eight trees
+per batch. Recursive removal happens outside deployment locks. Deferred
+entries remain for later runs. For an explicitly authorized first cleanup,
+after reviewing the dry-run, the same fixed installed runner supports
+**--drain-legacy-backlog**: up to 32 independently revalidated batches,
+starting no new batches after an eight-minute deadline and stopping if
+blocked, if errors occur, or if no removal progress is possible. Launchd
+never supplies the manual drain flag. Use before/after df to report
+physical disk reclamation; allocatedBytes logs the sum observed for
+the removed entries and may differ on APFS.

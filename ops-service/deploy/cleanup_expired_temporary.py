@@ -228,8 +228,8 @@ def private_read(path, limit=262144, *, external=False):
             return raw
 
 
-def record(path):
-    obj = json.loads(private_read(path))
+def record(path, limit=262144):
+    obj = json.loads(private_read(path, limit))
     require(isinstance(obj, dict))
     return obj
 
@@ -426,7 +426,7 @@ def deployment_references(control, releases, current):
     return protected | prior_refs | {current, prior}
 
 
-def tree_snapshot(fd, base_device, cutoff):
+def tree_snapshot(fd, base_device, cutoff, *, deadline=None):
     # Snapshot only regular files and real directories on one filesystem.
     # Existing symlinks, hardlinks, recent entries and non-model filesystem
     # types make the whole release ineligible. Never follow inside the tree.
@@ -438,6 +438,8 @@ def tree_snapshot(fd, base_device, cutoff):
         nonlocal count, size
         require(depth <= 64)
         for name in sorted(os.listdir(parent)):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('release scan deadline')
             info = os.stat(name, dir_fd=parent, follow_symlinks=False)
             require(info.st_uid == os.geteuid() and info.st_dev == base_device and info.st_mtime_ns <= cutoff)
             count += 1
@@ -466,6 +468,258 @@ def no_open_release(path):
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 1 and not result.stdout and not result.stderr
+
+
+LEGACY_RELEASES = (
+    ('runtime-space', 'runtime'),
+    ('runtime-git', 'runtime'),
+    ('source-git', 'source'),
+)
+LEGACY_FIELDS = frozenset(('baseCommit', 'candidateOnly', 'changes', 'commit',
+                           'dependenciesCopiedFrom', 'files', 'integratedHotfix',
+                           'localHotfix', 'preservedGeneratedRuntimeFiles',
+                           'privateRuntimeOverrides', 'selected'))
+LEGACY_MATCH = re.compile(r'(runtime-space|runtime-git|source-git)-([a-f0-9]{7})')
+SPACE_BUSY = frozenset(('pending', 'claimed', 'uncertain'))
+PROFILE_FILES = (
+    '.profile', '.zprofile', '.zshenv', '.zshrc', '.bash_profile', '.bashrc',
+    '.config/fish/config.fish', '.codex/config.toml', '.codex/.mcp.json',
+    'Workspaces/NGS/connection-bridge/code/start-local.sh',
+    'Workspaces/NGS/connection-bridge/code/start-bridge.sh',
+)
+BATCH_COUNT = 8
+LOCK_SCAN_SECONDS = 16
+
+
+@contextmanager
+def space_queue_lock(control):
+    with open_directory(control / 'targets/ngs-space') as parent:
+        owner = os.fstat(parent)
+        require(owner.st_uid == os.geteuid() and stat.S_IMODE(owner.st_mode) == 0o700)
+        name = 'publish-queue.lock'
+        fd = os.open(name, os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            info = os.fstat(fd)
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                    and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            require(identity(info) == identity(os.stat(name, dir_fd=parent, follow_symlinks=False)))
+            yield
+        finally:
+            os.close(fd)
+
+
+def space_pins(control):
+    # Publication uses commit and provider SHAs. Capture current and previous
+    # healthy references and fail closed for in-flight/uncertain handoffs.
+    target = control / 'targets/ngs-space'
+    publication = record(target / 'publication.json')
+    queue = record(target / 'publish-queue.json')
+    require(publication.get('schemaVersion') == 'ops.ngs-space-publication.v1'
+            and publication.get('provider') == 'chatgpt-sites'
+            and isinstance(publication.get('projectId'), str)
+            and set(queue) == {'schemaVersion', 'items'}
+            and queue['schemaVersion'] == 'ops.space-publish-queue.v1'
+            and isinstance(queue['items'], list) and len(queue['items']) <= 100)
+    pins = set()
+    success = 0
+    for item in queue['items']:
+        require(isinstance(item, dict) and isinstance(item.get('commitSha'), str)
+                and SHA.fullmatch(item['commitSha']) and item.get('state') in
+                {'pending', 'claimed', 'uncertain', 'succeeded', 'failed'})
+        require(item['state'] not in SPACE_BUSY)
+        if item['state'] != 'succeeded':
+            continue
+        result = item.get('result')
+        require(isinstance(result, dict) and result.get('state') == 'succeeded'
+                and result.get('commitSha') == item['commitSha']
+                and isinstance(result.get('providerSha'), str) and SHA.fullmatch(result['providerSha'])
+                and isinstance(result.get('versionId'), str)
+                and result['versionId'].startswith(publication['projectId'] + '~')
+                and isinstance(result.get('deployedAt'), str))
+        success += 1
+        if success <= 2:
+            pins.update((item['commitSha'], result['providerSha']))
+    require(success >= 1)
+    return pins
+
+
+def profile_pins(home, releases):
+    protected = set()
+    for relative in PROFILE_FILES:
+        path = home / relative
+        try:
+            # Unknown symlinked config can point to additional startup wiring;
+            # do not clean legacy releases on that machine until it is reviewed.
+            raw = private_read(path, limit=1 << 20)
+        except FileNotFoundError:
+            continue
+        content = raw.decode('utf8')
+        # Include short legacy names even when a config builds paths from HOME.
+        protected.update(re.findall(r'(?:runtime-space|runtime-git|source-git)-[a-f0-9]{7}\b', content))
+        protected.update(references(content.replace('"', ' ').replace("'", ' '), releases))
+    return protected
+
+
+def load_legacy_manifest(releases, name):
+    match = LEGACY_MATCH.fullmatch(name)
+    require(match is not None)
+    kind, suffix = match.groups()
+    child = dict(LEGACY_RELEASES)[kind]
+    path = releases / name
+    meta = record(path / 'git-release.json', limit=4 * 1024 * 1024)
+    require(set(meta) <= LEGACY_FIELDS and isinstance(meta.get('commit'), str)
+            and SHA.fullmatch(meta['commit']) and meta['commit'].startswith(suffix))
+    if kind == 'runtime-space':
+        require(isinstance(meta.get('baseCommit'), str)
+                and re.fullmatch(r'(?:[a-f0-9]{7}|[a-f0-9]{40})', meta['baseCommit']))
+    files = meta.get('files')
+    require(isinstance(files, dict) and 1 <= len(files) <= 25_000
+            and all('/'.join(PurePosixPath(key).parts) == key and not key.startswith('/')
+                    and '..' not in PurePosixPath(key).parts and bool(key) and '\x00' not in key
+                    and isinstance(digest, str) and DIGEST.fullmatch(digest)
+                    for key, digest in files.items()))
+    with open_directory(path) as fd:
+        require(set(os.listdir(fd)) == {'git-release.json', child})
+        status = os.fstat(fd)
+    with open_directory(path / child):
+        pass
+    # The manifests for this format are often incremental instead of complete;
+    # a real listed file hash is an additional witness tying the tree to its
+    # manifest. Bound verification to small files, and never read through links.
+    for index, (relative, digest) in enumerate(files.items()):
+        if index >= 24:
+            break
+        try:
+            raw = private_read(path / child / relative, limit=2 * 1024 * 1024)
+        except (OSError, ValueError):
+            continue
+        if hashlib.sha256(raw).hexdigest() == digest:
+            return kind, meta['commit'], status
+    raise ValueError('unverified legacy expansion content')
+
+
+def process_release_pins(releases):
+    # One complete process-name snapshot rather than lsof +D per tree. NUL
+    # fields preserve spaces and newlines in user filenames.
+    result = subprocess.run(['/usr/sbin/lsof', '-nP', '-F0n'], stdin=subprocess.DEVNULL,
+                            capture_output=True, timeout=6, check=False,
+                            env={'LC_ALL': 'C', 'PATH': '/usr/bin:/bin'})
+    require(result.returncode == 0 and not result.stderr and 0 < len(result.stdout) <= 32 * 1024 * 1024)
+    prefix = os.fsencode(releases) + b'/'
+    protected = set()
+    for field in result.stdout.split(b'\x00'):
+        field = field.lstrip(b'\n')
+        if not field.startswith(b'n'):
+            continue
+        path = field[1:]
+        if path.startswith(b'/System/Volumes/Data' + prefix):
+            path = path[len(b'/System/Volumes/Data'):]
+        if path.startswith(prefix):
+            child = path[len(prefix):].split(b'/', 1)[0]
+            # A file that was already unlinked may be reported with this suffix.
+            child = child.removesuffix(b' (deleted)')
+            require(re.fullmatch(rb'[a-zA-Z0-9._-]+', child))
+            protected.add(os.fsdecode(child))
+    return protected
+
+
+def cleanup_legacy_ngs(home, *, now_ns=None, dry_run=False, active=active_releases,
+                       open_paths=process_release_pins, monotonic=time.monotonic):
+    cutoff = (time.time_ns() if now_ns is None else now_ns) - RETENTION_DAYS * NANOSECONDS_PER_DAY
+    counts = dict(removed=0, eligible=0, skipped=0, allocatedBytes=0, errors=0, blocked=False,
+                  deferred=0, scanned=0, eligibleAllocatedBytes=0)
+    control, releases = home / CONTROL, home / RELEASES
+    staged = []
+    try:
+        with open_directory(releases) as root:
+            with deployment_locks(control), space_queue_lock(control):
+                current, protected = active(home, releases)
+                protected |= deployment_references(control, releases, current)
+                protected |= profile_pins(home, releases)
+                protected |= open_paths(releases)
+                pins = space_pins(control)
+                require(shutil.rmtree.avoids_symlink_attacks)
+                deadline = monotonic() + LOCK_SCAN_SECONDS
+                device = os.fstat(root).st_dev
+                # Report candidates directly from the directory descriptor;
+                # root identity must still agree with the path seen by reads.
+                all_rows = []
+                for name in os.listdir(root):
+                    match = LEGACY_MATCH.fullmatch(name)
+                    if match:
+                        status = os.stat(name, dir_fd=root, follow_symlinks=False)
+                        all_rows.append((name, match[1], status))
+                newest = {}
+                # Preserve one known-good expanded backup per family even when
+                # operations are now published from GitHub without a local tree.
+                for name, kind, _ in sorted(all_rows, key=lambda row: row[2].st_mtime_ns, reverse=True):
+                    if kind not in newest:
+                        require(monotonic() < deadline)
+                        try:
+                            load_legacy_manifest(releases, name)
+                        except (OSError, ValueError):
+                            continue
+                        newest[kind] = name
+                require('runtime-space' in newest)
+                protected.update(newest.values())
+                candidates = []
+                for name, kind, info in all_rows:
+                    if (name in protected or info.st_dev != device or info.st_uid != os.geteuid()
+                            or not stat.S_ISDIR(info.st_mode) or info.st_mtime_ns > cutoff
+                            or any(commit.startswith(name[-7:]) for commit in pins)):
+                        counts['skipped'] += 1
+                    else:
+                        candidates.append((name, kind, info))
+                for index, (name, kind, info) in enumerate(sorted(candidates, key=lambda row: row[2].st_mtime_ns)):
+                    if monotonic() >= deadline or counts['eligible'] >= BATCH_COUNT:
+                        counts['deferred'] += len(candidates) - index
+                        break
+                    counts['scanned'] += 1
+                    try:
+                        proven_kind, commit, observed = load_legacy_manifest(releases, name)
+                        require(proven_kind == kind and commit not in pins and unchanged(observed) == unchanged(info))
+                        child = os.open(name, DIRECTORY_FLAGS, dir_fd=root)
+                        try:
+                            require(unchanged(os.fstat(child)) == unchanged(info))
+                            bound = min(deadline, monotonic() + 4)
+                            before, size = tree_snapshot(child, device, cutoff, deadline=bound)
+                            # Refresh the open-path set immediately before the
+                            # destructive move; this is independent of tree size.
+                            after, _ = tree_snapshot(child, device, cutoff, deadline=bound)
+                            if not dry_run:
+                                require(name not in open_paths(releases))
+                            require(before == after and unchanged(os.fstat(child)) == unchanged(info)
+                                    and unchanged(os.stat(name, dir_fd=root, follow_symlinks=False)) == unchanged(info))
+                            candidate_bytes = size + info.st_blocks * 512
+                            counts['eligible'] += 1
+                            counts['eligibleAllocatedBytes'] += candidate_bytes
+                            if not dry_run:
+                                hidden = '.ops-cleanup-' + uuid.uuid4().hex
+                                os.rename(name, hidden, src_dir_fd=root, dst_dir_fd=root)
+                                require(identity(os.stat(hidden, dir_fd=root, follow_symlinks=False)) == identity(info))
+                                staged.append((hidden, candidate_bytes))
+                        finally:
+                            os.close(child)
+                    except (ValueError, FileNotFoundError):
+                        counts['skipped'] += 1
+                    except TimeoutError:
+                        counts['deferred'] += 1
+                    except OSError:
+                        counts['errors'] += 1
+            # Other processes never see the private quarantine as a deploy
+            # candidate. Do not hold producer locks for recursive unlinks.
+            for hidden, size in staged:
+                try:
+                    shutil.rmtree(hidden, dir_fd=root)
+                except OSError:
+                    counts['errors'] += 1
+                    continue
+                counts['removed'] += 1
+                counts['allocatedBytes'] += size
+    except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException, subprocess.SubprocessError):
+        counts['blocked'] = True
+    return counts
 
 
 def cleanup_ngs(home, *, now_ns=None, dry_run=False, active=active_releases, open_check=no_open_release):
@@ -521,18 +775,47 @@ def cleanup_ngs(home, *, now_ns=None, dry_run=False, active=active_releases, ope
 # deployed trees to the simpler temporary-file rules above.
 DEPLOYED_RETENTION_POLICIES = (
     ('ngs-expanded-releases', cleanup_ngs),
+    ('ngs-legacy-expanded-releases', cleanup_legacy_ngs),
 )
+
+
+def drain_legacy_backlog(home, *, policy=cleanup_legacy_ngs, pause=time.sleep, monotonic=time.monotonic):
+    # Manual first maintenance only. Each batch refreshes current/candidate/
+    # open-file proof and releases locks before the next batch. Limit total
+    # work per invocation as well so this is not a background polling loop.
+    deadline = monotonic() + 8 * 60
+    totals = dict(removed=0, eligible=0, allocatedBytes=0, errors=0,
+                  scanned=0, eligibleAllocatedBytes=0, batches=0)
+    last = {}
+    for _ in range(32):
+        if monotonic() >= deadline:
+            break
+        last = policy(home, dry_run=False)
+        totals['batches'] += 1
+        for key in totals:
+            if key != 'batches':
+                totals[key] += last[key]
+        if last['blocked'] or last['errors'] or not last['deferred'] or not last['removed']:
+            break
+        pause(0.25)
+    return {**last, **totals}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--dry-run', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--dry-run', action='store_true')
+    mode.add_argument('--drain-legacy-backlog', action='store_true',
+                      help='manual bounded legacy NGS maintenance; never used by launchd')
     args = parser.parse_args()
     home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
     report = cleanup(home / 'Workspaces', dry_run=args.dry_run)
     for name, policy in DEPLOYED_RETENTION_POLICIES:
-        report[name] = policy(home, dry_run=args.dry_run)
-    print(json.dumps({'dryRun': args.dry_run, 'retentionDays': RETENTION_DAYS, 'rules': report}, sort_keys=True))
+        report[name] = drain_legacy_backlog(home) if (
+            args.drain_legacy_backlog and policy is cleanup_legacy_ngs
+        ) else policy(home, dry_run=args.dry_run)
+    print(json.dumps({'dryRun': args.dry_run, 'drainLegacyBacklog': args.drain_legacy_backlog,
+                      'retentionDays': RETENTION_DAYS, 'rules': report}, sort_keys=True))
     return int(any(rule['errors'] or rule.get('blocked') for rule in report.values()))
 
 
