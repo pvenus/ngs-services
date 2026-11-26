@@ -609,9 +609,19 @@ def process_release_pins(releases):
     require(result.returncode == 0 and not result.stderr and 0 < len(result.stdout) <= 32 * 1024 * 1024)
     prefix = os.fsencode(releases) + b'/'
     protected = set()
+    process = None
     for field in result.stdout.split(b'\x00'):
         field = field.lstrip(b'\n')
+        if field.startswith(b'p'):
+            require(re.fullmatch(rb'p[1-9][0-9]*', field))
+            process = int(field[1:])
+            continue
         if not field.startswith(b'n'):
+            continue
+        require(process is not None)
+        # The walker holds its own no-follow directory FD during the final
+        # check. Ignore that one process, not the release or any other PID.
+        if process == os.getpid():
             continue
         path = field[1:]
         if path.startswith(b'/System/Volumes/Data' + prefix):

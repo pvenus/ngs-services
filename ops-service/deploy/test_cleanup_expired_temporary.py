@@ -369,3 +369,15 @@ class ReleaseCleanupTests(unittest.TestCase):
                          (3, 3, 16, 16 * 4096))
         self.assertEqual(report['deferred'], 2)
         self.assertTrue(report['blocked'])
+
+
+class LegacyProcessPinTests(unittest.TestCase):
+    def test_final_probe_ignores_our_candidate_fd_but_keeps_foreign_processes(self):
+        from unittest.mock import patch
+        import subprocess
+        from cleanup_expired_temporary import process_release_pins
+        workspace = Path('/Users/example/Workspaces/NGS/code/releases')
+        first = b'p' + str(os.getpid()).encode() + b'\x00\n' + b'f7\x00n' + os.fsencode(workspace / 'runtime-space-1111111') + b'\x00\n'
+        other = b'p' + str(os.getpid() + 1).encode() + b'\x00\n' + b'f8\x00n' + os.fsencode(workspace / 'runtime-space-2222222') + b'\x00\n'
+        with patch('cleanup_expired_temporary.subprocess.run', return_value=subprocess.CompletedProcess([], 0, first + other, b'')):
+            self.assertEqual(process_release_pins(workspace), {'runtime-space-2222222'})
