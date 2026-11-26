@@ -8,13 +8,25 @@ separate packages; the puzzle chooses and links exact version pins.
 Input `ngs.prop-generate.v1`: project `binari`, prop ID, author intent and
 exact `designContextSha256` (current master visual design plus authored
 prop-design section). Optional `motion: "still" | "subtle"` defaults to
-still. The request accepts no number of frames, fixed state list, provider
+still. CREATE also accepts one optional published reference
+`{propId, revision, sha256}` (manifest SHA), distinct from the new target.
+No reference leaves the original still flow unchanged. Regeneration does not
+accept this field and continues to be a complete replacement of its own
+selected target. The request accepts no number of frames, fixed state list, provider
 selection, executable, filesystem path, or prompt override after approval.
 
 Planner's real stage capability registry is `propStageRegistry` in
 `workflow-planner/prop-generate-plan.mjs`. A document worker authors typed
 design/behavior using the three canonical source inputs. An image worker
-produces exactly one pinned base PNG. If motion is requested, the distinct
+produces exactly one pinned base PNG. For reference CREATE, the base-stage
+input records the exact pin in the existing image capability. PDS verifies
+the same published source before and after reading the hashed detail PNG,
+and the native model receives those actual bytes as an isolated image
+reference along with the approved appearance direction. The worker fails
+rather than substituting a different revision or falling back to text-only
+generation. The source remains unchanged and the new target is published as
+revision 1. Model reference conditioning is not pixel-identical copying.
+If motion is requested, the distinct
 animation worker derives RGB frames from that base, using the verified
 document contract. This branch is rejected before registration/planning
 when the motion capability is not provided. Postprocess normalizes the verified base to static RGBA detail and pixel PNGs.

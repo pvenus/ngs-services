@@ -283,3 +283,26 @@ test('only the exact candle append profile is admitted, fully hash-bound, and ke
  assert.equal(stored.payload_sha256,feed.payloadSha256);
  await assert.rejects(submit('exact',legacy),/OFFICIAL_REQUEST_IDEMPOTENCY_CONFLICT/);
 });
+
+test('reference CREATE retains exact optional pin across official Local and Space intake and only to base stage',async t=>{
+ const reference={propId:'source-lantern',revision:3,sha256:'b'.repeat(64)},payload={...p,reference};
+ const temp=root(t),queueId='ngs.space.ref.fixture';
+ const rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true,readSpaceRequest:async id=>{
+  assert.equal(id,queueId);return {queueId,idempotencyKey:queueId,requestType:'prop.generate',payload};
+ }});
+ await rs.call('request_submit',command(payload));
+ await rs.call('request_submit_space',{queueId});
+ const rows=(await rs.call('request_workflow_list',{})).requests;
+ assert.equal(rows.length,2);
+ for(const row of rows){
+  assert.deepEqual(row.payload.reference,reference);
+  const tasks=buildPlan(row).tasks;
+  assert.equal(tasks.length,5);
+  assert.deepEqual(tasks.find(x=>x.key===propKeys.base).input.reference,reference);
+  assert(tasks.filter(x=>x.key!==propKeys.base).every(x=>!('reference' in x.input)));
+ }
+ await assert.rejects(rs.call('request_submit',command({...payload,reference:{...reference,propId:p.propId}})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+ await assert.rejects(rs.call('request_submit',command({...payload,reference:{...reference,url:'http://localhost/'}})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+ await assert.rejects(rs.call('request_submit',{...command(),requestType:'prop.regenerate',payload:{...payload,
+  schemaVersion:'ngs.prop-regenerate.v1',source:{revision:1,sha256:'c'.repeat(64)}}}),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+});

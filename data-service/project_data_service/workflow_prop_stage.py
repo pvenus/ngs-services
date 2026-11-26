@@ -18,8 +18,10 @@ STAGE='/v1/props/ownership/workflow-stage'
 DESIGN_ROUTE='/v1/props/ownership/workflow-design'
 ROUTES=(STAGE,STAGE+'/read',STAGE+'/asset',DESIGN_ROUTE,DESIGN_ROUTE+'/read')
 MAX_BODY=57*1024*1024
+MAX_IMAGE_REFERENCE=8*1024*1024
 
 class Waiting(ValueError):pass
+class ReferenceChanged(ValueError):pass
 def _source(t):return {k:t[k] for k in ('taskId','resultRef')}
 def _pointer(p):return {'revision':p['revision'],'sha256':p['sha256']} if p else None
 
@@ -198,6 +200,28 @@ class RealPropAuthority:
         need(operation in ('read','asset'))
         self.planner.authorized_pin(packet['pin'] if operation=='asset' else packet)
 
+    def reference_artifact(self,pin):
+        # References come only from the exact active CREATE claim, never paths,
+        # arbitrary uploads or a current-version substitution.
+        def confirm_head():
+            if _pointer(self.writer(WRITER+'/head',{'propId':pin['propId']})['pointer']) != {
+                    'revision':pin['revision'],'sha256':pin['sha256']}:
+                raise ReferenceChanged()
+        confirm_head()
+        try:
+            manifest=self.writer(WRITER+'/read',pin)['manifest']
+            need(manifest['propId']==pin['propId'] and manifest['revision']==pin['revision'] and
+                 digest(manifest)==pin['sha256'])
+            m=manifest['media']['detail']
+            need(m['mediaType']=='image/png' and 0<m['bytes']<=MAX_IMAGE_REFERENCE and m['assetId']==m['sha256']+'.png')
+            asset=self.writer(WRITER+'/asset',{'pin':pin,'assetId':m['assetId']})
+            raw=base64.b64decode(asset['base64'],validate=True)
+            need(len(raw)==m['bytes'] and raw.startswith(b'\x89PNG\r\n\x1a\n') and
+                 asset['sha256']==m['sha256']==sha(raw))
+        except FileNotFoundError:raise ReferenceChanged() from None
+        confirm_head()
+        return {'pin':pin,'assetId':m['assetId'],'sha256':m['sha256'],'base64':asset['base64']}
+
     def details(self,run,p,rows,key):
         kind=run['request_type'];prior=self.current_source(p,kind)
         # The Planner authenticated the full payload hash. Runtime prep and the
@@ -207,7 +231,9 @@ class RealPropAuthority:
         def get(k):return self.stored(run,rows,k)
         if key==DESIGN:return None
         if key==BASE:
-            return {'design':get(DESIGN),'context':self.context(p,kind)}
+            out={'design':get(DESIGN),'context':self.context(p,kind)}
+            if kind==GENERATE and 'reference' in p:out['reference']=self.reference_artifact(p['reference'])
+            return out
         if key==MOTION:
             if kind==APPEND:
                 return {'package':p['source'],'media':prior['media']['detail'],'motionPrompt':p['prompt'],**profile}
@@ -310,6 +336,7 @@ def serve(handler):
             handler.send_header('Cache-Control','no-store');handler.end_headers();handler.wfile.write(data);return
         need(keys(packet,('claim','artifact')))
         return handler.respond(200,service.stage(packet['claim'],packet['artifact'],design))
+    except ReferenceChanged:return handler.respond(409,{'error':'WORKFLOW_PROP_REFERENCE_CHANGED'})
     except Stale:return handler.respond(409,{'error':'WORKFLOW_PROP_STAGE_SOURCE_CHANGED'})
     except Waiting:return handler.respond(409,{'error':'WORKFLOW_PROP_STAGE_INPUT_PENDING'})
     except Denied:return handler.respond(403,{'error':'WORKFLOW_PROP_STAGE_DENIED'})

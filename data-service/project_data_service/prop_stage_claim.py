@@ -43,7 +43,9 @@ def payload_valid(p,kind):
         if 'renderProfile' in p:required.add('renderProfile')
     else:required.update(('intent','designContextSha256'))
     if kind!=APPEND and 'motion' in p:required.add('motion')
+    if kind==GENERATE and 'reference' in p:required.add('reference')
     need(keys(p,required) and p['schemaVersion']==FAMILIES[kind] and p['projectId']==P and prop_id(p['propId']))
+    if 'reference' in p:need(pin(p['reference'])['propId']!=p['propId'])
     if 'source' in p:pin({'propId':p['propId'],**p['source']});need(keys(p['source'],('revision','sha256')) and p['source']['revision']<SAFE_INT-1)
     if kind==APPEND:
         if 'renderProfile' in p:need(p['renderProfile']==CANDLE_CHROMA_PROFILE and p['propId']==CANDLE_CHROMA_PROP)
@@ -69,7 +71,7 @@ def build_graph(oid,kind,p):
     else:
         design=make_id(DESIGN);base=make_id(BASE);m=p.get('motion','still')
         add(DESIGN,None,{'intent':p['intent'],'motion':m})
-        add(BASE,DESIGN,{'designTaskId':design})
+        add(BASE,DESIGN,{'designTaskId':design,**({'reference':p['reference']} if kind==GENERATE and 'reference' in p else {})})
         add(DETAIL,BASE,{'designTaskId':design,'baseTaskId':base,'sourceTaskId':base})
         add(PIXEL,DETAIL,{'designTaskId':design,'detailTaskId':make_id(DETAIL)})
         if m=='subtle':
