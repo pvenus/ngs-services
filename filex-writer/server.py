@@ -244,7 +244,7 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     if audio and type(target) is dict and target.get('root')=='canonical-files/binari/audio':
                         return self.reply(200,workflow_audio.remove_result(command))
                     if cinematic and (inventory or (type(target) is dict and target.get('root')=='canonical-files/binari/cinematics')):
-                        from cinematic_target_delete import CinematicTargetDelete
+                        from media_store import CinematicTargetDelete
                         try:
                             deleter=CinematicTargetDelete(store)
                             if inventory:

@@ -42,8 +42,6 @@ CLOSURE = {"Dockerfile", *FILES}
 PROP_FILES = ("prop_package_contract.py", "prop_package_store.py")
 PROP_CLOSURE = CLOSURE | set(PROP_FILES)
 UNIFIED_CLOSURE = PROP_CLOSURE | {'scope_registry.py', 'scopes.json'}
-CINEMATIC_DELETE_MODULE = 'cinematic_target_delete.py'
-UNIFIED_CINEMATIC_CLOSURE = UNIFIED_CLOSURE | {CINEMATIC_DELETE_MODULE}
 # This discriminator binds smoke and target kind, not the registry itself.
 # The exact registry blob is always separately covered by the source proof.
 UNIFIED_CAP_DIGEST = digest(b'ngs.filex-writer-scopes.v1')
@@ -69,13 +67,13 @@ def closure(repo, head):
         path = path.decode()
         need(path.startswith(PREFIX), "FILEX_SOURCE_SCOPE_INVALID")
         name = path.removeprefix(PREFIX)
-        if name not in UNIFIED_CINEMATIC_CLOSURE:
+        if name not in UNIFIED_CLOSURE:
             continue
         mode, kind, oid = flags.decode().split()
         need(mode == "100644" and kind == "blob" and matches(SHA, oid)
              and name not in names, "FILEX_SOURCE_SCOPE_INVALID")
         names[name] = oid
-    need(set(names) in (CLOSURE, PROP_CLOSURE, UNIFIED_CLOSURE, UNIFIED_CINEMATIC_CLOSURE), "FILEX_SOURCE_MISSING")
+    need(set(names) in (CLOSURE, PROP_CLOSURE, UNIFIED_CLOSURE), "FILEX_SOURCE_MISSING")
     blobs = {}
     for name, oid in names.items():
         size = int(git(repo, "cat-file", "-s", oid))
@@ -85,10 +83,10 @@ def closure(repo, head):
         if name.endswith(".py"):
             compile(blobs[name], name, "exec", dont_inherit=True)
     # A changed Dockerfile, privilege assumption, or runtime file requires source review.
-    if set(blobs) in (UNIFIED_CLOSURE, UNIFIED_CINEMATIC_CLOSURE):
+    if set(blobs) == UNIFIED_CLOSURE:
         from filex_unified_runtime import registry
         registry(blobs['scopes.json'])
-        need(blobs['Dockerfile']==dockerfile('python:3.12-slim',unified=True,cinematic_delete=CINEMATIC_DELETE_MODULE in blobs),'FILEX_DOCKERFILE_DRIFT')
+        need(blobs['Dockerfile']==dockerfile('python:3.12-slim',unified=True),'FILEX_DOCKERFILE_DRIFT')
         return root, blobs
     scoped = set(blobs) == PROP_CLOSURE
     need(scoped == (declared_capabilities(blobs["server.py"]) == PROP_CAP_DIGEST), "FILEX_SOURCE_CAPABILITIES_INVALID")
@@ -96,13 +94,10 @@ def closure(repo, head):
     return root, blobs
 
 
-def dockerfile(base, *, prop=False, unified=False, cinematic_delete=False):
+def dockerfile(base, *, prop=False, unified=False):
     if unified:
-        files=FILES[1:] + PROP_FILES
-        if cinematic_delete:
-            files=(files[0],CINEMATIC_DELETE_MODULE,*files[1:])
         return (f"FROM {base}\nWORKDIR /app\n"
-                f"COPY server.py scope_registry.py scopes.json {' '.join(files)} /app/\n"
+                f"COPY server.py scope_registry.py scopes.json {' '.join(FILES[1:] + PROP_FILES)} /app/\n"
                 "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
                 "USER 1000:1000\n"
                 'CMD ["python", "-B", "/app/server.py"]\n').encode()
@@ -418,8 +413,7 @@ def stage(github, repo, control, base, docker):
         with tempfile.TemporaryDirectory(prefix=".filex-source-", dir=root) as temp:
             context = Path(temp) / "context"
             context.mkdir(mode=0o700)
-            sources["Dockerfile"] = dockerfile(base, prop=profile==PROP_CAP_DIGEST, unified=profile==UNIFIED_CAP_DIGEST,
-                                                   cinematic_delete=CINEMATIC_DELETE_MODULE in sources)
+            sources["Dockerfile"] = dockerfile(base, prop=profile==PROP_CAP_DIGEST, unified=profile==UNIFIED_CAP_DIGEST)
             for name, data in sources.items():
                 p = context / name
                 p.write_bytes(data)
