@@ -19,7 +19,7 @@ import {unsupportedReason} from './pending-unsupported.mjs';
 import {propTypes,propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propRegeneratePayloadSchema,propAnimationType,propAnimationPayloadSchema} from './prop-generate-envelope.mjs';
 import {propImageType,propImagePayloadSchema,propImageInvalid,propImageUnavailable} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic,cinematicSequenceType,cinematicSequencePayloadSchema,validateCinematicSequence,cinematicLegacyRetired,cinematicPlaybackType,cinematicPlaybackStale,cinematicPlaybackRequestPayloadSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic,cinematicSequenceType,cinematicSequencePayloadSchema,validateCinematicSequence,cinematicLegacyRetired,cinematicPlaybackType,cinematicPlaybackStale,cinematicPlaybackRequestPayloadSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,validBackgroundAnimationLoop,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
 
 const version='2025-06-18';
 const maxBody=96*1024;
@@ -351,6 +351,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
    if(cinematicEnabled!==true||typeof cinematicOperationReadiness!=='function'||await cinematicOperationReadiness(type)!==true)
     throw Error(cinematicUnavailable);
    if(type===backgroundAnimationType){
+    if(!validBackgroundAnimationLoop(payload))throw Error(cinematicInvalid);
     if(site||typeof backgroundAnimationReferencesReadiness!=='function')throw Error(cinematicUnavailable);
     const pin=await backgroundAnimationReferencesReadiness(payload);
     if(pin!==true)throw Error(pin===null?cinematicSourceMissing:cinematicUnavailable);

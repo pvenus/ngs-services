@@ -90,6 +90,14 @@ export const cinematicSourceType='cinematic.source.generate',cinematicSourceRequ
 export const backgroundSourceType='background.source.generate',backgroundSourceRequestSchema='ngs.background-source-generate.v1';
 export const backgroundPixelType='background.pixel.workflow',backgroundPixelSchema='ngs.background-pixel-workflow.v1';
 export const backgroundAnimationType='background.animation.workflow',backgroundAnimationSchema='ngs.background-animation-workflow.v1';
+// Deliberately checked at intake only: legacy requests must remain readable
+// and allowed to settle, but new background requests are ambient loops.
+export const validBackgroundAnimationLoop=p=>{
+ const v=p?.playback;
+ return typeof p?.motionPrompt==='string'&&p.motionPrompt.startsWith('Continuous seamless ambient loop, static camera. ')&&
+  validCinematicPlayback(v)&&v.durationFrames===264&&v.speedCurve.length===1&&v.speedCurve[0].rate===1/3&&
+  v.cameraCurve.length===1&&v.cameraCurve[0].zoom===1&&v.cameraCurve[0].x===.5&&v.cameraCurve[0].y===.5;
+};
 export const backgroundAnimationKeys={cinematic:'background_animation_cinematic',pixel:'background_animation_pixel'};
 export const cinematicArchiveType='cinematic.sequences.remove',cinematicArchiveRequestSchema='ngs.cinematic-sequences-remove.v1';
 export const propAnimationRemoveType='prop.animation.remove',propAnimationRemoveRequestSchema='ngs.prop-animation-remove.v1';

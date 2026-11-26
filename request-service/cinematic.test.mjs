@@ -47,8 +47,8 @@ test('one locally submitted background animation request pins both references be
  const {backgroundAnimationType:type,backgroundAnimationSchema:schema}=await import('./cinematic-envelope.mjs');
  const parent=await mkdtemp(join(await realpath(tmpdir()),'background-animation-rs-'));t.after(()=>rm(parent,{recursive:true,force:true}));
  const pixel='b'.repeat(64),refs={pixel,cinematic:'a'.repeat(64)};
- const payload={schemaVersion:schema,projectId:'binari',backgroundSha256:pixel,references:refs,motionPrompt:'등불이 흔들린다',
-  playback:{durationFrames:135,speedCurve:[{frame:0,rate:1/3}],cameraCurve:[{frame:0,x:.5,y:.5,zoom:1}]}};
+ const payload={schemaVersion:schema,projectId:'binari',backgroundSha256:pixel,references:refs,motionPrompt:'Continuous seamless ambient loop, static camera. Lantern flame keeps flickering.',
+  playback:{durationFrames:264,speedCurve:[{frame:0,rate:1/3}],cameraCurve:[{frame:0,x:.5,y:.5,zoom:1}]}};
  let supported=false,exists=false;
  const server=createRequestService({directory:join(parent,'inbox'),cinematicEnabled:true,
   cinematicOperationReadiness:ty=>ty===type&&supported,
@@ -63,6 +63,7 @@ test('one locally submitted background animation request pins both references be
  const packet={sourceId:'local',requestType:type,idempotencyKey:'fixture-background-pair',payload};
  assert.equal((await call('request_submit',packet)).structuredContent.error,cinematicUnavailable);
  supported=true;
+ assert.equal((await call('request_submit',{...packet,payload:{...payload,motionPrompt:'A leaf stops.'}})).structuredContent.error,'NGS_CINEMATIC_PAYLOAD_INVALID');
  assert.equal((await call('request_submit',packet)).structuredContent.error,cinematicSourceMissing);
  exists=true;
  assert.equal((await call('request_submit',packet)).structuredContent.status,'registered');
