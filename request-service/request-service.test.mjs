@@ -810,3 +810,30 @@ test('basic combat opt-in registers as distinct from unsupported historic combat
  const rows=(await workflow({})).result.structuredContent.requests;
  assert.deepEqual(rows[0].payload,request);
 });
+
+test('pinned prop file.delete advertises and admits exactly one folder only when PDS is ready',async t=>{
+ const {directory,path}=folder(t);
+ let eligible=false;
+ const service=createRequestService({directory,fileDeleteReadiness:async()=>eligible});
+ await new Promise(resolve=>service.listen(0,host,resolve));
+ t.after(()=>new Promise(resolve=>service.close(resolve)));
+ const rpc=async(method,params={})=>await (await fetch('http://'+host+':'+service.address().port+'/mcp',{
+  method:'POST',headers:{Accept:'application/json, text/event-stream','Content-Type':'application/json'},
+  body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})})).json();
+ const submit=payload=>rpc('tools/call',{name:'request_submit',arguments:{sourceId:'local',requestType:'file.delete',idempotencyKey:'one-prop',payload}});
+ const visible=async()=>(await rpc('tools/list')).result.tools[0].inputSchema.properties.requestType.enum.includes('file.delete');
+ const target={root:'canonical-files/binari/props',path:'lantern',kind:'directory'};
+ const expected={revision:2,sha256:'a'.repeat(64)};
+ const body={schemaVersion:'ngs.file-delete.v1',projectId:'binari',target,expected};
+ assert.equal(await visible(),false);
+ assert.match(JSON.stringify(await submit(body)),/NGS_FILE_DELETE_UNAVAILABLE/);
+ assert.equal(read(path).length,0);
+ eligible=true;
+ assert.equal(await visible(),true);
+ for(const malformed of [{...body,target:[target]},{...body,target:{...target,path:'../lantern'}},{...body,target:{...target,path:'lantern\n'}},
+  {...body,target:{...target,root:'canonical-files/binari/npcs'}},{...body,expected:null},{...body,targets:[target]}])
+   assert.match(JSON.stringify(await submit(malformed)),/NGS_FILE_DELETE_PAYLOAD_INVALID/);
+ const accepted=await submit(body);
+ assert.equal(accepted.result.structuredContent.status,'registered');
+ assert.equal(read(path).length,1);
+});

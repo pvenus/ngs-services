@@ -10,6 +10,8 @@ from server import Conflict
 
 SEGMENT=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',re.ASCII)
 OPERATION=re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,179}',re.ASCII)
+class PinnedDeleteRejected(Conflict):pass
+
 NOFOLLOW=os.O_NOFOLLOW
 DIRFD=os.O_RDONLY|os.O_DIRECTORY|NOFOLLOW
 

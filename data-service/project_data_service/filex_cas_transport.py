@@ -7,6 +7,7 @@ from .filex_writer_binding import scoped_path
 CONFIG=Path.home()/'Library/Application Support/NPCGen/pds-filex-cas.json'
 class AudioPrewriteRejected(ValueError):pass
 class PresetPrewriteRejected(ValueError):pass
+class PinnedDeleteRejected(ValueError):pass
 
 class FilexCASTransport:
  def __init__(self,config=None):
@@ -42,6 +43,10 @@ class FilexCASTransport:
     try:failure=json.loads(e.read(513))
     except (ValueError,OSError,HTTPException):failure=None
     if failure=={'error':'WORKFLOW_PRESET_REJECTED_BEFORE_WRITE'}:raise PresetPrewriteRejected('FILEX_PRESET_SNAPSHOT_CHANGED')from None
+   if e.code==409 and method=='POST' and path=='/v1/storage/delete-target':
+    try:failure=json.loads(e.read(513))
+    except (ValueError,OSError,HTTPException):failure=None
+    if failure=={'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'}:raise PinnedDeleteRejected()from None
    if e.code==409:raise ValueError('KNOWLEDGE_SOURCE_CHANGED')from None
    raise ValueError('FILEX_CAS_HTTP_'+str(e.code))from None
   require(asset_read or len(raw)<=limit,'FILEX_CAS_RESPONSE_LIMIT');return json.loads(raw)

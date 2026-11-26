@@ -220,10 +220,10 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         return
                     return self.reply(200,result)
                 if url.path=='/v1/storage/delete-target':
-                    from single_target_delete import SingleTargetDelete
+                    from single_target_delete import PinnedDeleteRejected,SingleTargetDelete
                     ordinary=isinstance(single_target_delete,SingleTargetDelete) and single_target_delete.store is store
                     audio=workflow_audio_delete is True and workflow_audio is not None and workflow_audio.store is store
-                    if not (ordinary or audio):
+                    if not (ordinary or audio or workflow_props is store):
                         return self.reply(404,{'error':'NOT_FOUND'})
                     headers=self.headers
                     if (self.command!='POST' or url.query or headers.get('Origin') is not None or
@@ -238,6 +238,9 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     target=command.get('target',{}) if type(command) is dict else {}
                     if audio and type(target) is dict and target.get('root')=='canonical-files/binari/audio':
                         return self.reply(200,workflow_audio.remove_result(command))
+                    if workflow_props is store:
+                        try:return self.reply(200,workflow_props.remove_package(command))
+                        except PinnedDeleteRejected:return self.reply(409,{'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'})
                     if not ordinary:return self.reply(404,{'error':'NOT_FOUND'})
                     return self.reply(200,single_target_delete.remove(command))
                 if url.path in ('/v1/workflow/animation','/v1/workflow/animation/read',

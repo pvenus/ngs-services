@@ -1,6 +1,7 @@
 import {createServer} from 'node:http';
 import {pathToFileURL} from 'node:url';
 import {openOfficialInbox,validateInboxPath} from './official-inbox.mjs';
+import {fileDeleteReady} from './file-delete-readiness.mjs';
 import {requestMcp} from './request-mcp.mjs';
 import {startServiceHeartbeat} from './service-heartbeat.mjs';
 import {configureSpaceMachineReader} from './space-machine-reader.mjs';
@@ -15,11 +16,11 @@ export function configuration(env){
  const readSpaceRequest=configureSpaceMachineReader(env);
  return {directory,...(readSpaceRequest?{readSpaceRequest}:{})};
 }
-export function createRequestService({directory,readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=false,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness,cinematicOperationReadiness}){
+export function createRequestService({directory,readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=false,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness,cinematicOperationReadiness,fileDeleteReadiness}){
  if(readSpaceRequest!==undefined&&typeof readSpaceRequest!=='function')throw Error('REQUEST_SPACE_INVALID');
  const inbox=openOfficialInbox(directory,{readSpaceRequest,propImageEnabled,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propMutationsEnabled,cinematicEnabled});
  const server=createServer({headersTimeout:15000,requestTimeout:15000},(req,res)=>{
-  void requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled,propImageReadiness,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propAnimationReadiness,propMutationsEnabled,propPackageReadiness,cinematicEnabled,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness,cinematicOperationReadiness}).catch(()=>{
+  void requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled,propImageReadiness,propGenerateEnabled,propGenerateMotionEnabled,propAnimationEnabled,propAnimationReadiness,propMutationsEnabled,propPackageReadiness,cinematicEnabled,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness,cinematicOperationReadiness,fileDeleteReadiness}).catch(()=>{
    if(res.headersSent)return res.destroy();
    const raw=JSON.stringify({error:'OFFICIAL_REQUEST_REGISTER_FAILED'});
    res.writeHead(503,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}).end(raw);
@@ -34,7 +35,7 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
    propGenerateEnabled:true,propMutationsEnabled:true,propAnimationEnabled:true,
    cinematicEnabled:true,cinematicLegacyAdmission:false,cinematicSequenceReadiness:cinematicSequenceReady,cinematicSequenceSourceReadiness:cinematicSequenceSourceReady,
    cinematicPlaybackReadiness:cinematicPlaybackReady,cinematicPlaybackTargetReadiness:cinematicPlaybackTargetReady,cinematicOperationReadiness:cinematicOperationReady,
-   propAnimationReadiness:propAnimationReady,propPackageReadiness:propPackageReady});
+   propAnimationReadiness:propAnimationReady,propPackageReadiness:propPackageReady,fileDeleteReadiness:fileDeleteReady});
   server.on('error',err=>{
    console.error(err.code==='EADDRINUSE'?'REQUEST_SERVICE_PORT_IN_USE':'REQUEST_SERVICE_START_FAILED');
    server.close();

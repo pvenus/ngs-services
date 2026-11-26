@@ -677,7 +677,11 @@ def serve(storage_root: Path, host: str, port: int):
     if concept_folder_delete not in ('0','1'):raise ValueError('WORKFLOW_CONCEPT_FOLDER_DELETE_OPT_IN')
     audio_delete=os.environ.get('PDS_WORKFLOW_AUDIO_DELETE','0')
     if audio_delete not in ('0','1'):raise ValueError('WORKFLOW_AUDIO_DELETE_OPT_IN')
-    if npc_folder_delete=='1' or concept_folder_delete=='1' or audio_delete=='1':
+    # Only owner-local hosts with the existing managed prop workflow opt in.
+    prop_folder_delete=os.getenv('PDS_WORKFLOW_PROP_FOLDER_DELETE',
+        '1' if host=='127.0.0.1' and os.getenv('PDS_WORKFLOW_PROP_STATIC')=='1' else '0')
+    if prop_folder_delete not in ('0','1'):raise ValueError('WORKFLOW_PROP_FOLDER_DELETE_OPT_IN')
+    if npc_folder_delete=='1' or concept_folder_delete=='1' or audio_delete=='1' or prop_folder_delete=='1':
         from .single_target_delete import SingleTargetDelete
         roots={}
         if npc_folder_delete=='1':
@@ -693,6 +697,13 @@ def serve(storage_root: Path, host: str, port: int):
             if not hasattr(server,'workflow_delete'):raise ValueError('WORKFLOW_AUDIO_DELETE_PLANNER_PIN_REQUIRED')
             from .filex_writer_binding import writer
             roots[ROOT]=storage_provider(app.concept,planner,writer_factory=lambda:writer('audio'))
+        if prop_folder_delete=='1':
+            from .workflow_file_delete import PROP_ROOT,storage_provider
+            from .filex_writer_binding import writer
+            if not hasattr(server,'workflow_delete'):raise ValueError('WORKFLOW_PROP_DELETE_PLANNER_PIN_REQUIRED')
+            def prop_delete_ready():
+                with writer('props') as conn:return conn.capabilities().get('workflowPinnedPropFolderDeleteV1') is True
+            roots[PROP_ROOT]=storage_provider(planner,lambda:writer('props'),prop_delete_ready)
         server.single_target_delete=SingleTargetDelete(roots)
     representative_enabled=os.environ.get('PDS_WORKFLOW_PLAN_REPRESENTATIVE','0')
     if representative_enabled not in ('0','1'):raise ValueError('WORKFLOW_REPRESENTATIVE_OPT_IN')

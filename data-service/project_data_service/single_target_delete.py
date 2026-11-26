@@ -4,6 +4,7 @@ import re
 import sqlite3
 
 from .database import DataError
+from .filex_cas_transport import PinnedDeleteRejected
 
 PATH='/v1/storage/delete-target'
 SCHEMA='workflow.single-target-delete.v1'
@@ -23,7 +24,7 @@ def target_value(target):
 @dataclass(frozen=True)
 class AuthorizedStorage:
     # authorize(claim) is a caller-owned context manager yielding an exact
-    # {operationId,target}. The planner resolver belongs outside this module.
+    # {operationId,target}, optionally with an operation-specific expected pin. The planner resolver belongs outside this module.
     authorize: object
     # execute(command) returns the full verified outcome. A domain can combine
     # its own bookkeeping and the generic writer move behind this port.
@@ -52,7 +53,7 @@ class SingleTargetDelete:
         if provider is None:raise ClaimDenied()
         if provider.ready() is not True:raise ValueError('storage delete root unavailable')
         with provider.authorize(envelope['claim']) as binding:
-            if (type(binding)is not dict or set(binding)!={'operationId','target'} or
+            if (type(binding)is not dict or set(binding) not in ({'operationId','target'},{'operationId','target','expected'}) or
                 binding['target']!=target or type(binding['operationId'])is not str or not OPERATION.fullmatch(binding['operationId'])):
                 raise ClaimDenied()
             started.append(True)
@@ -77,6 +78,7 @@ def serve(handler):
         if handler.command=='GET':return handler.respond(200,svc.capability())
         handler.connection.settimeout(5)
         return handler.respond(200,svc.run(handler.read_json(max_body=8192),started))
+    except PinnedDeleteRejected:return handler.respond(409,{'error':'STORAGE_DELETE_STALE_TARGET'})
     except ClaimDenied:
         code,error=(409,'STORAGE_DELETE_NOT_CONFIRMED') if started else (403,'STORAGE_DELETE_CLAIM_DENIED')
         return handler.respond(code,{'error':error})

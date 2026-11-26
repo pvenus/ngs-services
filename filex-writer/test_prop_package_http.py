@@ -1,6 +1,7 @@
 """Actual sterile PDS -> authenticated Filex HTTP -> filesystem pointer/byte readback."""
 import base64,copy,json,os,struct,tempfile,threading,unittest,zlib
 from contextlib import contextmanager
+import sqlite3
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
@@ -109,6 +110,7 @@ class PropFixture:
         dummy=ConceptStore(p/'unrelated')
         filex=self.launch(handler(dummy,token,workflow_props=self.props))
         config={'schemaVersion':'pds-filex-cas.v1','projectId':'binari','enabled':True,'endpoint':filex,'tokenFile':str(key)}
+        self.delete_config={**config,'endpoint':self.launch(handler(self.props,token,workflow_props=self.props))}
         self.authority=FixtureAuthority()
         self.filex_writer=bound_prop_writer(lambda:FilexCASTransport(config));self.handler=PDS
         self.pds=self.launch(PDS,workflow_prop_package=WorkflowPropPackage(self.authority,self.filex_writer))
@@ -157,6 +159,73 @@ class PropHTTP(PropFixture,unittest.TestCase):
         self.publish(make('d','regenerate',a,color=34),expected=409)
         self.assertEqual(self.current()['revision'],3)
         self.api('/head',{'propId':PROP},headers={'Origin':'https://foreign.example'},expected=403)
+    def test_pinned_folder_quarantines_animations_preserves_legacy_and_rejects_stale(self):
+        from single_target_delete import PinnedDeleteRejected
+        a=make('a');self.publish(a)
+        b=make('b','append-animation',a['manifest'],color=50);self.publish(b)
+        def command(m):
+            pin=self.pin(m)
+            return {'operationId':'workflow.task.'+'c'*64,
+                    'target':{'root':'canonical-files/binari/props','path':PROP,'kind':'directory'},
+                    'expected':{k:pin[k] for k in ('revision','sha256')}}
+        with self.assertRaises(PinnedDeleteRejected):self.props.remove_package(command(a['manifest']))
+        self.assertEqual(self.current()['revision'],2)
+        receipt=self.props.remove_package(command(b['manifest']))
+        self.assertTrue(receipt['targetAbsent'])
+        self.assertIsNone(self.current())
+        self.assertTrue((self.props.root/'.storage-quarantine'/receipt['recoveryId']/'target'/'releases'/'2'/'manifest.json').is_file())
+        self.assertEqual(self.props.remove_package(command(b['manifest'])),receipt)
+        self.assertEqual((self.legacy/'old.png').read_bytes(),b'original')
+        self.publish(make('d',color=65))
+        with self.assertRaises(PinnedDeleteRejected):self.props.remove_package(command(b['manifest']))
+        self.assertEqual(self.current()['revision'],1)
+
+    def test_standalone_delete_authority_http_binds_task_target_and_pin(self):
+        from project_data_service.single_target_delete import SingleTargetDelete,PATH as delete_path
+        from project_data_service.workflow_file_delete import PROP_ROOT, storage_provider
+        class Planner:
+            @contextmanager
+            def snapshot(own):
+                yield db
+        db=sqlite3.connect(':memory:',check_same_thread=False);db.row_factory=sqlite3.Row
+        self.addCleanup(db.close)
+        db.execute('CREATE TABLE workflow_runs(official_request_id,project_id,request_type,schema_version,state,reason,payload,payload_sha256,registered_at)')
+        db.execute('CREATE TABLE workflow_tasks(official_request_id,task_id,task_key,task_type,worker_type,depends_on_task_id,task_input,status,result_ref,updated_at)')
+        transport=lambda:FilexCASTransport(self.delete_config)
+        svc=SingleTargetDelete({PROP_ROOT:storage_provider(Planner(),transport,lambda:True)})
+        endpoint=self.launch(PDS,single_target_delete=svc)+delete_path
+        a=make('a');self.publish(a)
+        b=make('b','append-animation',a['manifest'],color=54);self.publish(b)
+        def claim(label,manifest):
+            oid='request.official.'+label*64
+            task='workflow.task.'+digest([oid,'file_delete'])
+            target={'root':PROP_ROOT,'path':PROP,'kind':'directory'}
+            expected={k:v for k,v in self.pin(manifest).items() if k!='propId'}
+            data=wire({'schemaVersion':'ngs.file-delete.v1','projectId':'binari','target':target,'expected':expected})
+            db.execute('INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,?,?)',
+                (oid,'binari','file.delete','ngs.file-delete.v1','planned',None,data.decode(),sha(data),1))
+            db.execute('INSERT INTO workflow_tasks VALUES(?,?,?,?,?,?,?,?,?,?)',
+                (oid,task,'file_delete','file.delete','file',None,wire({'target':target,'expected':expected}).decode(),'running',None,2))
+            db.commit()
+            return {'target':target,'claim':{'officialRequestId':oid,'taskId':task,'payloadSha256':sha(data),
+                                           'projectId':'binari','claimStamp':2}}
+        def send(packet,status):
+            req=Request(endpoint,data=wire(packet),headers={'Content-Type':'application/json'},method='POST')
+            try:
+                with urlopen(req,timeout=7) as r:self.assertEqual(r.status,status);return json.load(r)
+            except HTTPError as e:
+                with e:self.assertEqual(e.code,status);return json.load(e)
+        stale=claim('c',a['manifest'])
+        self.assertEqual(send(stale,409),{'error':'STORAGE_DELETE_STALE_TARGET'})
+        live=claim('d',b['manifest'])
+        self.assertEqual(send({**live,'target':{**live['target'],'path':'legacy-lamp'}},403),
+                         {'error':'STORAGE_DELETE_CLAIM_DENIED'})
+        done=send(live,200)
+        self.assertTrue(done['targetAbsent'])
+        self.assertEqual(send(live,200),done)
+        self.assertIsNone(self.current())
+        self.assertTrue((self.legacy/'old.png').is_file())
+
     def test_interrupted_atomic_head_is_invisible_then_exact_retry_and_cas(self):
         a=make('a');self.publish(a)
         b=make('b','append-animation',a['manifest'],color=50)

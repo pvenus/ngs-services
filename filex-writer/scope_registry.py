@@ -42,7 +42,7 @@ _NPC_POST={'/v1/asset','/v1/batch','/v1/cas','/v1/create-character','/v1/restore
  '/v1/workflow/portrait-combat-direction','/v1/workflow/portrait-combat-reference'}
 _AUDIO_POST={'/v1/workflow/audio','/v1/workflow/audio/read','/v1/workflow/audio-separate',
  '/v1/workflow/audio-separate/read','/v1/workflow/audio-separate/asset','/v1/storage/delete-target'}
-_PROPS_POST={'/v1/workflow/props','/v1/workflow/props/read','/v1/workflow/props/head','/v1/workflow/props/asset'}
+_PROPS_POST={'/v1/workflow/props','/v1/workflow/props/read','/v1/workflow/props/head','/v1/workflow/props/asset','/v1/storage/delete-target'}
 _EXACT=frozenset()
 _ALLOW=MappingProxyType({
  'concept':(frozenset(_CONCEPT_GET),frozenset(_CONCEPT_POST)),
@@ -100,7 +100,7 @@ def _special_caps(profile,folder):
     entries={
        'media':{'mediaArtifactsV1':True},
        'audio':{'workflowAudioResultV1':True,'workflowAudioSeparateV1':True,'workflowAudioDeleteV1':True},
-       'props':{'workflowPropPackageV1':True,'workflowPropAnimationRemoveV1':True},
+       'props':{'workflowPropPackageV1':True,'workflowPinnedPropFolderDeleteV1':True,'workflowPropAnimationRemoveV1':True},
        'cinematics':{'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True,'workflowCinematicSourceV1':True,'workflowBackgroundSourceV1':True,'workflowCinematicSequenceRemoveV1':True},
     }
     return {'namespace':CANONICAL_NAMESPACE+folder+'/',**entries[profile]} if profile in entries else None

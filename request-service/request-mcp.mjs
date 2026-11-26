@@ -1,3 +1,4 @@
+import {fileDeleteType,fileDeleteSchema,propDeleteRoot} from './file-delete-envelope.mjs';
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
 import {cancelTool,basicSchemaVersion,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema,conceptCategoryAddIdPattern,conceptCategoryIdPattern,conceptCategoryGroupIdPattern} from './concept-category-envelope.mjs';
@@ -25,6 +26,7 @@ const maxBody=96*1024;
 const known={
  [cinematicInvalid]:400,[cinematicUnavailable]:503,[cinematicSourceMissing]:404,[cinematicLegacyRetired]:422,[cinematicPlaybackStale]:409,
  [propGenerateInvalid]:400,[propGenerateUnavailable]:503,[propGenerateMotionUnavailable]:503,[propMutationUnavailable]:503,
+ NGS_FILE_DELETE_PAYLOAD_INVALID:400,NGS_FILE_DELETE_UNAVAILABLE:503,
  [propImageInvalid]:400,[propImageUnavailable]:503,
  REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
  NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID:400,NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID:400,NGS_AUDIO_GENERATE_PAYLOAD_INVALID:400,NGS_AUDIO_DELETE_PAYLOAD_INVALID:400,
@@ -95,6 +97,12 @@ const audioPayload={type:'object',properties:{
   {if:{properties:{conceptId:{const:audioDirectConcept}}},then:{required:['conceptText']},else:{not:{required:['conceptText']}}},
   {if:{required:['lyricsRequest']},then:{properties:{text:{const:''},durationSeconds:{type:'null'}}}},
  ]};
+const fileDeletePayload={type:'object',properties:{
+ schemaVersion:{const:fileDeleteSchema},projectId:{const:'binari'},target:{type:'object',properties:{
+ root:{const:propDeleteRoot},path:{type:'string',pattern:'^[a-z0-9]+(?:[-._][a-z0-9]+)*$',minLength:2,maxLength:80},
+ kind:{const:'directory'}},required:['root','path','kind'],additionalProperties:false},
+ expected:{type:'object',properties:{revision:{type:'integer',minimum:1,maximum:2147483647},sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['revision','sha256'],additionalProperties:false},
+ },required:['schemaVersion','projectId','target','expected'],additionalProperties:false};
 const audioDeletePayload={type:'object',properties:{
  schemaVersion:{const:audioDeleteSchema},projectId:{const:'binari'},officialRequestId:{type:'string',pattern:audioOfficialIdPattern,minLength:81,maxLength:81},
  },required:['schemaVersion','projectId','officialRequestId'],additionalProperties:false};
@@ -222,7 +230,7 @@ function addPropFamily(tool,kind,payload){
   requestType:{enum:[...tool.inputSchema.properties.requestType.enum,kind]}},
   oneOf:[...tool.inputSchema.oneOf,{properties:{requestType:{const:kind},payload}}]}};
 }
-export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission=true,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness,cinematicOperationReadiness}={}){
+export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission=true,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness,cinematicOperationReadiness,fileDeleteReadiness}={}){
  if(!allowed(req,req.socket.localPort))return send(res,403,{error:'REQUEST_MCP_LOOPBACK_REQUIRED'});
  if(req.url!=='/mcp')return send(res,404,{error:'NOT_FOUND'});
  if(req.method!=='POST')return send(res,405,{error:'REQUEST_MCP_POST_ONLY'},{Allow:'POST'});
@@ -252,9 +260,11 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
  const playbackReady=async()=>cinematicEnabled===true&&typeof cinematicPlaybackReadiness==='function'&&await cinematicPlaybackReadiness()===true;
  const packageReady=async()=>propGenerateEnabled===true&&(!propPackageReadiness||await propPackageReadiness()===true);
  const animationReady=async()=>propAnimationEnabled===true&&(!propAnimationReadiness||await propAnimationReadiness()===true);
+ const deleteReady=async()=>typeof fileDeleteReadiness==='function'&&await fileDeleteReadiness()===true;
  const ready=async()=>propImageEnabled===true&&(!propImageReadiness||await propImageReadiness()===true);
  if(method==='tools/list'&&!Object.keys(params).length){
   let submit=await ready()?addPropImage(tool):tool;
+  if(await deleteReady())submit=addPropFamily(submit,fileDeleteType,fileDeletePayload);
   if(cinematicLegacyAdmission&&await cinematicReady())submit=addPropFamily(submit,cinematicType,cinematicPayloadSchema);
   if(await sequenceReady())submit=addPropFamily(submit,cinematicSequenceType,cinematicSequencePayloadSchema);
   if(await playbackReady())submit=addPropFamily(submit,cinematicPlaybackType,cinematicPlaybackRequestPayloadSchema);
@@ -283,6 +293,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
   return rpcError(res,id,-32602,'Unknown tool or invalid tool call');
  try{
   const args=site?await verifiedSpaceRequest(params.arguments,readSpaceRequest):params.arguments;
+  if((site||params.name===submitTool)&&args?.requestType===fileDeleteType&&!await deleteReady())throw Error('NGS_FILE_DELETE_UNAVAILABLE');
   if((site||params.name===submitTool)&&args?.requestType===propImageType&&propImageReadiness&&!await ready())throw Error(propImageUnavailable);
   if((site||params.name===submitTool)&&propTypes.includes(args?.requestType)&&!await packageReady())throw Error(propGenerateUnavailable);
   if((site||params.name===submitTool)&&args?.requestType===propAnimationType&&!await animationReady())throw Error(propGenerateMotionUnavailable);

@@ -1,3 +1,4 @@
+import {fileDeleteType,fileDeleteTaskKey,validateFileDelete} from './file-delete-envelope.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {canonical,sha,validateOneStop,isReplaceSchema,isSelectionSchema,isPoseSelectionSchema,isBasicSchema,motionSelectionSlot,motionPoseRegistry,motionSelectionPoses} from './envelope.mjs';
 
@@ -37,7 +38,7 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,...allCinematicTypes,...propTypes].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,fileDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,...allCinematicTypes,...propTypes].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
  const payload=(Object.hasOwn(propValidator,row.requestType)?propValidator[row.requestType]:row.requestType===propImageType?validatePropImage:
@@ -47,6 +48,7 @@ export function checkRow(row){
   extraCinematicTypes.includes(row.requestType)?((p,project)=>validateExtraCinematic(p,project,row.requestType)):
   row.requestType===npcAnimationRegenerateType?validateNpcAnimationRegenerate:
   row.requestType===motion2DRequestType?validateMotion2D:
+  row.requestType===fileDeleteType?validateFileDelete:
   row.requestType===audioDeleteType?validateAudioDelete:
   row.requestType===audioSeparateType?validateAudioSeparate:
   row.requestType===audioRequestType?validateAudioGenerate:
@@ -62,6 +64,12 @@ export function buildPlan(row,{pixelPortraits=true}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true){
+ if(row.requestType===fileDeleteType){
+  const {target,expected}=JSON.parse(payload);
+  ensure(target.path.split('/').at(-1)!==row.officialRequestId,'NGS_FILE_DELETE_PAYLOAD_INVALID');
+  return {payload,tasks:[{id:'workflow.task.'+sha(canonical([row.officialRequestId,fileDeleteTaskKey])),
+   key:fileDeleteTaskKey,type:fileDeleteType,workerType:'file',dependsOn:null,input:{target,expected}}]};
+ }
  if(extraCinematicTypes.includes(row.requestType)){
   const cfg=extraCinematicRequests[row.requestType],input=Object.fromEntries(cfg.fields.map(k=>[k,row.payload[k]]));
   return {payload,tasks:[{id:'workflow.task.'+sha(canonical([row.officialRequestId,cfg.key])),
@@ -283,6 +291,7 @@ const failurePolicies=new Map([
  [cinematicType,hasExhaustedSingleTask],
  [cinematicSequenceType,hasExhaustedSingleTask],
  [cinematicPlaybackType,hasExhaustedSingleTask],
+ [fileDeleteType,hasExhaustedSingleTask],
  ...extraCinematicTypes.map(type=>[type,hasExhaustedSingleTask]),
  ...propTypes.map(type=>[type,hasExhaustedPropGraph]),
 ]);

@@ -1,0 +1,16 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {buildPlan} from './planner.mjs';
+import {canonical,sha} from './envelope.mjs';
+test('pinned prop delete plans one physical folder, no grouped or stale counterpart',()=>{
+ const target={root:'canonical-files/binari/props',path:'lantern',kind:'directory'};
+ const expected={revision:2,sha256:'a'.repeat(64)};
+ const payload={schemaVersion:'ngs.file-delete.v1',projectId:'binari',target,expected};
+ const officialRequestId='request.official.'+'b'.repeat(64);
+ const row={officialRequestId,requestType:'file.delete',schemaVersion:payload.schemaVersion,projectId:'binari',
+  payload,payloadSha256:sha(canonical(payload)),status:'registered',registeredAt:1};
+ assert.deepEqual(buildPlan(row),{payload:canonical(payload),tasks:[
+  {id:'workflow.task.'+sha(canonical([officialRequestId,'file_delete'])),key:'file_delete',
+   type:'file.delete',workerType:'file',dependsOn:null,input:{target,expected}}]});
+ assert.throws(()=>buildPlan({...row,payload:{...payload,target:{...target,kind:'file'}}}));
+});

@@ -127,6 +127,26 @@ class PropPackageStore(Store):
         need(keys(row,('schemaVersion','projectId','title',*PIN_KEYS)) and row['schemaVersion']==HEAD_SCHEMA and
              row['projectId']=='binari' and title(row['title']) and row['propId']==prop)
         pin({k:row[k] for k in PIN_KEYS});return row
+    def remove_package(self,command):
+        from single_target_delete import PinnedDeleteRejected,SingleTargetDelete,validate_target
+        root='canonical-files/binari/props'
+        need(keys(command,('operationId','target','expected')))
+        target=validate_target(command['target']);p=target['path']
+        need(target['root']==root and target['kind']=='directory' and prop_id(p))
+        expected=command['expected']
+        need(keys(expected,('revision','sha256')))
+        q=pin({'propId':p,**expected})
+        storage=SingleTargetDelete(self,root)
+        with self.lock():
+            path=self.beneath(p)
+            try:path.lstat()
+            except FileNotFoundError:pass # existing recovery record only; no new move
+            else:
+                head=self.head_locked(p)
+                if not self.verify_managed(path) or head is None or any(head[k]!=v for k,v in q.items()):
+                    raise PinnedDeleteRejected('prop delete pin stale')
+                self.release_locked(q,head)
+            return storage.remove_locked({'operationId':command['operationId'],'target':target})
     def head(self,prop):
         need(prop_id(prop))
         with self.lock():return self.head_locked(prop)
