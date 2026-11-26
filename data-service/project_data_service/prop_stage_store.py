@@ -103,10 +103,13 @@ class PropStageStore:
     def _root(self):
         st=self.root.lstat()
         need((st.st_dev,st.st_ino)==self.identity and stat.S_ISDIR(st.st_mode) and st.st_uid==os.getuid() and stat.S_IMODE(st.st_mode)==0o700)
-    def _closed_path(self,oid,task):
+    def _closed_path(self,oid,task,ref=None):
         self._root();need(match(oid,OFFICIAL) and match(task,TASK))
         target=self.root/oid/task
-        for parent in (target.parent,target):
+        if ref is not None:
+            need(valid_ref(BASE,ref))
+            target=target/ref
+        for parent in ((target.parent.parent,target.parent,target) if ref is not None else (target.parent,target)):
             if not parent.exists():
                 need(not parent.is_symlink());continue
             st=parent.lstat()
@@ -123,7 +126,12 @@ class PropStageStore:
             content,raw=base_artifact(artifact) if key==BASE else derivative_artifact(artifact,key in (MOTION_DETAIL,MOTION_PIXEL))
             files={'asset.png':raw};ref=ref_name(key,sha(raw))
         record={'officialRequestId':oid,'taskId':task,'key':key,'resultRef':ref,'artifact':content,'lineage':lineage}
-        target=self._closed_path(oid,task);target.parent.mkdir(mode=0o700,exist_ok=True)
+        target=self._closed_path(oid,task,ref if key==BASE else None)
+        if key==BASE:
+            # A saved image whose ACK was lost must not block a fresh result.
+            # The database still binds downstream readers to exactly one hash.
+            target.parent.parent.mkdir(mode=0o700,exist_ok=True)
+        target.parent.mkdir(mode=0o700,exist_ok=True)
         stage=Path(tempfile.mkdtemp(prefix='.pending-',dir=target.parent))
         try:
             for name,raw in files.items():_write(stage/name,raw)
@@ -133,13 +141,21 @@ class PropStageStore:
             except OSError:
                 if not target.exists():raise
                 need(self.get(oid,task,key,ref)==record)
-            _fsync(target.parent);_fsync(self.root)
+            _fsync(target.parent)
+            if key==BASE:_fsync(target.parent.parent)
+            _fsync(self.root)
         finally:
             if stage.exists():shutil.rmtree(stage)
         return {'ok':True,'resultRef':ref}
+    def _result_path(self,oid,task,key,ref):
+        if key==BASE:
+            target=self._closed_path(oid,task,ref)
+            if target.exists():return target
+        # Previously completed base results may still use the original layout.
+        return self._closed_path(oid,task)
     def get(self,oid,task,key,ref):
         need(key in STAGES and valid_ref(key,ref))
-        raw=_read(self._closed_path(oid,task)/'receipt.json',MAX_METADATA);v=strict_json(raw)
+        raw=_read(self._result_path(oid,task,key,ref)/'receipt.json',MAX_METADATA);v=strict_json(raw)
         need(raw==canonical(v) and keys(v,('officialRequestId','taskId','key','resultRef','artifact','lineage')) and
           (v['officialRequestId'],v['taskId'],v['key'],v['resultRef'])==(oid,task,key,ref))
         artifact=v['artifact']
@@ -152,5 +168,5 @@ class PropStageStore:
             need(type(index)is int and 0<=index<len(d['frames']));d=d['frames'][index];name=f'{index:03d}.png'
         else:
             need(key!=DESIGN and index is None);name='asset.png'
-        raw=_read(self._closed_path(oid,task)/name,MAX_MEDIA)
+        raw=_read(self._result_path(oid,task,key,ref)/name,MAX_MEDIA)
         need(len(raw)==d['bytes'] and sha(raw)==d['sha256']);return raw

@@ -144,8 +144,22 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
         self.assertEqual(self.stage(STAGE,'/read',{'claim':img})['design']['artifact'],doc)
         base,original=artifact_store(32,32,15)
         base_record={k:base[k] for k in ('sha256','bytes','width','height','mediaType')}
-        r=self.stage(STAGE,'',{'claim':img,'artifact':{'media':base_record,'base64':base64.b64encode(original).decode()}})
-        self.mark('prop_base',3,r['resultRef'])
+        lost=self.stage(STAGE,'',{'claim':img,'artifact':{'media':base_record,'base64':base64.b64encode(original).decode()}})
+        # Simulate a persisted first write whose response the worker never received;
+        # on retry a new claim must accept a different PNG rather than conflict.
+        attempt=self.mark('prop_base',10)
+        self.stage(STAGE,'',{'claim':img,'artifact':{'media':base_record,'base64':base64.b64encode(original).decode()}},403)
+        base,original=artifact_store(32,32,75)
+        base_record={k:base[k] for k in ('sha256','bytes','width','height','mediaType')}
+        r=self.stage(STAGE,'',{'claim':attempt,'artifact':{'media':base_record,'base64':base64.b64encode(original).decode()}})
+        self.assertNotEqual(lost['resultRef'],r['resultRef'])
+        # Verify established base results remain readable in the old layout.
+        root=self.actual.staging.root/self.oid/img['taskId']
+        old=root/lost['resultRef']
+        for path in old.iterdir():path.rename(root/path.name)
+        old.rmdir()
+        self.assertEqual(self.actual.staging.get(self.oid,img['taskId'],'prop_base',lost['resultRef'])['resultRef'],lost['resultRef'])
+        self.mark('prop_base',10,r['resultRef'])
         detail=self.mark('prop_detail',4)
         self.assertEqual(self.stage(STAGE,'/asset',{'claim':detail,'purpose':'input','index':None},raw=True),original)
         media={}
