@@ -775,7 +775,7 @@ def prepare_candidate(github, repo, home, control, head, policy, loaded, runner,
                       *, assert_current, docker, services):
     """Normal OPS candidate preparation: immutable, manual-only, no live changes."""
     from prepare_filex_supervised import config
-    from prepare_filex_writer import closure, UNIFIED_CLOSURE, UNIFIED_CAP_DIGEST
+    from prepare_filex_writer import closure, UNIFIED_CLOSURES, UNIFIED_CAP_DIGEST
     from prepare_ngs_local_once import lock, read_optional, read_private, runner_digest
     from prepare_ngs_release import DIGEST, atomic_write, tree_sha
     from prepare_service_candidates import tracked_targets, verify_source
@@ -788,7 +788,7 @@ def prepare_candidate(github, repo, home, control, head, policy, loaded, runner,
     backend_tree=verify_source(release,tracked_targets(services,repo))
     need(backend_tree==tree_sha(release), 'FILEX_PDS_RELEASE')
     _,blobs=closure(repo,head)
-    need(set(blobs)==UNIFIED_CLOSURE and proof['source']['headSha']==head
+    need(set(blobs) in UNIFIED_CLOSURES and proof['source']['headSha']==head
          and proof['source']['files']=={k:digest(v) for k,v in blobs.items()}
          and proof.get('capabilitiesSha256')==UNIFIED_CAP_DIGEST, 'FILEX_SOURCE_PROOF')
     archive=proof['provenance']['artifactSha256']
@@ -851,7 +851,7 @@ def prepare_candidate(github, repo, home, control, head, policy, loaded, runner,
 
 def verify_selected(home, control, repo, head):
     """Recognize the coupled target for later independent Backend preparation."""
-    from prepare_filex_writer import closure, UNIFIED_CLOSURE, UNIFIED_CAP_DIGEST
+    from prepare_filex_writer import closure, UNIFIED_CLOSURES, UNIFIED_CAP_DIGEST
     from prepare_ngs_local_once import read_private
     from filex_writer_apply import DockerHost
     from mac_target_apply import LaunchHost
@@ -872,7 +872,7 @@ def verify_selected(home, control, repo, head):
          and proof['imageId']==applied['imageId'] and proof.get('capabilitiesSha256')==UNIFIED_CAP_DIGEST,
          'FILEX_ACTIVE_PROOF_INVALID')
     _,required=closure(repo,head)
-    need(set(required)==UNIFIED_CLOSURE and proof['source']['files']=={k:digest(v) for k,v in required.items()}
+    need(set(required) in UNIFIED_CLOSURES and proof['source']['files']=={k:digest(v) for k,v in required.items()}
          and digest(required['scopes.json'])==applied['registrySha256'],'FILEX_ACTIVE_PROOF_INVALID')
     host=ManagedHost(home,control,DockerHost(home,control),LaunchHost(os.getuid()))
     row=host._record(host._name(NAME))

@@ -41,7 +41,9 @@ FILES = (
 CLOSURE = {"Dockerfile", *FILES}
 PROP_FILES = ("prop_package_contract.py", "prop_package_store.py")
 PROP_CLOSURE = CLOSURE | set(PROP_FILES)
-UNIFIED_CLOSURE = PROP_CLOSURE | {'scope_registry.py', 'scopes.json'}
+LEGACY_UNIFIED_CLOSURE = PROP_CLOSURE | {'scope_registry.py', 'scopes.json'}
+UNIFIED_CLOSURE = LEGACY_UNIFIED_CLOSURE | {'map_store.py'}
+UNIFIED_CLOSURES = (LEGACY_UNIFIED_CLOSURE, UNIFIED_CLOSURE)
 # This discriminator binds smoke and target kind, not the registry itself.
 # The exact registry blob is always separately covered by the source proof.
 UNIFIED_CAP_DIGEST = digest(b'ngs.filex-writer-scopes.v1')
@@ -73,7 +75,7 @@ def closure(repo, head):
         need(mode == "100644" and kind == "blob" and matches(SHA, oid)
              and name not in names, "FILEX_SOURCE_SCOPE_INVALID")
         names[name] = oid
-    need(set(names) in (CLOSURE, PROP_CLOSURE, UNIFIED_CLOSURE), "FILEX_SOURCE_MISSING")
+    need(set(names) in (CLOSURE, PROP_CLOSURE, *UNIFIED_CLOSURES), "FILEX_SOURCE_MISSING")
     blobs = {}
     for name, oid in names.items():
         size = int(git(repo, "cat-file", "-s", oid))
@@ -83,10 +85,12 @@ def closure(repo, head):
         if name.endswith(".py"):
             compile(blobs[name], name, "exec", dont_inherit=True)
     # A changed Dockerfile, privilege assumption, or runtime file requires source review.
-    if set(blobs) == UNIFIED_CLOSURE:
+    if set(blobs) in UNIFIED_CLOSURES:
         from filex_unified_runtime import registry
         registry(blobs['scopes.json'])
-        need(blobs['Dockerfile']==dockerfile('python:3.12-slim',unified=True),'FILEX_DOCKERFILE_DRIFT')
+        has_map = 'map_store.py' in blobs
+        need(has_map == (b'from map_store import ' in blobs['server.py']), 'FILEX_MAP_SOURCE_MISSING')
+        need(blobs['Dockerfile']==dockerfile('python:3.12-slim',unified=True,map_workflow=has_map),'FILEX_DOCKERFILE_DRIFT')
         return root, blobs
     scoped = set(blobs) == PROP_CLOSURE
     need(scoped == (declared_capabilities(blobs["server.py"]) == PROP_CAP_DIGEST), "FILEX_SOURCE_CAPABILITIES_INVALID")
@@ -94,10 +98,10 @@ def closure(repo, head):
     return root, blobs
 
 
-def dockerfile(base, *, prop=False, unified=False):
+def dockerfile(base, *, prop=False, unified=False, map_workflow=False):
     if unified:
         return (f"FROM {base}\nWORKDIR /app\n"
-                f"COPY server.py scope_registry.py scopes.json {' '.join(FILES[1:] + PROP_FILES)} /app/\n"
+                f"COPY server.py scope_registry.py scopes.json {' '.join(FILES[1:] + PROP_FILES + (('map_store.py',) if map_workflow else ()))} /app/\n"
                 "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
                 "USER 1000:1000\n"
                 'CMD ["python", "-B", "/app/server.py"]\n').encode()
@@ -413,7 +417,8 @@ def stage(github, repo, control, base, docker):
         with tempfile.TemporaryDirectory(prefix=".filex-source-", dir=root) as temp:
             context = Path(temp) / "context"
             context.mkdir(mode=0o700)
-            sources["Dockerfile"] = dockerfile(base, prop=profile==PROP_CAP_DIGEST, unified=profile==UNIFIED_CAP_DIGEST)
+            sources["Dockerfile"] = dockerfile(base, prop=profile==PROP_CAP_DIGEST, unified=profile==UNIFIED_CAP_DIGEST,
+                                               map_workflow='map_store.py' in sources)
             for name, data in sources.items():
                 p = context / name
                 p.write_bytes(data)
