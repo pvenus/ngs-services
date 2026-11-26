@@ -497,3 +497,14 @@ blocked, if errors occur, or if no removal progress is possible. Launchd
 never supplies the manual drain flag. Use before/after df to report
 physical disk reclamation; allocatedBytes logs the sum observed for
 the removed entries and may differ on APFS.
+
+The same retention runner also checks exact full-SHA executable release
+directories for the managed workflow worker slots (including companion
+slots), shared backend/RS/planner, and OPS. Each family is a separate
+`DEPLOYED_RETENTION_POLICIES` rule. These policies protect loaded
+LaunchAgent and persistent selector paths, pending candidates, deployment
+receipts, known rollback releases, and Filex's paired backend release
+references. They skip a family if a necessary reference cannot be
+verified. They do not touch Filex volumes or Docker images, live data,
+or standalone model runtime trees. Generic file cleanup does not enroll
+an executable release tree.
