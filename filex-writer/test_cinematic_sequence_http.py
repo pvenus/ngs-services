@@ -113,8 +113,10 @@ s.close();"""
         self.assertEqual(call('/background-status',pin),{'ok':True})
         call('/background-status',{**pin,'references':{'cinematic':refs['draft']}},403)
         call('/background-status',{'backgroundSha256':refs['draft'],'references':{'cinematic':refs['draft']}},403)
+        playback={'durationFrames':84,'speedCurve':[{'frame':0,'rate':1/6}],'cameraCurve':[{'frame':0,'zoom':1,'x':.5,'y':.5}]} if staged else PLAYBACK
+        count=8 if staged else 45
         payload={'schemaVersion':'ngs.background-animation-workflow.'+('v2' if staged else 'v1'),'projectId':'binari',**pin,
-                 'motionPrompt':'장지문 뒤 그림자가 흔들린다','playback':PLAYBACK}
+                 'motionPrompt':'장지문 뒤 그림자가 흔들린다','playback':playback}
         parent='request.official.'+'8'*64
         js="""import {PlannerStore} from './workflow-planner/planner.mjs';
 import {canonical,sha} from './workflow-planner/envelope.mjs';
@@ -139,21 +141,22 @@ console.log(payloadSha256);s.close();"""
                     conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE official_request_id=? AND task_key LIKE ? AND task_key<>?",
                       ('background.transient.'+'b'*64,parent,key+'_%',key+'_publish'))
             inp=call('/read',{'claim':claim})
-            self.assertEqual(inp,{'sourceSha256':refs[v],'motionPrompt':payload['motionPrompt'],'playback':PLAYBACK})
+            self.assertEqual(inp,{'sourceSha256':refs[v],'motionPrompt':payload['motionPrompt'],'playback':playback})
             self.assertEqual(call('/asset',{'claim':claim},binary=True),raws[v])
-            raw=png(10 if v=='pixel' else 12,256,256);f={'bytes':len(raw),'sha256':sha(raw)}
-            for i in range(45):
+            final=128 if staged and v=='pixel' else 256
+            raw=png(10 if v=='pixel' else 12,final,final);f={'bytes':len(raw),'sha256':sha(raw)}
+            for i in range(count):
                 call('/frame',{'claim':claim,'frame':{**f,'index':i,'base64':base64.b64encode(raw).decode()}})
             group={'requestId':parent,'variant':v,'backgroundSha256':refs['pixel']}
             m={'schemaVersion':'ngs.cinematic-sequence-result.v1','projectId':'binari','officialRequestId':sid,
-               'sourceSha256':refs[v],'group':group,'width':256,'height':256,'masterFps':24,'frameCount':45,
+               'sourceSha256':refs[v],'group':group,'width':final,'height':final,'masterFps':24,'frameCount':count,
                'upscale':{'model':'seedvr2-7b-fp16','scale':2,'sourceWidth':128,'sourceHeight':128},
-               'frames':[{**f,'index':i} for i in range(45)],'playback':PLAYBACK}
+               'frames':[{**f,'index':i} for i in range(count)],'playback':playback}
             call('',{'claim':claim,'manifest':{**m,'sourceSha256':refs['draft']}},403)
             call('',{'claim':claim,'manifest':{**m,'upscale':{**m['upscale'],'scale':1}}},403)
             if v=='pixel':
                 call('',{'claim':claim,'manifest':m},403)
-                m['upscale']['pixelCorrection']={'method':'reference-palette-v1','upscaledFramesSha256':'b'*64}
+                m['upscale']['pixelCorrection']={'method':'reference-palette-v1','upscaledFramesSha256':'b'*64,**({'downscale':2} if staged else {})}
             low={k:v for k,v in m.items() if k!='upscale'}
             call('',{'claim':claim,'manifest':{**low,'width':128,'height':128}},403)
             ref='binari/cinematics/sequences/'+sid+'/manifest.json'

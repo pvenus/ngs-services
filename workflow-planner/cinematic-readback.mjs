@@ -34,26 +34,29 @@ export function verifyCinematicSequenceReadback(candidate,value){
  if(!value||Object.keys(value).sort().join(',')!=='manifest,ok,resultRef'||value.ok!==true||value.resultRef!==candidate.resultRef)return false;
  const m=value.manifest;
  const upscale=Object.hasOwn(m??{},'upscale');
+ const compact=!!candidate.group&&candidate.playback?.durationFrames===84&&candidate.playback?.speedCurve?.[0]?.rate===1/6;
+ const count=compact?8:45,reduced=compact&&candidate.group.variant==='pixel';
+ if(compact&&!upscale)return false;
  if(upscale){
   const u=m.upscale;
   if(!candidate.group||!u||Object.keys(u).filter(k=>k!=='pixelCorrection').sort().join(',')!=='model,scale,sourceHeight,sourceWidth'||
    u.model!=='seedvr2-7b-fp16'||u.scale!==2||
    ![u.sourceWidth,u.sourceHeight].every(n=>Number.isInteger(n)&&n>=128&&n<=512&&n%32===0)||
-   m.width!==u.sourceWidth*2||m.height!==u.sourceHeight*2)return false;
+   m.width!==u.sourceWidth*(reduced?1:2)||m.height!==u.sourceHeight*(reduced?1:2))return false;
   if(Object.hasOwn(u,'pixelCorrection')){
    const c=u.pixelCorrection,h=c?.upscaledFramesSha256;
-   if(candidate.group.variant!=='pixel'||!c||Object.keys(c).sort().join(',')!=='method,upscaledFramesSha256'||
-    c.method!=='reference-palette-v1'||typeof h!=='string'||h.length!==64||!/^[a-f0-9]{64}$/u.test(h))return false;
-  }
+   if(candidate.group.variant!=='pixel'||!c||Object.keys(c).sort().join(',')!==(reduced?'downscale,method,upscaledFramesSha256':'method,upscaledFramesSha256')||
+    (reduced&&c.downscale!==2)||c.method!=='reference-palette-v1'||typeof h!=='string'||h.length!==64||!/^[a-f0-9]{64}$/u.test(h))return false;
+  }else if(reduced)return false;
  }
  const keys=Object.keys(m??{}).filter(k=>k!=='upscale').sort().join(',');
  return m&&keys===(candidate.group?'frameCount,frames,group,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width':'frameCount,frames,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width')&&
   (!candidate.group||canonical(candidate.group)===canonical(m.group))&&
   m.schemaVersion==='ngs.cinematic-sequence-result.v1'&&m.projectId==='binari'&&m.officialRequestId===candidate.officialRequestId&&
-  m.sourceSha256===candidate.sourceSha256&&m.frameCount===45&&m.masterFps===24&&
+  m.sourceSha256===candidate.sourceSha256&&m.frameCount===count&&m.masterFps===24&&
   (upscale||[m.width,m.height].every(n=>Number.isSafeInteger(n)&&n>=128&&n<=512&&n%32===0))&&
   validCinematicPlayback(m.playback)&&canonical(m.playback)===canonical(candidate.playback)&&
-  Array.isArray(m.frames)&&m.frames.length===45&&m.frames.every((f,i)=>f&&Object.keys(f).sort().join(',')==='bytes,index,sha256'&&
+  Array.isArray(m.frames)&&m.frames.length===count&&m.frames.every((f,i)=>f&&Object.keys(f).sort().join(',')==='bytes,index,sha256'&&
     f.index===i&&Number.isInteger(f.bytes)&&f.bytes>0&&f.bytes<=4*1024*1024&&typeof f.sha256==='string'&&
     f.sha256.length===64&&/^[a-f0-9]{64}$/u.test(f.sha256))&&m.frames.reduce((n,f)=>n+f.bytes,0)<=(upscale?128:64)*1024*1024;
 }

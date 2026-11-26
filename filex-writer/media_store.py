@@ -194,21 +194,29 @@ def seq_manifest(m):
  require(type(m)is dict and set(m) in (SEQUENCE_KEYS,SEQUENCE_KEYS|{'group'},SEQUENCE_KEYS|{'group','upscale'}) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
   m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
   cinematic_match(m['sourceSha256'],CINEMATIC_DIGEST) and type(m['masterFps'])is int and m['masterFps']==24 and
-  type(m['frameCount'])is int and m['frameCount']==SEQUENCE_FRAME_COUNT and
+  type(m['frameCount'])is int and
   all(type(m[k])is int for k in ('width','height')) and
-  type(m['frames'])is list and len(m['frames'])==SEQUENCE_FRAME_COUNT,'sequence manifest')
+  type(m['frames'])is list,'sequence manifest')
+ playback=sequence_playback(m['playback'])
+ compact='group' in m and playback['durationFrames']==84 and len(playback['speedCurve'])==1 and playback['speedCurve'][0]['rate']==1/6
+ count=8 if compact else SEQUENCE_FRAME_COUNT
+ require(m['frameCount']==count and len(m['frames'])==count and (not compact or 'upscale' in m),'sequence frame count')
  if 'upscale' in m:
   u=m['upscale']
   base={'model','scale','sourceWidth','sourceHeight'}
   require(type(u)is dict and set(u) in (base,base|{'pixelCorrection'}) and u['model']=='seedvr2-7b-fp16' and
    type(u['scale'])is int and u['scale']==2 and
-   all(type(u[k])is int and 128<=u[k]<=512 and u[k]%32==0 for k in ('sourceWidth','sourceHeight')) and
-   (m['width'],m['height'])==(u['sourceWidth']*2,u['sourceHeight']*2),'sequence upscale geometry')
+   all(type(u[k])is int and 128<=u[k]<=512 and u[k]%32==0 for k in ('sourceWidth','sourceHeight')),'sequence upscale geometry')
+  pixel=type(m['group'])is dict and m['group'].get('variant')=='pixel'
+  reduced=compact and pixel
   if 'pixelCorrection' in u:
-   c=u['pixelCorrection']
-   require(type(m['group'])is dict and m['group'].get('variant')=='pixel' and type(c)is dict and
-    set(c)=={'method','upscaledFramesSha256'} and c['method']=='reference-palette-v1' and
-    cinematic_match(c['upscaledFramesSha256'],CINEMATIC_DIGEST),'sequence pixel correction proof')
+   c=u['pixelCorrection'];keys={'method','upscaledFramesSha256'}|({'downscale'} if reduced else set())
+   require(pixel and type(c)is dict and set(c)==keys and c['method']=='reference-palette-v1' and
+    cinematic_match(c['upscaledFramesSha256'],CINEMATIC_DIGEST) and
+    (not reduced or type(c['downscale'])is int and c['downscale']==2),'sequence pixel correction proof')
+  else:require(not reduced,'sequence pixel correction proof')
+  scale=1 if reduced else 2
+  require((m['width'],m['height'])==(u['sourceWidth']*scale,u['sourceHeight']*scale),'sequence final geometry')
  else:require(all(128<=m[k]<=512 and m[k]%32==0 for k in ('width','height')),'sequence legacy geometry')
  require(sum(seq_frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=SEQUENCE_MAX_TOTAL*(2 if 'upscale' in m else 1),'sequence byte budget')
  if 'group' in m:
@@ -217,7 +225,6 @@ def seq_manifest(m):
    cinematic_match(group['requestId'],CINEMATIC_ID) and cinematic_match(group['backgroundSha256'],CINEMATIC_DIGEST) and
    group['variant'] in ('cinematic','pixel') and m['officialRequestId']=='request.official.'+
    sha(json.dumps([group['requestId'],'background_animation_'+group['variant']],separators=(',',':')).encode()),'sequence group integrity')
- sequence_playback(m['playback'])
  return m
 
 def seq_png(raw,line):

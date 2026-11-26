@@ -95,7 +95,9 @@ export const backgroundAnimationType='background.animation.workflow',backgroundA
 export const validBackgroundAnimationLoop=p=>{
  const v=p?.playback;
  return typeof p?.motionPrompt==='string'&&p.motionPrompt.startsWith('Continuous seamless ambient loop, static camera. ')&&
-  validCinematicPlayback(v)&&v.durationFrames===264&&v.speedCurve.length===1&&v.speedCurve[0].rate===1/3&&
+  validCinematicPlayback(v)&&v.speedCurve.length===1&&
+  (v.durationFrames===264&&v.speedCurve[0].rate===1/3||
+   p.schemaVersion===backgroundAnimationStageSchema&&v.durationFrames===84&&v.speedCurve[0].rate===1/6)&&
   v.cameraCurve.length===1&&v.cameraCurve[0].zoom===1&&v.cameraCurve[0].x===.5&&v.cameraCurve[0].y===.5;
 };
 export const backgroundAnimationStageSchema='ngs.background-animation-workflow.v2';

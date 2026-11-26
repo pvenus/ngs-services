@@ -66,33 +66,43 @@ def frame_meta(row,index=None):
     return row
 
 
-def upscale_proof(m):
+def short_background(p):
+    return p['durationFrames']==84 and len(p['speedCurve'])==1 and p['speedCurve'][0]['rate']==1/6
+
+
+def upscale_proof(m,compact):
     u=m.get('upscale')
     base=('model','scale','sourceWidth','sourceHeight')
+    reduced=False
     if keys(u,(*base,'pixelCorrection')):
         c=u['pixelCorrection']
-        if (m['group']['variant']!='pixel' or not keys(c,('method','upscaledFramesSha256')) or
-                c['method']!='reference-palette-v1' or not match(c['upscaledFramesSha256'],HASH)):
+        reduced=compact and m['group']['variant']=='pixel'
+        fields=('method','upscaledFramesSha256','downscale') if reduced else ('method','upscaledFramesSha256')
+        if (m['group']['variant']!='pixel' or not keys(c,fields) or
+                c['method']!='reference-palette-v1' or not match(c['upscaledFramesSha256'],HASH) or
+                reduced and (type(c['downscale']) is not int or c['downscale']!=2)):
             return False
-    elif not keys(u,base):return False
-    return (u['model']=='seedvr2-7b-fp16' and
-            type(u['scale'])is int and u['scale']==2 and
+    elif not keys(u,base) or compact and m['group']['variant']=='pixel':return False
+    scale=1 if reduced else 2
+    return (u['model']=='seedvr2-7b-fp16' and type(u['scale'])is int and u['scale']==2 and
             all(type(u[k])is int and 128<=u[k]<=512 and u[k]%32==0 for k in ('sourceWidth','sourceHeight')) and
-            (m['width'],m['height'])==(u['sourceWidth']*2,u['sourceHeight']*2))
+            (m['width'],m['height'])==(u['sourceWidth']*scale,u['sourceHeight']*scale))
 
 
 def verify_manifest(m,oid,inp,group=None):
     upscale=type(m)is dict and 'upscale' in m
-    need(not upscale or group is not None)
+    compact=group is not None and short_background(inp['playback'])
+    count=8 if compact else COUNT
+    need((not upscale or group is not None) and (not compact or upscale))
     fields=MANIFEST if group is None else MANIFEST|{'group'}
     if upscale:fields=fields|{'upscale'}
     need(keys(m,fields) and
          (group is None or m['group']==group) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
          m['projectId']=='binari' and m['officialRequestId']==oid and m['sourceSha256']==inp['sourceSha256'] and
-         type(m['masterFps'])is int and m['masterFps']==24 and type(m['frameCount'])is int and m['frameCount']==COUNT and
+         type(m['masterFps'])is int and m['masterFps']==24 and type(m['frameCount'])is int and m['frameCount']==count and
          all(type(m[k])is int for k in ('width','height')) and
-         (upscale_proof(m) if upscale else all(128<=m[k]<=512 and m[k]%32==0 for k in ('width','height'))) and
-         type(m['frames'])is list and len(m['frames'])==COUNT and playback(m['playback'])==inp['playback'])
+         (upscale_proof(m,compact) if upscale else all(128<=m[k]<=512 and m[k]%32==0 for k in ('width','height'))) and
+         type(m['frames'])is list and len(m['frames'])==count and playback(m['playback'])==inp['playback'])
     need(sum(frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=MAX_TOTAL*(2 if upscale else 1))
 
 
