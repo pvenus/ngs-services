@@ -137,6 +137,9 @@ console.log(payloadSha256);s.close();"""
                'frames':[{**f,'index':i} for i in range(45)],'playback':PLAYBACK}
             call('',{'claim':claim,'manifest':{**m,'sourceSha256':refs['draft']}},403)
             call('',{'claim':claim,'manifest':{**m,'upscale':{**m['upscale'],'scale':1}}},403)
+            if v=='pixel':
+                call('',{'claim':claim,'manifest':m},403)
+                m['upscale']['pixelCorrection']={'method':'reference-palette-v1','upscaledFramesSha256':'b'*64}
             low={k:v for k,v in m.items() if k!='upscale'}
             call('',{'claim':claim,'manifest':{**low,'width':128,'height':128}},403)
             ref='binari/cinematics/sequences/'+sid+'/manifest.json'

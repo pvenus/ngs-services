@@ -64,7 +64,14 @@ def frame_meta(row,index=None):
 
 def upscale_proof(m):
     u=m.get('upscale')
-    return (keys(u,('model','scale','sourceWidth','sourceHeight')) and u['model']=='seedvr2-7b-fp16' and
+    base=('model','scale','sourceWidth','sourceHeight')
+    if keys(u,(*base,'pixelCorrection')):
+        c=u['pixelCorrection']
+        if (m['group']['variant']!='pixel' or not keys(c,('method','upscaledFramesSha256')) or
+                c['method']!='reference-palette-v1' or not match(c['upscaledFramesSha256'],HASH)):
+            return False
+    elif not keys(u,base):return False
+    return (u['model']=='seedvr2-7b-fp16' and
             type(u['scale'])is int and u['scale']==2 and
             all(type(u[k])is int and 128<=u[k]<=512 and u[k]%32==0 for k in ('sourceWidth','sourceHeight')) and
             (m['width'],m['height'])==(u['sourceWidth']*2,u['sourceHeight']*2))
@@ -256,7 +263,8 @@ class WorkflowCinematicSequence(WorkflowCinematic):
                 need(out=={'ok':True,'index':f['index'],'sha256':f['sha256']})
                 return out
             manifest=packet['manifest'];verify_manifest(manifest,oid,inp,group)
-            if group is not None:need('upscale' in manifest)
+            if group is not None:
+                need('upscale' in manifest and (group['variant']!='pixel' or 'pixelCorrection' in manifest['upscale']))
             if group is not None:self.background_status({'backgroundSha256':group['backgroundSha256'],
                 'references':{group['variant']:inp['sourceSha256']}})
             need(self.seq_call('',{'manifest':manifest})==manifest)

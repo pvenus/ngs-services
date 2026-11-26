@@ -67,7 +67,11 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
     raise ValueError('LAYA_BACKGROUND_QUEUE_ADAPTER_CONTRACT')
   elif worker=='animation':
    stage_ids=['background.animation-cinematic','background.animation-pixel']
+   expected_pipeline=([{'id':'wan','dependsOn':[]},{'id':'seedvr2','dependsOn':['wan']},
+     {'id':'pixel-correction','dependsOn':['seedvr2']},{'id':'publish','dependsOn':['pixel-correction']}]
+    if action['id']=='background.animation-pixel' else None)
    if (action['id'] not in stage_ids or action.get('modelCalls')!=2 or action.get('dependsOn')!=[] or
+       action.get('executionStages')!=expected_pipeline or
        action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.background-animation-workflow.v1' or
        registry['requestTypes'].get('background.animation.workflow',{}).get('stageIds')!=stage_ids or
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or

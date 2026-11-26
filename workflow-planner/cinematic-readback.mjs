@@ -36,10 +36,15 @@ export function verifyCinematicSequenceReadback(candidate,value){
  const upscale=Object.hasOwn(m??{},'upscale');
  if(upscale){
   const u=m.upscale;
-  if(!candidate.group||!u||Object.keys(u).sort().join(',')!=='model,scale,sourceHeight,sourceWidth'||
+  if(!candidate.group||!u||Object.keys(u).filter(k=>k!=='pixelCorrection').sort().join(',')!=='model,scale,sourceHeight,sourceWidth'||
    u.model!=='seedvr2-7b-fp16'||u.scale!==2||
    ![u.sourceWidth,u.sourceHeight].every(n=>Number.isInteger(n)&&n>=128&&n<=512&&n%32===0)||
    m.width!==u.sourceWidth*2||m.height!==u.sourceHeight*2)return false;
+  if(Object.hasOwn(u,'pixelCorrection')){
+   const c=u.pixelCorrection,h=c?.upscaledFramesSha256;
+   if(candidate.group.variant!=='pixel'||!c||Object.keys(c).sort().join(',')!=='method,upscaledFramesSha256'||
+    c.method!=='reference-palette-v1'||typeof h!=='string'||h.length!==64||!/^[a-f0-9]{64}$/u.test(h))return false;
+  }
  }
  const keys=Object.keys(m??{}).filter(k=>k!=='upscale').sort().join(',');
  return m&&keys===(candidate.group?'frameCount,frames,group,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width':'frameCount,frames,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width')&&

@@ -1960,14 +1960,20 @@
     "candidateCount": 1,
     "modelCalls": 2,
     "dependsOn": [],
-    "description": "Run the shared native I2V renderer then the required local SeedVR2 7B FP16 2× postprocess on the selected immutable pixel background only; both variants share the same motion and playback settings.",
+    "executionStages": [
+      {"id": "wan", "dependsOn": []},
+      {"id": "seedvr2", "dependsOn": ["wan"]},
+      {"id": "pixel-correction", "dependsOn": ["seedvr2"]},
+      {"id": "publish", "dependsOn": ["pixel-correction"]}
+    ],
+    "description": "Run the shared native I2V renderer then the required local SeedVR2 7B FP16 2× postprocess on the selected immutable pixel background, then correct final PNG colors using the pinned pixel still palette. Publish only the corrected frames.",
     "inputs": [
       "pinned background PNG",
       "motionPrompt",
       "playback"
     ],
     "outputs": [
-      "one upscaled PNG sequence and immutable model proof manifest; no native frames published"
+      "one upscaled and pixel-corrected PNG sequence and dependency proof; no intermediate frames published"
     ],
     "requires": [],
     "provides": [

@@ -199,10 +199,16 @@ def seq_manifest(m):
   type(m['frames'])is list and len(m['frames'])==SEQUENCE_FRAME_COUNT,'sequence manifest')
  if 'upscale' in m:
   u=m['upscale']
-  require(type(u)is dict and set(u)=={'model','scale','sourceWidth','sourceHeight'} and u['model']=='seedvr2-7b-fp16' and
+  base={'model','scale','sourceWidth','sourceHeight'}
+  require(type(u)is dict and set(u) in (base,base|{'pixelCorrection'}) and u['model']=='seedvr2-7b-fp16' and
    type(u['scale'])is int and u['scale']==2 and
    all(type(u[k])is int and 128<=u[k]<=512 and u[k]%32==0 for k in ('sourceWidth','sourceHeight')) and
    (m['width'],m['height'])==(u['sourceWidth']*2,u['sourceHeight']*2),'sequence upscale geometry')
+  if 'pixelCorrection' in u:
+   c=u['pixelCorrection']
+   require(type(m['group'])is dict and m['group'].get('variant')=='pixel' and type(c)is dict and
+    set(c)=={'method','upscaledFramesSha256'} and c['method']=='reference-palette-v1' and
+    cinematic_match(c['upscaledFramesSha256'],CINEMATIC_DIGEST),'sequence pixel correction proof')
  else:require(all(128<=m[k]<=512 and m[k]%32==0 for k in ('width','height')),'sequence legacy geometry')
  require(sum(seq_frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=SEQUENCE_MAX_TOTAL*(2 if 'upscale' in m else 1),'sequence byte budget')
  if 'group' in m:
