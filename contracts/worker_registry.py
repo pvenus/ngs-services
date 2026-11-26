@@ -65,6 +65,14 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
        policy.get('apply')!='authorized-mutation'):
     raise ValueError('LAYA_BACKGROUND_QUEUE_ADAPTER_CONTRACT')
+  elif worker=='animation':
+   stage_ids=['background.animation-cinematic','background.animation-pixel']
+   if (action['id'] not in stage_ids or action.get('modelCalls')!=1 or action.get('dependsOn')!=[] or
+       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.background-animation-workflow.v1' or
+       registry['requestTypes'].get('background.animation.workflow',{}).get('stageIds')!=stage_ids or
+       policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
+       policy.get('apply')!='authorized-mutation'):
+    raise ValueError('LAYA_BACKGROUND_ANIMATION_ADAPTER_CONTRACT')
   elif worker not in ADAPTERS:raise ValueError('LAYA_EXECUTION_ADAPTER_UNKNOWN')
   if worker.endswith('-compare'):
    if policy.get('count')!=3 or policy.get('kind')!='comparison' or policy.get('apply')!='after-selection':raise ValueError('LAYA_COMPARISON_ADAPTER_CONTRACT')

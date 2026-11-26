@@ -19,7 +19,7 @@ import {unsupportedReason} from './pending-unsupported.mjs';
 import {propTypes,propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propRegeneratePayloadSchema,propAnimationType,propAnimationPayloadSchema} from './prop-generate-envelope.mjs';
 import {propImageType,propImagePayloadSchema,propImageInvalid,propImageUnavailable} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic,cinematicSequenceType,cinematicSequencePayloadSchema,validateCinematicSequence,cinematicLegacyRetired,cinematicPlaybackType,cinematicPlaybackStale,cinematicPlaybackRequestPayloadSchema,validateCinematicPlaybackUpdate,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic,cinematicSequenceType,cinematicSequencePayloadSchema,validateCinematicSequence,cinematicLegacyRetired,cinematicPlaybackType,cinematicPlaybackStale,cinematicPlaybackRequestPayloadSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
 
 const version='2025-06-18';
 const maxBody=96*1024;
@@ -247,7 +247,7 @@ function addPropFamily(tool,kind,payload){
   requestType:{enum:[...tool.inputSchema.properties.requestType.enum,kind]}},
   oneOf:[...tool.inputSchema.oneOf,{properties:{requestType:{const:kind},payload}}]}};
 }
-export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission=true,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness,cinematicOperationReadiness,fileDeleteReadiness}={}){
+export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnabled=false,propImageReadiness,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propAnimationReadiness,propMutationsEnabled=false,propPackageReadiness,cinematicEnabled=false,cinematicReadiness,cinematicSourceReadiness,cinematicLegacyAdmission=true,cinematicSequenceReadiness,cinematicSequenceSourceReadiness,cinematicPlaybackReadiness,cinematicPlaybackTargetReadiness,cinematicOperationReadiness,backgroundAnimationReferencesReadiness,fileDeleteReadiness}={}){
  if(!allowed(req,req.socket.localPort))return send(res,403,{error:'REQUEST_MCP_LOOPBACK_REQUIRED'});
  if(req.url!=='/mcp')return send(res,404,{error:'NOT_FOUND'});
  if(req.method!=='POST')return send(res,405,{error:'REQUEST_MCP_POST_ONLY'},{Allow:'POST'});
@@ -350,6 +350,11 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
    validateExtraCinematic(payload,'binari',type);
    if(cinematicEnabled!==true||typeof cinematicOperationReadiness!=='function'||await cinematicOperationReadiness(type)!==true)
     throw Error(cinematicUnavailable);
+   if(type===backgroundAnimationType){
+    if(site||typeof backgroundAnimationReferencesReadiness!=='function')throw Error(cinematicUnavailable);
+    const pin=await backgroundAnimationReferencesReadiness(payload);
+    if(pin!==true)throw Error(pin===null?cinematicSourceMissing:cinematicUnavailable);
+   }
   }
   let value=inbox[binding[0]](args);
   // Keep cursor semantics intact when PDS goes down. Suppress pending formal

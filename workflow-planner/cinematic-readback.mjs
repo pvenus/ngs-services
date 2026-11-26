@@ -1,11 +1,11 @@
-import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,backgroundPixelType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
+import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
 import {canonical} from './envelope.mjs';
 
-export async function readCinematicPublication({officialRequestId,family}){
+export async function readCinematicPublication({officialRequestId,family,group}){
  const route=family==='cinematic-sequence'?'workflow-sequence':family==='cinematic-playback'?'workflow-playback':'workflow';
- const path=Object.hasOwn(extraCinematicRequests,family)?extraCinematicRequests[family].route:'/v1/cinematics/ownership/'+route;
+ const path=family===backgroundAnimationType?'/v1/cinematics/ownership/workflow-sequence':Object.hasOwn(extraCinematicRequests,family)?extraCinematicRequests[family].route:'/v1/cinematics/ownership/'+route;
  const r=await fetch('http://127.0.0.1:8030'+path+'/result',{
-  method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({officialRequestId}),
+  method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(family===backgroundAnimationType?{officialRequestId,group}:{officialRequestId}),
   signal:AbortSignal.timeout(5000),redirect:'error',cache:'no-store',
  });
  if(r.status!==200||!/^application\/json(?:;|$)/iu.test(r.headers.get('content-type')??'')){
@@ -33,7 +33,8 @@ function verifyCinematicManifest(candidate,m){
 export function verifyCinematicSequenceReadback(candidate,value){
  if(!value||Object.keys(value).sort().join(',')!=='manifest,ok,resultRef'||value.ok!==true||value.resultRef!==candidate.resultRef)return false;
  const m=value.manifest;
- return m&&Object.keys(m).sort().join(',')==='frameCount,frames,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width'&&
+ return m&&Object.keys(m).sort().join(',')===(candidate.group?'frameCount,frames,group,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width':'frameCount,frames,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width')&&
+  (!candidate.group||canonical(candidate.group)===canonical(m.group))&&
   m.schemaVersion==='ngs.cinematic-sequence-result.v1'&&m.projectId==='binari'&&m.officialRequestId===candidate.officialRequestId&&
   m.sourceSha256===candidate.sourceSha256&&m.frameCount===45&&m.masterFps===24&&
   [m.width,m.height].every(n=>Number.isSafeInteger(n)&&n>=128&&n<=512&&n%32===0)&&

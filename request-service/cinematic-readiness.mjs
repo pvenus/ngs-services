@@ -63,3 +63,11 @@ export async function cinematicOperationReady(type,fetcher=fetch){
   return v&&Object.keys(v).sort().join(',')==='enabled,schemaVersion'&&v.enabled===true&&v.schemaVersion===capability;
  }catch{return false;}
 }
+
+export async function backgroundAnimationReferencesReady({backgroundSha256,references},fetcher=fetch){
+ try{
+  const v=await probe('/background-status',{backgroundSha256,references},fetcher,sequenceOrigin);
+  if(v===null)return null;
+  return v&&Object.keys(v).join(',')==='ok'&&v.ok===true;
+ }catch{return false;}
+}

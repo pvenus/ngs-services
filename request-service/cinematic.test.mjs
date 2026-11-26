@@ -42,3 +42,29 @@ test('MCP advertises scoped cinematic only when ready and rejects missing digest
  assert.notEqual(spaceAccepted.structuredContent.officialRequestId,accepted.structuredContent.officialRequestId);
 
 });
+
+test('one locally submitted background animation request pins both references before registration',async t=>{
+ const {backgroundAnimationType:type,backgroundAnimationSchema:schema}=await import('./cinematic-envelope.mjs');
+ const parent=await mkdtemp(join(await realpath(tmpdir()),'background-animation-rs-'));t.after(()=>rm(parent,{recursive:true,force:true}));
+ const pixel='b'.repeat(64),refs={pixel,cinematic:'a'.repeat(64)};
+ const payload={schemaVersion:schema,projectId:'binari',backgroundSha256:pixel,references:refs,motionPrompt:'등불이 흔들린다',
+  playback:{durationFrames:135,speedCurve:[{frame:0,rate:1/3}],cameraCurve:[{frame:0,x:.5,y:.5,zoom:1}]}};
+ let supported=false,exists=false;
+ const server=createRequestService({directory:join(parent,'inbox'),cinematicEnabled:true,
+  cinematicOperationReadiness:ty=>ty===type&&supported,
+  backgroundAnimationReferencesReadiness:p=>{assert.deepEqual(p.references,refs);return exists?true:null;}});
+ await new Promise(done=>server.listen(0,host,done));t.after(()=>new Promise(done=>server.close(done)));
+ const call=async(name,args)=>{
+  const r=await fetch('http://'+host+':'+server.address().port+'/mcp',{method:'POST',
+   headers:{Accept:'application/json, text/event-stream','Content-Type':'application/json'},
+   body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})});
+  return (await r.json()).result;
+ };
+ const packet={sourceId:'local',requestType:type,idempotencyKey:'fixture-background-pair',payload};
+ assert.equal((await call('request_submit',packet)).structuredContent.error,cinematicUnavailable);
+ supported=true;
+ assert.equal((await call('request_submit',packet)).structuredContent.error,cinematicSourceMissing);
+ exists=true;
+ assert.equal((await call('request_submit',packet)).structuredContent.status,'registered');
+ assert.deepEqual((await call('request_workflow_list',{limit:8})).structuredContent.requests.map(x=>x.payload),[payload]);
+});

@@ -89,6 +89,8 @@ export const cinematicPlaybackResultRef=id=>'binari/cinematics/sequences/'+id+'/
 export const cinematicSourceType='cinematic.source.generate',cinematicSourceRequestSchema='ngs.cinematic-source-generate.v1';
 export const backgroundSourceType='background.source.generate',backgroundSourceRequestSchema='ngs.background-source-generate.v1';
 export const backgroundPixelType='background.pixel.workflow',backgroundPixelSchema='ngs.background-pixel-workflow.v1';
+export const backgroundAnimationType='background.animation.workflow',backgroundAnimationSchema='ngs.background-animation-workflow.v1';
+export const backgroundAnimationKeys={cinematic:'background_animation_cinematic',pixel:'background_animation_pixel'};
 export const cinematicArchiveType='cinematic.sequences.remove',cinematicArchiveRequestSchema='ngs.cinematic-sequences-remove.v1';
 export const propAnimationRemoveType='prop.animation.remove',propAnimationRemoveRequestSchema='ngs.prop-animation-remove.v1';
 const familyBase={projectId:{const:'binari'}}, hashSchema={type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64};
@@ -125,6 +127,14 @@ export const extraCinematicRequests=Object.freeze({
   fields:['title','timeOfDay','season','mood','color','location','requirements','additionalNotes'],
   valid:v=>Object.entries({title:105,timeOfDay:80,season:80,mood:160,color:120,location:160,requirements:900,additionalNotes:900})
    .every(([k,n])=>k==='additionalNotes'&&v[k]===''||cleanText(v[k],n,n*4))},
+ [backgroundAnimationType]:{schema:backgroundAnimationSchema,key:'background_animation',worker:'animation',route:'/v1/cinematics/ownership/workflow-sequence/background-status',
+  capability:'workflow.background-animation-write.v1',
+  payload:req(backgroundAnimationSchema,{backgroundSha256:hashSchema,references:{type:'object',minProperties:1,additionalProperties:false,properties:{cinematic:hashSchema,pixel:hashSchema}},motionPrompt:{type:'string',minLength:1,maxLength:1000},playback:cinematicPlaybackSchema}),
+  fields:['backgroundSha256','references','motionPrompt','playback'],valid:v=>validHash(v.backgroundSha256)&&
+   v.references&&typeof v.references==='object'&&!Array.isArray(v.references)&&Object.keys(v.references).length>0&&
+   Object.entries(v.references).every(([k,h])=>Object.hasOwn(backgroundAnimationKeys,k)&&validHash(h))&&
+   new Set(Object.values(v.references)).size===Object.keys(v.references).length&&
+   cleanText(v.motionPrompt,1000,2000)&&validCinematicPlayback(v.playback)},
  [cinematicArchiveType]:{schema:cinematicArchiveRequestSchema,key:'cinematic_sequences_remove',worker:'file',route:'/v1/cinematics/ownership/workflow-sequence-remove',
   capability:'workflow.cinematic-sequence-remove.v1',
   payload:req(cinematicArchiveRequestSchema,{sequenceIds:selection({type:'string',minLength:81,maxLength:81,pattern:sequenceId.source})}),

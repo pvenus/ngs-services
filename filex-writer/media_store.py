@@ -191,13 +191,19 @@ def seq_frame_meta(value,index=None):
  return value
 
 def seq_manifest(m):
- require(type(m)is dict and set(m)==SEQUENCE_KEYS and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
+ require(type(m)is dict and set(m) in (SEQUENCE_KEYS,SEQUENCE_KEYS|{'group'}) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
   m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
   cinematic_match(m['sourceSha256'],CINEMATIC_DIGEST) and type(m['masterFps'])is int and m['masterFps']==24 and
   type(m['frameCount'])is int and m['frameCount']==SEQUENCE_FRAME_COUNT and
   all(type(m[k])is int and 128<=m[k]<=512 and m[k]%32==0 for k in ('width','height')) and
   type(m['frames'])is list and len(m['frames'])==SEQUENCE_FRAME_COUNT,'sequence manifest')
  require(sum(seq_frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=SEQUENCE_MAX_TOTAL,'sequence byte budget')
+ if 'group' in m:
+  group=m['group']
+  require(type(group)is dict and set(group)=={'requestId','variant','backgroundSha256'} and
+   cinematic_match(group['requestId'],CINEMATIC_ID) and cinematic_match(group['backgroundSha256'],CINEMATIC_DIGEST) and
+   group['variant'] in ('cinematic','pixel') and m['officialRequestId']=='request.official.'+
+   sha(json.dumps([group['requestId'],'background_animation_'+group['variant']],separators=(',',':')).encode()),'sequence group integrity')
  sequence_playback(m['playback'])
  return m
 
@@ -532,7 +538,7 @@ class CinematicProjectStore(CinematicPlaybackStore):
    require(self._read(image,CINEMATIC_MAX)==raw,'source bytes readback')
    if not meta.exists():self.write(meta,frozen)
    return self._result_source(oid,background)
- def background_pixel_source(self,p,*,status=False):
+ def background_pixel_source(self,p,*,status=False,identity=False):
   require(type(p)is dict and set(p)=={'sourceSha256'} and cinematic_match(p['sourceSha256'],r'[a-f0-9]{64}'),'background pixel source')
   sha=p['sourceSha256']
   with self.lock():
@@ -540,6 +546,10 @@ class CinematicProjectStore(CinematicPlaybackStore):
    m=source_entry(json.loads(raw),True)
    require(wire(m)==raw and m['sha256']==sha,'background pixel source proof')
    result={'sourceSha256':sha,'title':m['title']}
+   if identity:
+    image=self._read(self._path('backgrounds',sha+'.png'),CINEMATIC_MAX)
+    source_image(image,m)
+    return m
    if not status:
     image=self._read(self._path('backgrounds',sha+'.png'),CINEMATIC_MAX)
     source_image(image,m)

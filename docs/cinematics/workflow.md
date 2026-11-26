@@ -75,3 +75,7 @@ source explicitly when submitting the animation request.
 `cinematics/sequence-archive.json`; it does not delete published frames,
 manifests, timeline metadata, or legacy MP4 files. All normal catalog views
 must honor the archive index.
+
+### Background animation
+
+`background.animation.workflow` admits one or both pinned published stills of a background. The corrected pixel image is the group anchor for paired results; the cinematic reference must match the immutable original publication derived from the same background-generation request. Intermediate pixel generation is not an animation input. The parent request produces independently claimable cinematic and/or pixel tasks on the existing animation lane, both with identical motion and playback metadata. PDS reads exact image bytes and each manifest records the parent, source variant and group anchor. The parent is completed only after every selected result passes publication readback. The single resident renderer on a host does not load a second model to run both.

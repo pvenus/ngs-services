@@ -1911,8 +1911,103 @@
         "authorization": "same-authorized-actor-target-and-action-or-fail"
       }
     }
+,
+  {
+    "id": "background.animation-cinematic",
+    "workerId": "animation",
+    "candidateCount": 1,
+    "modelCalls": 1,
+    "dependsOn": [],
+    "description": "Run the shared native I2V renderer on the selected immutable cinematic background only; both variants share the same motion and playback settings.",
+    "inputs": [
+      "pinned background PNG",
+      "motionPrompt",
+      "playback"
+    ],
+    "outputs": [
+      "one native PNG sequence and immutable result manifest"
+    ],
+    "requires": [],
+    "provides": [
+      "background.animation-cinematic.sequence"
+    ],
+    "generationKind": "generative",
+    "variations": [],
+    "requiredUserFields": [
+      "motionPrompt"
+    ],
+    "requestRequirements": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "ngs.background-animation-workflow.v1"
+      },
+      "projectId": {
+        "type": "string",
+        "const": "binari"
+      }
+    },
+    "outputPolicy": {
+      "kind": "single-result",
+      "count": 1,
+      "selection": "none",
+      "apply": "authorized-mutation",
+      "authorization": "same-authorized-actor-target-and-action-or-fail"
+    }
+  },
+  {
+    "id": "background.animation-pixel",
+    "workerId": "animation",
+    "candidateCount": 1,
+    "modelCalls": 1,
+    "dependsOn": [],
+    "description": "Run the shared native I2V renderer on the selected immutable pixel background only; both variants share the same motion and playback settings.",
+    "inputs": [
+      "pinned background PNG",
+      "motionPrompt",
+      "playback"
+    ],
+    "outputs": [
+      "one native PNG sequence and immutable result manifest"
+    ],
+    "requires": [],
+    "provides": [
+      "background.animation-pixel.sequence"
+    ],
+    "generationKind": "generative",
+    "variations": [],
+    "requiredUserFields": [
+      "motionPrompt"
+    ],
+    "requestRequirements": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "ngs.background-animation-workflow.v1"
+      },
+      "projectId": {
+        "type": "string",
+        "const": "binari"
+      }
+    },
+    "outputPolicy": {
+      "kind": "single-result",
+      "count": 1,
+      "selection": "none",
+      "apply": "authorized-mutation",
+      "authorization": "same-authorized-actor-target-and-action-or-fail"
+    }
+  }
   ],
   "requestTypes": {
+  "background.animation.workflow": {
+    "eligibleStageIds": [
+      "background.animation-cinematic",
+      "background.animation-pixel"
+    ],
+    "stageIds": [
+      "background.animation-cinematic",
+      "background.animation-pixel"
+    ]
+  },
     "background.pixel.workflow": {
       "eligibleStageIds": [
         "background.cinematic-source",

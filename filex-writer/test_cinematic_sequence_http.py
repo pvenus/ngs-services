@@ -85,6 +85,61 @@ s.close();"""
                 with e:self.assertEqual(e.code,expected);return json.load(e)
         return root,db,claim,call,payload,still
 
+    def test_background_animation_group_keeps_pinned_sources_and_exact_independent_sequence_results(self):
+        from project_data_service.filex_read import digest
+        from media_store import CinematicProjectStore
+        root,db,_,call,_,_=self.sequence()
+        store=CinematicProjectStore(root)
+        O='request.official.'+'9'*64
+        raws={v:png(i,1536,1024) for i,v in enumerate(('cinematic','pixel','draft'),1)}
+        refs={v:sha(raw) for v,raw in raws.items()}
+        (root/'backgrounds').mkdir()
+        for v,suffix,key in (('cinematic','시네마틱 원본','background_cinematic_source'),
+                             ('pixel','픽셀 보정',None),('draft','픽셀 생성본','background_pixel_generate')):
+            oid='request.official.'+digest([O,key]) if key else O
+            meta={'schemaVersion':'ngs.background-source-result.v1','projectId':'binari','officialRequestId':oid,
+                  'title':'안채 · '+suffix,'sha256':refs[v],'bytes':len(raws[v]),'width':1536,'height':1024}
+            store.cinematic_source_generate({'manifest':meta,'base64':base64.b64encode(raws[v]).decode(),
+                  'claimStamp':55},background=True)
+        selected={'cinematic':refs['cinematic'],'pixel':refs['pixel']}
+        pin={'backgroundSha256':refs['pixel'],'references':selected}
+        self.assertEqual(call('/background-status',None),{'enabled':True,'schemaVersion':'workflow.background-animation-write.v1'})
+        self.assertEqual(call('/background-status',pin),{'ok':True})
+        call('/background-status',{**pin,'references':{'cinematic':refs['draft']}},403)
+        call('/background-status',{'backgroundSha256':refs['draft'],'references':{'cinematic':refs['draft']}},403)
+        payload={'schemaVersion':'ngs.background-animation-workflow.v1','projectId':'binari',**pin,
+                 'motionPrompt':'장지문 뒤 그림자가 흔들린다','playback':PLAYBACK}
+        parent='request.official.'+'8'*64
+        js="""import {PlannerStore} from './workflow-planner/planner.mjs';
+import {canonical,sha} from './workflow-planner/envelope.mjs';
+const [file,oid,raw]=process.argv.slice(1),payload=JSON.parse(raw),s=new PlannerStore(file,{cinematicEnabled:true});
+const payloadSha256=sha(canonical(payload));
+s.stage({officialRequestId:oid,projectId:'binari',requestType:'background.animation.workflow',schemaVersion:payload.schemaVersion,
+ payload,payloadSha256,registeredAt:1,status:'registered'});s.acknowledge(oid);
+s.db.prepare("UPDATE workflow_tasks SET status='running',updated_at=5 WHERE official_request_id=?").run(oid);
+console.log(payloadSha256);s.close();"""
+        payload_sha=subprocess.run(['node','--input-type=module','-e',js,str(db),parent,json.dumps(payload)],
+                         cwd=REPO,check=True,capture_output=True,text=True).stdout.strip()
+        for v in selected:
+            key='background_animation_'+v
+            tid='workflow.task.'+digest([parent,key]);sid='request.official.'+digest([parent,key])
+            claim={'officialRequestId':parent,'projectId':'binari','taskId':tid,'payloadSha256':payload_sha,'claimStamp':5}
+            inp=call('/read',{'claim':claim})
+            self.assertEqual(inp,{'sourceSha256':refs[v],'motionPrompt':payload['motionPrompt'],'playback':PLAYBACK})
+            self.assertEqual(call('/asset',{'claim':claim},binary=True),raws[v])
+            raw=png(10 if v=='pixel' else 12);f={'bytes':len(raw),'sha256':sha(raw)}
+            for i in range(45):
+                call('/frame',{'claim':claim,'frame':{**f,'index':i,'base64':base64.b64encode(raw).decode()}})
+            group={'requestId':parent,'variant':v,'backgroundSha256':refs['pixel']}
+            m={'schemaVersion':'ngs.cinematic-sequence-result.v1','projectId':'binari','officialRequestId':sid,
+               'sourceSha256':refs[v],'group':group,'width':128,'height':128,'masterFps':24,'frameCount':45,
+               'frames':[{**f,'index':i} for i in range(45)],'playback':PLAYBACK}
+            call('',{'claim':claim,'manifest':{**m,'sourceSha256':refs['draft']}},403)
+            ref='binari/cinematics/sequences/'+sid+'/manifest.json'
+            self.assertEqual(call('',{'claim':claim,'manifest':m}),{'ok':True,'resultRef':ref})
+            with sqlite3.connect(db) as conn:conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?",(ref,tid))
+            self.assertEqual(call('/result',{'officialRequestId':sid,'group':group}),{'ok':True,'resultRef':ref,'manifest':m})
+
     def test_background_has_typed_claim_and_publishes_only_to_background_collection(self):
         root,db,claim,call,payload,_=self.sequence(background=True)
         base=PROJECT_ORIGIN+BACKGROUND

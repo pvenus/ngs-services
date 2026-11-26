@@ -152,7 +152,7 @@ class WorkflowCinematic:
         return {'ok':True,'resultRef':result_ref(oid),'manifest':m}
 
 
-def serve(handler,*,attribute='workflow_cinematic',path=PATH,capability=CAPABILITY,body_limits=None):
+def serve(handler,*,attribute='workflow_cinematic',path=PATH,capability=CAPABILITY,body_limits=None,additional_ready=None):
     obj=getattr(handler.server,attribute,None)
     if not isinstance(obj,WorkflowCinematic):return handler.respond(404,{'error':'WORKFLOW_CINEMATIC_DISABLED'})
     parsed=urlsplit(handler.path)
@@ -163,6 +163,9 @@ def serve(handler,*,attribute='workflow_cinematic',path=PATH,capability=CAPABILI
         if handler.command=='GET' and parsed.path==path:
             if not obj.ready():return handler.respond(503,{'error':'WORKFLOW_CINEMATIC_NOT_READY'})
             return handler.respond(200,{'enabled':True,'schemaVersion':capability})
+        if handler.command=='GET' and additional_ready and parsed.path==additional_ready[0]:
+            if not obj.background_ready():return handler.respond(503,{'error':'WORKFLOW_CINEMATIC_NOT_READY'})
+            return handler.respond(200,{'enabled':True,'schemaVersion':additional_ready[1]})
         if handler.command!='POST':return handler.respond(404,{'error':'WORKFLOW_CINEMATIC_ROUTE'})
         n=handler.headers.get('Content-Length','')
         maximum=(body_limits or {path:MAX_BODY}).get(parsed.path,4096)

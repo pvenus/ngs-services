@@ -89,3 +89,38 @@ test('formal pixel background has three exact dependencies and two image calls',
  assert.deepEqual(plan.tasks.map(x=>x.dependsOn),[null,plan.tasks[0].id,plan.tasks[1].id]);
  assert.throws(()=>validateExtraCinematic({...payload,width:384},'binari',backgroundPixelType));
 });
+
+test('background requests choose one or two independent tasks and require both exact publication receipts',async()=>{
+ const {backgroundAnimationType:type,backgroundAnimationSchema:schema,validateExtraCinematic,cinematicSequenceResultRef}=await import('./cinematic-envelope.mjs');
+ const playback={durationFrames:132,speedCurve:[{frame:0,rate:1/3}],cameraCurve:[{frame:0,x:.5,y:.5,zoom:1}]};
+ const pixel='c'.repeat(64);
+ const payload={schemaVersion:schema,projectId:'binari',backgroundSha256:pixel,references:{cinematic:sourceSha256,pixel},
+  motionPrompt:p.motionPrompt,playback};
+ const asRow=payload=>({...request(payload),requestType:type,schemaVersion:schema,payloadSha256:sha(validateExtraCinematic(payload,'binari',type))});
+ const row=asRow(payload),plan=buildPlan(row);
+ assert.deepEqual(plan.tasks.map(t=>[t.workerType,t.dependsOn,t.input.variant,t.input.sourceSha256,t.input.motionPrompt]),
+  [['animation',null,'cinematic',sourceSha256,p.motionPrompt],['animation',null,'pixel',pixel,p.motionPrompt]]);
+ assert.equal(buildPlan(asRow({...payload,references:{pixel}})).tasks.length,1);
+ for(const references of [{},{draft:pixel},{cinematic:pixel,pixel}])assert.throws(()=>asRow({...payload,references}),/INVALID/);
+ let broken='pixel';
+ const store=new PlannerStore(':memory:',{cinematicEnabled:true,readCinematicPublication:async out=>({ok:true,resultRef:out.resultRef,manifest:{
+  schemaVersion:'ngs.cinematic-sequence-result.v1',projectId:'binari',officialRequestId:out.officialRequestId,
+  sourceSha256:out.group.variant===broken?'d'.repeat(64):out.sourceSha256,group:out.group,playback,width:512,height:352,
+  masterFps:24,frameCount:45,frames:Array.from({length:45},(_,i)=>({index:i,bytes:1024,sha256:'e'.repeat(64)}))
+ }})});
+ try{
+  store.stage(row);store.acknowledge(oid);
+  const update=store.db.prepare("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?");
+  const finish=t=>update.run(cinematicSequenceResultRef('request.official.'+sha(canonical([oid,t.key]))),t.id);
+  finish(plan.tasks[0]);
+  assert.deepEqual(store.terminalReady(),[]);
+  store.db.prepare("UPDATE workflow_tasks SET status='failed',retry_count=retry_limit WHERE task_id=?").run(plan.tasks[1].id);
+  assert.deepEqual(store.terminalFailures(),[{official_request_id:oid,request_type:type}]);
+  finish(plan.tasks[1]);
+  const [candidate]=store.terminalReady();
+  assert.equal(candidate.publication.outputs.length,2);
+  assert.equal(await store.verifyCompletion(candidate),false);
+  broken=null;
+  assert.equal(await store.verifyCompletion(candidate),true);
+ }finally{store.close();}
+});
