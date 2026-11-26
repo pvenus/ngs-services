@@ -40,3 +40,20 @@ and verifies its content proof. It forwards document-role metadata unchanged.
 Do not add role or feature allowlists to shared file reads: the PDS or workflow
 consuming a document validates the role it needs. A new role must not require a
 writer change or prevent an unrelated document from being read.
+
+### Ownership contention
+
+Each canonical scope retains its existing on-disk Writer lock. A contending
+request waits up to two seconds for ownership within the same request. If the
+lock is released during that window, the request proceeds through its normal
+validation and atomic commit. If ownership is still unavailable, it returns
+HTTP 503 `FILEX_WRITE_BUSY` before entering the guarded operation. This limit is
+only for acquisition; it does not interrupt an active commit or retry an
+operation whose outcome is unknown. Stale revisions and other semantic
+conflicts still return HTTP 409 after validation. PDS folder scans use their
+own read controls, not this Writer lock; internal Writer reads that need a
+consistent snapshot or may recover a receipt continue to use the scope lock.
+
+Contended acquisitions emit `filex_writer_ownership` once at entry to the
+wait and once on acquisition or timeout, with an opaque wait ID and elapsed
+milliseconds. Uncontended requests are not logged.

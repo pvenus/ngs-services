@@ -8,14 +8,28 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from time import monotonic, sleep
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs, unquote
+from uuid import uuid4
 
 PREFIX = 'canonical-files/binari/knowledge/'
+OWNERSHIP_WAIT_SECONDS = 2.0
+OWNERSHIP_POLL_SECONDS = 0.025
 
 class Conflict(Exception): pass
 class PresetPrewriteConflict(Conflict): pass
+class OwnershipBusy(Exception): pass
+
+
+def _ownership_event(state, wait_id, started):
+    # No request payload, filesystem paths, task names, or credentials.
+    try:
+        print(json.dumps({'event':'filex_writer_ownership','state':state,'waitId':wait_id,
+                          'waitMs':round((monotonic()-started)*1000)}), flush=True)
+    except (OSError, ValueError):
+        pass
 
 class Store:
     def __init__(self, root):
@@ -35,7 +49,28 @@ class Store:
     def lock(self):
         fd = os.open(self.root / '.writer.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            # Wait only to acquire ownership. The body has not run, and is not
+            # timed out or replayed once it begins. This same on-disk lock still
+            # coordinates other Writer processes and existing recovery paths.
+            started = monotonic()
+            deadline = started + OWNERSHIP_WAIT_SECONDS
+            wait_id = None
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if wait_id is None:
+                        wait_id = uuid4().hex
+                        _ownership_event('waiting', wait_id, started)
+                    remaining = deadline - monotonic()
+                    if remaining > 0:
+                        sleep(min(OWNERSHIP_POLL_SECONDS, remaining))
+                    if monotonic() >= deadline:
+                        _ownership_event('timeout', wait_id, started)
+                        raise OwnershipBusy() from None
+            if wait_id is not None:
+                _ownership_event('acquired', wait_id, started)
             yield
         finally: os.close(fd)
     def get(self, key):
@@ -518,6 +553,7 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     else: return self.reply(404, {'error':'NOT_FOUND'})
                     return self.reply(200, {'ok':True})
                 return self.reply(404, {'error':'NOT_FOUND'})
+            except OwnershipBusy: return self.reply(503, {'error':'FILEX_WRITE_BUSY'})
             except Conflict: return self.reply(409, {'error':'CONFLICT'})
             except FileNotFoundError: return self.reply(404, {'error':'NOT_FOUND'})
             except (ValueError, KeyError, TypeError): return self.reply(400, {'error':'INVALID_REQUEST'})
