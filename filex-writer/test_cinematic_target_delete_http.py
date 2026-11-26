@@ -56,7 +56,7 @@ store.close();"""
         def ready():
             with factory() as client:return client.capabilities().get('workflowPinnedCinematicTargetDeleteV1') is True
         app=ThreadingHTTPServer(('127.0.0.1',0),Handler)
-        app.single_target_delete=SingleTargetDelete({CINEMATIC_ROOT:cinematic_storage_provider(planner,factory,ready)})
+        app.single_target_delete=SingleTargetDelete({CINEMATIC_ROOT:cinematic_storage_provider(planner,factory,ready)},dedicated=[CINEMATIC_ROOT])
         app.cinematic_delete_inventory=lambda source:cinematic_inventory(planner,factory,source)
         th=Thread(target=app.serve_forever,daemon=True);th.start()
         def stop():app.shutdown();app.server_close();th.join()
