@@ -131,3 +131,26 @@ retries after the initial attempt. Other workers retain the ten-minute,
 three-retry policy. The planner pins a per-task limit, preserves task state
 and already-exhausted attempts during migration, and settles failure using
 that limit. This does not retry a publication with unknown outcome.
+
+### Up to five prerequisites
+
+The existing `depends_on_task_id` remains the primary prerequisite and
+keeps historical request plans stable. The additive migration adds nullable
+`depends_on_task_id_2` through `depends_on_task_id_5`. All non-null
+prerequisites must be complete for a worker to claim a task. New plans only
+reference earlier steps in the same request; the ledger rejects holes,
+duplicates, self-references, malformed extra IDs, and missing/cross-request
+extra prerequisites. Task retry/status updates do not rewrite edges.
+
+Deploy readers first (all worker instances, PDS, OPS), then enable writes by
+setting `WORKFLOW_MULTI_DEPENDENCIES=1` in the Planner environment. By
+default all four new slots are left NULL. Enabling writes applies to new
+plans only: existing requests are not rewritten on replay. Keep compatible
+readers deployed if later disabling writes, since already-written edges
+still govern existing plans.
+
+NPC idle/combat portrait rows retain their respective planning step as the
+primary prerequisite and record the same request's representative portrait
+as the second prerequisite. PDS continues checking the representative
+portrait for older requests too. OPS retains the legacy `dependsOn` value
+and adds an ordered `dependencies` array for multi-edge steps.

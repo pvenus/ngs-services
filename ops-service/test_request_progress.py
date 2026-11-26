@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from request_progress import read_progress
+from request_progress import read_progress, ProgressUnavailable
 from test_server import started, get
 import server as S
 
@@ -90,6 +90,18 @@ class ProgressTests(unittest.TestCase):
             db.execute("UPDATE workflow_tasks SET retry_limit=30 WHERE task_id='a.a'")
         self.assertEqual([(r['retryCount'],r['retryLimit']) for r in self.reader(A)['tasks']],
                          [(0,3),(2,30),(0,3)])
+
+    def test_multiple_dependencies_project_in_order_and_reject_other_requests(self):
+        with sqlite3.connect(self.db) as db:
+            db.execute('ALTER TABLE workflow_tasks ADD COLUMN depends_on_task_id_2 TEXT')
+            db.execute("UPDATE workflow_tasks SET depends_on_task_id_2='a.z' WHERE task_id='a.b'")
+        row=self.reader(A)['tasks'][-1]
+        self.assertEqual(row['dependsOn'],'preset')
+        self.assertEqual(row['dependencies'],['preset','delete'])
+        with sqlite3.connect(self.db) as db:
+            db.execute("UPDATE workflow_tasks SET depends_on_task_id_2='b.p' WHERE task_id='a.b'")
+        with self.assertRaises(ProgressUnavailable):
+            self.reader(A)
 
     def test_multi_selection_projection_exceeds_past_256_task_guard(self):
         with sqlite3.connect(self.db) as db:

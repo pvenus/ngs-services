@@ -24,7 +24,7 @@ try{
  try{const s=fstatSync(fd);if(!s.isFile()||s.uid!==process.getuid()||s.nlink!==1||(s.mode&0o777)!==0o600)throw Error();}
  finally{closeSync(fd);}
  // Request Service admits prop work only when the canonical PDS capability is ready.
- store=new PlannerStore(file,{propImageEnabled:true,propGenerateEnabled:true,propAnimationEnabled:true,propMutationsEnabled:true,readPropPublication,cinematicEnabled:true,readCinematicPublication});
+ store=new PlannerStore(file,{propImageEnabled:true,propGenerateEnabled:true,propAnimationEnabled:true,propMutationsEnabled:true,readPropPublication,cinematicEnabled:true,readCinematicPublication,multiDependencies:process.env.WORKFLOW_MULTI_DEPENDENCIES==='1'});
 }catch{
  console.error('WORKFLOW_PLANNER_DATABASE_INVALID');process.exit(1);
 }

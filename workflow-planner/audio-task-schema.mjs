@@ -29,13 +29,53 @@ export const createWorkflowTasksSql=ddl(live,{ifMissing:true});
 const normal=sql=>sql?.replace(/"workflow_tasks"/g,live).replace(/'[^']*'|\s+/g,token=>token[0]==="'"?token:'');
 const legacy=normal(ddl(live,{audio:false})),current=normal(ddl(live)),withPortraitReadOwner=normal(ddl(live,{portraitReadOwner:true}));
 const withRetryPolicy=normal(ddl(live,{portraitReadOwner:true,policy:true}));
+export const ADDITIONAL_DEPENDENCY_COLUMNS=Object.freeze([2,3,4,5].map(n=>'depends_on_task_id_'+n));
+const dependencyColumns=ADDITIONAL_DEPENDENCY_COLUMNS.map((col,index)=>{
+ const parents=['depends_on_task_id',...ADDITIONAL_DEPENDENCY_COLUMNS.slice(0,index)];
+ return `${col} TEXT CHECK (${col} IS NULL OR (
+  length(${col})=78 AND substr(${col},1,14)='workflow.task.' AND substr(${col},15) NOT GLOB '*[^0-9a-f]*'
+  AND ${col}<>task_id AND ${parents.map(p=>p+' IS NOT NULL AND '+col+'<>'+p).join(' AND ')}))`;
+});
+const withDependencies=prefix=>withRetryPolicy.replace('UNIQUE(official_request_id,task_key)',
+ prefix.map(col=>normal(col)+',').join('')+'UNIQUE(official_request_id,task_key)');
+const dependencySchemas=dependencyColumns.map((_,i)=>withDependencies(dependencyColumns.slice(0,i+1)));
 const failure=()=>Error('WORKFLOW_AUDIO_TASK_SCHEMA_UNKNOWN');
+
+export function migrateWorkflowDependencies(db){
+ db.exec('BEGIN IMMEDIATE');
+ try{
+  const sql=normal(db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name=?").get(live)?.sql);
+  const index=dependencySchemas.indexOf(sql);
+  if(index<0&&sql!==withRetryPolicy)throw Error('WORKFLOW_DEPENDENCY_SCHEMA_UNKNOWN');
+  for(const column of dependencyColumns.slice(index+1))db.exec(`ALTER TABLE ${live} ADD COLUMN ${column}`);
+  // SQLite ADD COLUMN cannot attach a compound (request, parent) foreign key.
+  // Explicit guards preserve its same-request and target-existence guarantees
+  // without replacing the live table or adding another table.
+  const parentGuard=ADDITIONAL_DEPENDENCY_COLUMNS.map(c=>
+   `NEW.${c} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${live}
+    WHERE official_request_id=NEW.official_request_id AND task_id=NEW.${c})`).join(' OR ');
+  const referenced=`EXISTS (SELECT 1 FROM ${live} WHERE official_request_id=OLD.official_request_id
+   AND OLD.task_id IN (${ADDITIONAL_DEPENDENCY_COLUMNS.join(',')}))`;
+  const abort=`SELECT RAISE(ABORT,'WORKFLOW_DEPENDENCY_FOREIGN_KEY');`;
+  const parentFields=['task_id','official_request_id'];
+  db.exec(`CREATE TRIGGER IF NOT EXISTS workflow_dependency_insert BEFORE INSERT ON ${live}
+    WHEN ${parentGuard} BEGIN ${abort} END;
+   CREATE TRIGGER IF NOT EXISTS workflow_dependency_update
+    BEFORE UPDATE OF ${[...parentFields,...ADDITIONAL_DEPENDENCY_COLUMNS].join(',')} ON ${live}
+    WHEN (${parentGuard}) OR ((OLD.task_id<>NEW.task_id OR OLD.official_request_id<>NEW.official_request_id)
+      AND ${referenced}) BEGIN ${abort} END;
+   CREATE TRIGGER IF NOT EXISTS workflow_dependency_delete BEFORE DELETE ON ${live}
+    WHEN ${referenced} BEGIN ${abort} END;`);
+  db.exec('COMMIT');
+ }catch(error){db.exec('ROLLBACK');throw error;}
+}
+
 
 export function migrateWorkflowAudioTask(db){
  db.exec('BEGIN IMMEDIATE');
  try{
   const sql=db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name=?").get(live)?.sql;
-  if(normal(sql)===current||normal(sql)===withPortraitReadOwner||normal(sql)===withRetryPolicy){db.exec('COMMIT');return false;}
+  if(normal(sql)===current||normal(sql)===withPortraitReadOwner||normal(sql)===withRetryPolicy||dependencySchemas.includes(normal(sql))){db.exec('COMMIT');return false;}
   if(normal(sql)!==legacy||
      db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE (type IN ('index','trigger') AND tbl_name=? AND sql IS NOT NULL) OR type='view'").get(live).n!==0||
      db.prepare(`PRAGMA foreign_key_check(${live})`).all().length)throw failure();
@@ -61,7 +101,7 @@ export function migrateWorkflowRetryPolicy(db) {
  db.exec('BEGIN IMMEDIATE');
  try {
   const sql=normal(db.prepare("SELECT sql FROM sqlite_schema WHERE type='table' AND name=?").get(live)?.sql);
-  if(sql===withRetryPolicy){db.exec('COMMIT');return false;}
+  if(sql===withRetryPolicy||dependencySchemas.includes(sql)){db.exec('COMMIT');return false;}
   if(sql!==withPortraitReadOwner||
      db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE (type IN ('index','trigger') AND tbl_name=? AND sql IS NOT NULL) OR type='view'").get(live).n||
      db.prepare(`PRAGMA foreign_key_check(${live})`).all().length)throw Error('WORKFLOW_RETRY_POLICY_SCHEMA_UNKNOWN');

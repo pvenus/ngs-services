@@ -11,7 +11,7 @@ import {npcPlanningAddType,npcPlanningAddTaskKey,validateNPCPlanningAdd} from '.
 import {audioRequestType,audioTaskKey,validateAudioGenerate} from './audio-generate-envelope.mjs';
 import {audioDeleteType,audioDeleteTaskKey,validateAudioDelete} from './audio-delete-envelope.mjs';
 import {audioSeparateType,audioSeparateTaskKey,validateAudioSeparate} from './audio-separate-envelope.mjs';
-import {createWorkflowTasksSql,PORTRAIT_READ_OWNER_COLUMN,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,FAST_RETRY_LIMIT,migrateWorkflowAudioTask,migrateWorkflowRetryPolicy} from './audio-task-schema.mjs';
+import {createWorkflowTasksSql,PORTRAIT_READ_OWNER_COLUMN,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,FAST_RETRY_LIMIT,migrateWorkflowAudioTask,migrateWorkflowRetryPolicy,migrateWorkflowDependencies,ADDITIONAL_DEPENDENCY_COLUMNS} from './audio-task-schema.mjs';
 
 import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit} from './motion-preset-convert-2d-plan.mjs';
@@ -59,11 +59,11 @@ export function checkRow(row){
  return payload;
 }
 
-export function buildPlan(row,{pixelPortraits=true}={}){
- return materializePlan(row,checkRow(row),pixelPortraits);
+export function buildPlan(row,{pixelPortraits=true,multiDependencies=false}={}){
+ return materializePlan(row,checkRow(row),pixelPortraits,multiDependencies);
 }
 
-function materializePlan(row,payload,pixelPortraits=true){
+function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false){
  if(row.requestType===fileDeleteType){
   const {target,expected}=JSON.parse(payload);
   ensure(target.path.split('/').at(-1)!==row.officialRequestId,'NGS_FILE_DELETE_PAYLOAD_INVALID');
@@ -187,11 +187,13 @@ function materializePlan(row,payload,pixelPortraits=true){
  const required=new Set(['idle',...(basic&&row.payload.includeCombat?['combat']:poseSelection?motions.map(motion=>motion.posePreset):[])]);
  const poses=motionSelectionPoses.filter(pose=>required.has(pose));
  const tasks=[],ids=new Map();
- const add=(key,type,workerType,dep,extra={})=>{
-  ensure(dep===null||ids.has(dep),'WORKFLOW_DEPENDENCY_NOT_EARLIER');
+ const add=(key,type,workerType,dep,extra={},additional=[])=>{
+  const predecessors=dep===null?additional:[dep,...additional];
+  ensure((dep!==null||additional.length===0)&&predecessors.length<=5&&
+   new Set(predecessors).size===predecessors.length&&predecessors.every(k=>k!==key&&ids.has(k)),'WORKFLOW_DEPENDENCY_INVALID');
   const id='workflow.task.'+sha(canonical([row.officialRequestId,key]));
   ids.set(key,id);
-  tasks.push({id,key,type,workerType,dependsOn:dep===null?null:ids.get(dep),input:{npcId,...extra}});
+  tasks.push({id,key,type,workerType,dependsOn:dep===null?null:ids.get(dep),...(additional.length?{additionalDependencies:additional.map(k=>ids.get(k))}:{}),input:{npcId,...extra}});
  };
  if(replace)add('delete','npc.delete-folder','file',null,{scope:'exact-npc-folder',preserveRequestHistory:true,noOldDataReuse:true});
  add('preset','npc.preset','document',replace?'delete':null,{mode:replace?'fresh-replacement':'new',noOldDataReuse:true});
@@ -202,7 +204,7 @@ function materializePlan(row,payload,pixelPortraits=true){
  for(const pose of poses){
   const lane=motionPoseRegistry[pose],pixel='portrait_pixel_'+pose+'_reference';
   add(lane.planKey,lane.planType,'document','planning_representative');
-  add(lane.referenceKey,lane.referenceType,'image',lane.planKey,!basic&&pixelPortraits?{imageStyle:pixelImageStyle}:{});
+  add(lane.referenceKey,lane.referenceType,'image',lane.planKey,!basic&&pixelPortraits?{imageStyle:pixelImageStyle}:{},multiDependencies?['portrait_representative']:[]);
   if(!basic&&pixelPortraits)add(pixel,portraitPixelTaskType,'postprocess',lane.referenceKey,{posePreset:pose,direction:null});
  }
  if(basic)return {payload,tasks};
@@ -251,30 +253,34 @@ export function migrateNpcPortraitReadOwner(db){
 // A legal worker transition cannot make this exact graph runnable again. In
 // particular, a running claim is never inferred to have failed, and a failed
 // task below the cap is still live even while its retry cooldown is in effect.
-function restoreStoredPlan(run){
+function restoreStoredPlan(run,{multiDependencies=false}={}){
  try{
   const plan=buildPlan({officialRequestId:run.official_request_id,projectId:run.project_id,
    requestType:run.request_type,schemaVersion:run.schema_version,payload:JSON.parse(run.payload),
-   payloadSha256:run.payload_sha256,status:'registered',registeredAt:run.registered_at});
+   payloadSha256:run.payload_sha256,status:'registered',registeredAt:run.registered_at},{multiDependencies});
   return plan.payload===run.payload?plan:null;
  }catch{return null;}
 }
 const exhausted=row=>row?.status==='failed'&&row.retry_count===(row.retry_limit??WORKFLOW_TASK_MAX_RETRIES);
 const exactStoredTask=(row,task)=>row&&row.task_id===task.id&&row.task_key===task.key&&
  row.task_type===task.type&&row.worker_type===task.workerType&&row.task_input===canonical(task.input)&&
- row.depends_on_task_id===task.dependsOn;
+ row.depends_on_task_id===task.dependsOn&&ADDITIONAL_DEPENDENCY_COLUMNS.every((column,i)=>
+  (row[column]??null)===(task.additionalDependencies?.[i]??null));
 
 function hasExhaustedRegenerationGraph(run,readTasks){
- const plan=restoreStoredPlan(run);
+ const legacyPlan=restoreStoredPlan(run);
+ if(!legacyPlan)return false;
+ const rows=readTasks.all(run.official_request_id,legacyPlan.tasks.length+1);
+ if(rows.length!==legacyPlan.tasks.length)return false;
+ const plan=rows.some(row=>row.depends_on_task_id_2!==null&&row.depends_on_task_id_2!==undefined)?
+  restoreStoredPlan(run,{multiDependencies:true}):legacyPlan;
  if(!plan)return false;
- const rows=readTasks.all(run.official_request_id,plan.tasks.length+1);
- if(rows.length!==plan.tasks.length)return false;
  const byId=new Map(rows.map(row=>[row.task_id,row]));
  if(!rows.some(exhausted))return false;
  return plan.tasks.every(task=>{
   const row=byId.get(task.id);
   return exactStoredTask(row,task)&&(row.status==='completed'||exhausted(row)||
-   (row.status==='pending'&&task.dependsOn!==null&&exhausted(byId.get(task.dependsOn))));
+   (row.status==='pending'&&[task.dependsOn,...(task.additionalDependencies??[])].some(id=>exhausted(byId.get(id)))));
  });
 }
 
@@ -350,7 +356,8 @@ export class PlannerStore{
  #propMutationsEnabled;
  #cinematicEnabled;
  #readCinematicPublication;
- constructor(path,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propMutationsEnabled=false,readPropPublication,cinematicEnabled=false,readCinematicPublication}={}){
+ #multiDependencies;
+ constructor(path,{propImageEnabled=false,propGenerateEnabled=false,propGenerateMotionEnabled=false,propAnimationEnabled=propGenerateMotionEnabled,propMutationsEnabled=false,readPropPublication,cinematicEnabled=false,readCinematicPublication,multiDependencies=false}={}){
   if(propGenerateEnabled===true&&typeof readPropPublication!=='function')throw Error(propGenerateUnavailable);
   this.#propGenerateEnabled=propGenerateEnabled===true;
   this.#propGenerateMotionEnabled=propGenerateMotionEnabled===true;
@@ -360,6 +367,7 @@ export class PlannerStore{
   this.#propImageEnabled=propImageEnabled===true;
   this.#cinematicEnabled=cinematicEnabled===true;
   this.#readCinematicPublication=readCinematicPublication;
+  this.#multiDependencies=multiDependencies===true;
   this.db=new DatabaseSync(path);
   const names=this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
   if(names.some(({name})=>!['workflow_runs','workflow_tasks'].includes(name))){this.db.close();throw Error('WORKFLOW_DATABASE_NOT_DEDICATED');}
@@ -372,7 +380,7 @@ export class PlannerStore{
     updated_at INTEGER NOT NULL, reason TEXT
   ) STRICT;
   ${createWorkflowTasksSql};`);
-  try{migrateWorkflowRetryCount(this.db);migrateWorkflowAudioTask(this.db);migrateNpcPortraitReadOwner(this.db);migrateWorkflowRetryPolicy(this.db);}catch(e){this.db.close();throw e;}
+  try{migrateWorkflowRetryCount(this.db);migrateWorkflowAudioTask(this.db);migrateNpcPortraitReadOwner(this.db);migrateWorkflowRetryPolicy(this.db);migrateWorkflowDependencies(this.db);}catch(e){this.db.close();throw e;}
  }
  stage(row){
   const payload=checkRow(row);
@@ -392,12 +400,13 @@ export class PlannerStore{
       prior.payload===payload&&prior.payload_sha256===row.payloadSha256&&prior.registered_at===row.registeredAt,'WORKFLOW_REPLAY_CHANGED');
    }else{
     if(row.requestType===conceptCategoryRequestType&&row.payload.operation==='replace')throw Error('NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID');
-    const plan=materializePlan(row,payload);
+    const plan=materializePlan(row,payload,true,this.#multiDependencies);
     this.db.prepare("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,'awaiting_rs',?,?)")
      .run(row.officialRequestId,row.projectId,row.requestType,row.schemaVersion,plan.payload,row.payloadSha256,row.registeredAt,Date.now(),null);
-    const stmt=this.db.prepare('INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,depends_on_task_id,updated_at,retry_limit) VALUES(?,?,?,?,?,?,?,?,?)');
+    const stmt=this.db.prepare(`INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,depends_on_task_id,updated_at,retry_limit,${ADDITIONAL_DEPENDENCY_COLUMNS.join(',')}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for(const task of plan.tasks)stmt.run(task.id,row.officialRequestId,task.key,task.type,task.workerType,canonical(task.input),task.dependsOn,Date.now(),
-     ['image','document'].includes(task.workerType)?FAST_RETRY_LIMIT:WORKFLOW_TASK_MAX_RETRIES);
+     ['image','document'].includes(task.workerType)?FAST_RETRY_LIMIT:WORKFLOW_TASK_MAX_RETRIES,
+     ...ADDITIONAL_DEPENDENCY_COLUMNS.map((_,i)=>task.additionalDependencies?.[i]??null));
    }
    this.db.exec('COMMIT');return prior===undefined;
   }catch(e){this.db.exec('ROLLBACK');throw e;}

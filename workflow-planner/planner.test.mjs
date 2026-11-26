@@ -162,7 +162,7 @@ test('retry count migrates existing tasks without replacing status, times or dep
  const id=tasks(s).find(x=>x.task_key==='animation_walk_s').task_id;
  s.db.prepare("UPDATE workflow_tasks SET status='failed',updated_at=123456789 WHERE task_id=?").run(id);
  const before=tasks(s).map(({retry_count,...x})=>x);
- s.db.exec('ALTER TABLE workflow_tasks DROP COLUMN portrait_read_owner_pid; ALTER TABLE workflow_tasks DROP COLUMN retry_count; ALTER TABLE workflow_tasks DROP COLUMN retry_limit');
+ s.db.exec('DROP TRIGGER workflow_dependency_insert; DROP TRIGGER workflow_dependency_update; DROP TRIGGER workflow_dependency_delete; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_5; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_4; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_3; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_2; ALTER TABLE workflow_tasks DROP COLUMN portrait_read_owner_pid; ALTER TABLE workflow_tasks DROP COLUMN retry_count; ALTER TABLE workflow_tasks DROP COLUMN retry_limit');
  s.close();
  const next=f.open();
  assert.deepEqual(tasks(next).map(({retry_count,...x})=>x),before);

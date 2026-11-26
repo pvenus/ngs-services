@@ -36,7 +36,7 @@ test('legacy audio worker CHECK upgrade preserves exact historical rows, statuse
  const {db,path}=fixture(t),before=rows(db),parents=runRows(db);
  db.close();
  const upgraded=new PlannerStore(path);
- assert.deepEqual(rows(upgraded.db).map(({portrait_read_owner_pid,retry_limit,...r})=>r),before.map(r=>({...r})));
+ assert.deepEqual(rows(upgraded.db).map(({portrait_read_owner_pid,retry_limit,depends_on_task_id_2,depends_on_task_id_3,depends_on_task_id_4,depends_on_task_id_5,...r})=>r),before.map(r=>({...r})));
  assert.ok(rows(upgraded.db).every(r=>r.portrait_read_owner_pid===null));assert.deepEqual(runRows(upgraded.db),parents);
  assert.deepEqual(upgraded.db.prepare('PRAGMA foreign_key_check').all(),[]);
  assert.throws(()=>upgraded.db.exec("UPDATE workflow_tasks SET depends_on_task_id='missing' WHERE task_id='b'"),/FOREIGN KEY/);
@@ -49,7 +49,7 @@ test('legacy audio worker CHECK upgrade preserves exact historical rows, statuse
  assert.equal(rows(upgraded.db).at(-1).worker_type,'audio');upgraded.close();
  const resumed=new PlannerStore(path);
  t.after(()=>resumed.close());
- assert.deepEqual(rows(resumed.db).slice(0,3).map(({portrait_read_owner_pid,retry_limit,...r})=>r),before.map(r=>({...r})));
+ assert.deepEqual(rows(resumed.db).slice(0,3).map(({portrait_read_owner_pid,retry_limit,depends_on_task_id_2,depends_on_task_id_3,depends_on_task_id_4,depends_on_task_id_5,...r})=>r),before.map(r=>({...r})));
  assert.ok(rows(resumed.db).every(r=>r.portrait_read_owner_pid===null));
  assert.equal(rows(resumed.db).at(-1).worker_type,'audio');
 });

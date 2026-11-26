@@ -85,7 +85,7 @@ class Tests(unittest.TestCase):
         oid=base['officialRequestId']
         task='workflow.task.'+media.digest([oid,key])
         with sqlite3.connect(self.db) as db:
-            db.execute("INSERT INTO workflow_tasks VALUES(?,?,?,?,?,?,NULL,15,?,'running')",
+            db.execute("INSERT INTO workflow_tasks (task_id,official_request_id,task_key,task_type,worker_type,task_input,result_ref,updated_at,depends_on_task_id,status) VALUES(?,?,?,?,?,?,NULL,15,?,'running')",
                        (task,oid,key,kind,lane,media.encoded({'npcId':OWNER,**(fields or {})}).decode(),
                         parent['taskId'] if parent else None))
         return {**base,'taskId':task,'claimStamp':15}
@@ -222,10 +222,24 @@ class Tests(unittest.TestCase):
         self.assertEqual(code,200,body)
         self.done(self.c)
         rep,raw=self.prepare_common()
+        picture={**self.c,'taskId':'workflow.task.'+media.digest([self.c['officialRequestId'],'portrait_representative'])}
+        with sqlite3.connect(self.db) as db:
+            for slot in range(2,6):
+                db.execute(f'ALTER TABLE workflow_tasks ADD COLUMN depends_on_task_id_{slot} TEXT')
         for pose in ('idle','combat'):
             recipe=POSE_RECIPES[pose]
             plan=self.plan_write(self.plan_claim(pose,rep),pose)
             center=self.task_claim(recipe.reference_key,recipe.reference_type,'image',plan)
+            with sqlite3.connect(self.db) as db:
+                db.execute("UPDATE workflow_tasks SET depends_on_task_id_2=depends_on_task_id WHERE task_id=?",
+                           (center['taskId'],))
+            self.assertEqual(self.post({'claim':center},path=VARIANTS[pose][0]+'/read')[0],403)
+            with sqlite3.connect(self.db) as db:
+                db.execute("UPDATE workflow_tasks SET depends_on_task_id_2=? WHERE task_id=?",
+                           (picture['taskId'],center['taskId']))
+                db.execute("UPDATE workflow_tasks SET status='pending' WHERE task_id=?",(picture['taskId'],))
+            self.assertEqual(self.post({'claim':center},path=VARIANTS[pose][0]+'/read')[0],403)
+            self.done(picture)
             self.image_write(center,pose,45 if pose=='idle' else 46,reference=raw)
             self.assertEqual(self.post({'claim':self.pixel_claim(pose,None,center)},path=PIXEL+'/read')[0],403)
         authority=self.pds.workflow_portrait_combat.source

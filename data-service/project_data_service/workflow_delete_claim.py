@@ -227,7 +227,7 @@ class PrivatePlannerClaim:
                 require(match is not None)
                 slot,media_direction=match.groups()
             require(task=='workflow.task.'+digest([oid,key]))
-            row=db.execute("""SELECT r.*,t.task_key,t.task_input,t.depends_on_task_id,t.updated_at AS task_stamp
+            row=db.execute("""SELECT r.*,t.*,t.updated_at AS task_stamp
                 FROM workflow_tasks t JOIN workflow_runs r USING(official_request_id)
                 WHERE t.task_id=? AND t.official_request_id=? AND t.status='running'
                 AND t.task_type=? AND t.worker_type=? AND t.task_key=?
@@ -430,7 +430,14 @@ class PrivatePlannerClaim:
                 require(row['depends_on_task_id']==completed(center_key,'npc.portrait-pixel','postprocess',
                         {'npcId':owner,'posePreset':gated_pose,'direction':None}))
             elif parent_row:require(row['depends_on_task_id']==completed(*parent_row))
-            if key in ('portrait_idle_reference','portrait_combat_reference'):completed('portrait_representative','npc.portrait-representative','image')
+            additional=tuple(row[k] if k in row.keys() else None for k in
+                             (f'depends_on_task_id_{slot}' for slot in range(2,6)))
+            if key in ('portrait_idle_reference','portrait_combat_reference'):
+                representative=completed('portrait_representative','npc.portrait-representative','image')
+                # Historical single-edge rows still require the same representative receipt.
+                require(additional in ((None,)*4,(representative,None,None,None)))
+            else:
+                require(additional==(None,)*4)
             identity={k:claim[k] for k in IDENTITY}
             if key=='delete':
                 yield identity,c,tuple(slots.values()),selected_poses is not None

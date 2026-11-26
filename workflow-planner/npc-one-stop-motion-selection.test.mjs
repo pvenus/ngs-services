@@ -101,3 +101,32 @@ test('separate basic schema builds originals only with independent combat opt-in
  assert.throws(()=>make(false,{motionSelection})); assert.throws(()=>make(undefined));
  assert.throws(()=>make(false,{character:{...common.character,npcId:'npc.wrong'}}));
 });
+
+test('multi-dependency rollout pins independent same-request planning and representative edges',t=>{
+ const {row}=cases[0],{motionSelection,...common}=row.payload;
+ const schemaVersion='ngs.npc-one-stop.basic.v1';
+ const request=hashRow({...row,schemaVersion},{...common,schemaVersion,includeCombat:true,character:{...common.character,actId:'act01'}});
+ const old=new PlannerStore(':memory:'), enabled=new PlannerStore(':memory:',{multiDependencies:true});
+ t.after(()=>{old.close();enabled.close();});
+ old.stage(request);enabled.stage(request);
+ const query=(s,key)=>s.db.prepare('SELECT * FROM workflow_tasks WHERE task_key=? AND official_request_id=?').get(key,request.officialRequestId);
+ const rep=query(enabled,'portrait_representative');
+ for(const pose of ['idle','combat']){
+  const key='portrait_'+pose+'_reference', parent=query(enabled,'planning_'+pose);
+  assert.equal(query(old,key).depends_on_task_id_2,null);
+  assert.equal(query(enabled,key).depends_on_task_id,parent.task_id);
+  assert.equal(query(enabled,key).depends_on_task_id_2,rep.task_id);
+  assert.equal(query(enabled,key).depends_on_task_id_3,null);
+  const update=enabled.db.prepare('UPDATE workflow_tasks SET depends_on_task_id_2=? WHERE task_id=?');
+  const id=query(enabled,key).task_id;
+  assert.throws(()=>update.run(parent.task_id,id),/CHECK/);
+  assert.throws(()=>update.run(id,id),/CHECK/);
+  assert.throws(()=>update.run('bad',id),/CHECK|WORKFLOW_DEPENDENCY_FOREIGN_KEY/);
+  assert.throws(()=>update.run('workflow.task.'+'f'.repeat(64),id),/WORKFLOW_DEPENDENCY_FOREIGN_KEY/);
+ }
+ const neighbor={...request,officialRequestId:'request.official.'+'f'.repeat(64)};
+ enabled.stage(neighbor);
+ const neighborRep=enabled.db.prepare("SELECT task_id FROM workflow_tasks WHERE task_key='portrait_representative' AND official_request_id=?").get(neighbor.officialRequestId);
+ assert.throws(()=>enabled.db.prepare('UPDATE workflow_tasks SET depends_on_task_id_2=? WHERE task_id=?')
+   .run(neighborRep.task_id,query(enabled,'portrait_idle_reference').task_id),/WORKFLOW_DEPENDENCY_FOREIGN_KEY/);
+});

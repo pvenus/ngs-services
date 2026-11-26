@@ -86,31 +86,36 @@ function stateFor(task,keys,state){
   if(finalParents.some(parent=>parent?.status==='failed'))return 'blocked';
   return finalParents.every(parent=>parent?.status==='completed')?'ready':'pending';
  }
- const parent=keys.get(task.dependsOn);
- if(parent?.status==='failed')return 'blocked';
- return !task.dependsOn||parent?.status==='completed'?'ready':'pending';
+ const parents=task.dependencies??(task.dependsOn?[task.dependsOn]:[]);
+ if(parents.some(key=>keys.get(key)?.status==='failed'))return 'blocked';
+ return parents.every(key=>keys.get(key)?.status==='completed')?'ready':'pending';
 }
 const progressLabels={completed:'완료',running:'진행 중',ready:'인수 가능',pending:'대기',failed:'실패',blocked:'선행 실패'};
 const progressRowId=key=>'progress-task-'+encodeURIComponent(key);
 function dependencyCell(task,keys,selection){
  if(motionFinalDependencies(task,keys))return cell('8방향 MP4');
- const parent=task.dependsOn,td=cell(taskName(parent));
- if(!keys.has(parent))return td;
- const link=document.createElement('a');
- link.className='progress-dependency';
- link.href='#'+progressRowId(parent);
- link.textContent=td.textContent;
- link.addEventListener('click',event=>{
-  event.preventDefault();
-  const target=$(progressRowId(parent));
-  if(!target||progressSelection!==selection)return;
-  $('progress-rows').querySelector('.dependency-target')?.classList.remove('dependency-target');
-  selection.highlighted=parent;
-  target.classList.add('dependency-target');
-  target.focus({preventScroll:true});
-  target.scrollIntoView({block:'center',inline:'nearest'});
- });
- td.replaceChildren(link);return td;
+ const parents=task.dependencies??(task.dependsOn?[task.dependsOn]:[]);
+ const td=cell(parents.length?'':taskName(null));
+ for(const [index,parent] of parents.entries()){
+  if(index)td.append(document.createTextNode(' · '));
+  if(!keys.has(parent)){td.append(document.createTextNode(taskName(parent)));continue;}
+  const link=document.createElement('a');
+  link.className='progress-dependency';
+  link.href='#'+progressRowId(parent);
+  link.textContent=taskName(parent);
+  link.addEventListener('click',event=>{
+   event.preventDefault();
+   const target=$(progressRowId(parent));
+   if(!target||progressSelection!==selection)return;
+   $('progress-rows').querySelector('.dependency-target')?.classList.remove('dependency-target');
+   selection.highlighted=parent;
+   target.classList.add('dependency-target');
+   target.focus({preventScroll:true});
+   target.scrollIntoView({block:'center',inline:'nearest'});
+  });
+  td.append(link);
+ }
+ return td;
 }
 function retryLabel({retryCount,retryLimit}){
  if(!Number.isSafeInteger(retryCount)||retryCount<0)return '—';
