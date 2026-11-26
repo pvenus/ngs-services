@@ -680,7 +680,8 @@ def serve(storage_root: Path, host: str, port: int):
     # Only owner-local hosts with the existing managed prop workflow opt in.
     prop_folder_delete=os.getenv('PDS_WORKFLOW_PROP_FOLDER_DELETE',
         '1' if host=='127.0.0.1' and os.getenv('PDS_WORKFLOW_PROP_STATIC')=='1' else '0')
-    npc_standalone_delete=os.getenv('PDS_WORKFLOW_NPC_STANDALONE_DELETE','0')
+    npc_standalone_delete=os.getenv('PDS_WORKFLOW_NPC_STANDALONE_DELETE',
+        '1' if host=='127.0.0.1' and npc_folder_delete=='1' else '0')
     if npc_standalone_delete not in ('0','1') or npc_standalone_delete=='1' and npc_folder_delete!='1':
         raise ValueError('WORKFLOW_NPC_STANDALONE_DELETE_OPT_IN')
     if prop_folder_delete not in ('0','1'):raise ValueError('WORKFLOW_PROP_FOLDER_DELETE_OPT_IN')
