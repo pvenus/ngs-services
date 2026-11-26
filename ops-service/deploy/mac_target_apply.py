@@ -38,6 +38,7 @@ def worker(name, entry):
 
 TARGETS = {
     'worker-document': worker('document', 'document/cli.mjs'),
+    'worker-document-2': Target('com.vinus.workflow.document-worker-2','Workers','workflows-document2-github-','document/cli.mjs','document-worker-2'),
     'worker-file': worker('file', 'file/cli.mjs'),
     'worker-image': worker('image', 'image/image-cli.mjs'),
     **{f'worker-image-{slot}':Target(f'com.vinus.workflow.image-worker-{slot}','Workers',f'workflows-image{slot}-github-','image/image-cli.mjs',f'image-worker-{slot}') for slot in (2,3,4)},
@@ -70,6 +71,8 @@ def validate_and_rewrite(prior, release, catalog, base, *, audio_config=None):
     if catalog.heartbeat in ('image-worker-2','image-worker-3','image-worker-4'):
         env=v.get('EnvironmentVariables',{})
         need(env.get('WORKFLOW_IMAGE_WORKER_SLOT')==catalog.heartbeat[-1], 'TARGET_IMAGE_SLOT_IDENTITY')
+    if catalog.heartbeat=='document-worker-2':
+        need(v.get('EnvironmentVariables',{}).get('WORKFLOW_DOCUMENT_WORKER_SLOT')=='2','TARGET_IMAGE_SLOT_IDENTITY')
     old = root / rel[0]
     changes = {str(old / catalog.entry): str(release / catalog.entry)}
     if catalog.heartbeat == 'rs-mcp':
@@ -269,12 +272,13 @@ def apply_target(target, sha, archive_sha, directory, home, host):
                      'TARGET_AUDIO_BINDING_CHANGED')
             pid = host.pid(catalog.label)
         need(pid is not None, 'TARGET_PRIOR_NOT_RUNNING')
-        if target in ('worker-image','worker-image-2','worker-image-3','worker-image-4'):
+        if target in ('worker-image','worker-image-2','worker-image-3','worker-image-4','worker-document','worker-document-2'):
+            role='document' if target.startswith('worker-document') else 'image'
             old_entry=Path(plistlib.loads(prior)['ProgramArguments'][1])
-            need((release/'image/image-slot.mjs').is_file(),'TARGET_IMAGE_ADMISSION_UNSUPPORTED')
-            slot='1' if target=='worker-image' else target[-1]
-            gate=home/'Workspaces/Workers/runtime/image-worker-slots'/slot
-            if (old_entry.with_name('image-slot.mjs')).is_file():
+            need((release/role/(role+'-slot.mjs')).is_file(),'TARGET_IMAGE_ADMISSION_UNSUPPORTED')
+            slot='1' if target=='worker-'+role else target[-1]
+            gate=home/'Workspaces/Workers/runtime'/(role+'-worker-slots')/slot
+            if (old_entry.with_name(role+'-slot.mjs')).is_file():
                 private_directory(gate)
                 address=gate/'pause'
                 fd=os.open(address,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -290,13 +294,13 @@ def apply_target(target, sha, archive_sha, directory, home, host):
                 # Its first cutover fences SQLite writer admission without
                 # modifying any rows; keep the transaction until it is gone.
                 # If any image work was already claimed, do not stop anything.
-                need(target=='worker-image','TARGET_IMAGE_ADMISSION_UNSUPPORTED')
+                need(target=='worker-'+role,'TARGET_IMAGE_ADMISSION_UNSUPPORTED')
                 db=home/'Workspaces/Workers/data/workflow-planner/workflow.sqlite'
                 need(plistlib.loads(prior)['ProgramArguments'][2:]==['--run','--db',str(db)],'TARGET_IMAGE_SLOT_IDENTITY')
                 private_file(db,0o600)
                 legacy_fence=sqlite3.connect(db.as_uri()+'?mode=rw',uri=True,timeout=1,isolation_level=None)
                 legacy_fence.execute('BEGIN IMMEDIATE')
-                running=legacy_fence.execute("SELECT 1 FROM workflow_tasks WHERE worker_type='image' AND status='running' LIMIT 1").fetchone()
+                running=legacy_fence.execute("SELECT 1 FROM workflow_tasks WHERE worker_type=? AND status='running' LIMIT 1",(role,)).fetchone()
                 need(running is None,'TARGET_IMAGE_DRAIN_PENDING')
         try:
             host.remove(catalog.label)

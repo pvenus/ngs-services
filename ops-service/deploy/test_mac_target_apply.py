@@ -67,6 +67,12 @@ class TargetTests(unittest.TestCase):
             slot='1' if target=='worker-image' else target[-1]
             (home/'Workspaces/Workers/runtime/image-worker-slots'/slot).mkdir(mode=0o700,parents=True)
             if slot!='1':env['WORKFLOW_IMAGE_WORKER_SLOT']=slot
+        if target in ('worker-document','worker-document-2'):
+            (old/'document').mkdir(mode=0o700,parents=True)
+            for root in (old,release):(root/'document/document-slot.mjs').write_text('fixture')
+            slot='2' if target.endswith('-2') else '1'
+            (home/'Workspaces/Workers/runtime/document-worker-slots'/slot).mkdir(mode=0o700,parents=True)
+            if slot=='2':env['WORKFLOW_DOCUMENT_WORKER_SLOT']='2'
         if target == 'worker-animation':
             (old / 'native-wan').mkdir(mode=0o700, parents=True)
             (release / 'native-wan').mkdir(mode=0o700)

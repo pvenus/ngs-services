@@ -22,7 +22,7 @@ TARGETS=(
     ('ngs-local','로컬','ngs'),('ngs-space','스페이스','ngs'),
     ('request-service','Request Service','services'),('rs-mcp','RS-MCP','services'),('workflow-planner','Workflow Planner','services'),
     ('filex-writer','Filex 저장기','services'),('backend-stack','백엔드 스택','services'),
-    ('worker-document','문서 워커','workers'),('worker-image','이미지 워커 1','workers'), ('worker-image-2','이미지 워커 2','workers'),
+    ('worker-document','문서 워커 1','workers'),('worker-document-2','문서 워커 2','workers'),('worker-image','이미지 워커 1','workers'), ('worker-image-2','이미지 워커 2','workers'),
     ('worker-image-3','이미지 워커 3','workers'), ('worker-image-4','이미지 워커 4','workers'),
     ('worker-animation','애니메이션 워커','workers'),('worker-postprocess','후처리 워커','workers'),
     ('worker-audio','오디오 워커','workers'),('worker-file','파일 워커','workers'),

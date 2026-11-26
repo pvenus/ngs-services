@@ -18,10 +18,11 @@ from prepare_service_targets import (SPECS, WORKERS, assemble_source, git, prepa
                                      tracked_targets, tracked_tree, verify_target_artifact)
 
 IMAGE_COMPANIONS=('worker-image-2','worker-image-3','worker-image-4')
-TARGET_IDS = (*SPECS[WORKERS], *IMAGE_COMPANIONS)
+COMPANIONS=(*IMAGE_COMPANIONS,'worker-document-2')
+TARGET_IDS = (*SPECS[WORKERS], *COMPANIONS)
 
 def source_target(target):
-    return 'worker-image' if target in IMAGE_COMPANIONS else target
+    return 'worker-image' if target in IMAGE_COMPANIONS else 'worker-document' if target=='worker-document-2' else target
 READY = 'ops.deploy-target-ready.v1'
 CANDIDATE = 'ops.mac-target-candidate.v1'
 TERMINAL = 'ops.deploy-target-result.v1'
@@ -158,6 +159,8 @@ def verify_worker_runtime(target, proposed):
         pin = env.get('WORKFLOW_IMAGE_HOST_CONFIG_SHA256')
         need(digest(read_private(config, MAX_CONTROL, mode=0o600)) == pin,
              'WORKER_IMAGE_CONFIG_UNVERIFIED')
+    elif target=='worker-document-2':
+        need(env.get('WORKFLOW_DOCUMENT_WORKER_SLOT')=='2','WORKER_SELECTOR_INVALID')
     elif target == 'worker-animation':
         _accessible(env.get('WORKFLOW_WAN_RELEASE'), directory=True)
         _accessible(env.get('WORKFLOW_WAN_PYTHON'), executable=True)
@@ -475,13 +478,13 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
             need(assemble_source(verified, repo, releases) == release, 'WORKER_RELEASE_PATH_MISMATCH')
         full_tree = _exact_source(release, tracked)
         alternates={}
-        for target in IMAGE_COMPANIONS:
-            slot=target[-1]
-            alternate=releases/(f'workflows-image{slot}-github-'+head)
+        for target in COMPANIONS:
+            catalog=TARGETS[target]
+            alternate=releases/(catalog.release_prefix+head)
             alternates[target]=alternate
             # Use the one verified image source closure, materialized into
             # independently selectable release roots (no symlinks).
-            if (home/'Library/LaunchAgents'/f'com.vinus.workflow.image-worker-{slot}.plist').is_file() and not os.path.lexists(alternate):
+            if (home/'Library/LaunchAgents'/(catalog.label+'.plist')).is_file() and not os.path.lexists(alternate):
                 with tempfile.TemporaryDirectory(prefix='.ops-image-slot-',dir=releases) as staging:
                     staged=Path(staging)/'src'
                     shutil.copytree(release,staged)
@@ -517,7 +520,7 @@ def prepare_worker_candidates(evidence, *, repo, home, control, read_main, idle,
                 for target, (candidate, runner, failed, comparison) in verified_plans.items():
                     directory = control/'targets'/target
                     try:
-                        if target in IMAGE_COMPANIONS:need(_exact_source(alternates[target],tracked)==full_tree,'WORKER_RELEASE_SOURCE_DRIFT')
+                        if target in COMPANIONS:need(_exact_source(alternates[target],tracked)==full_tree,'WORKER_RELEASE_SOURCE_DRIFT')
                         prior, _, _, proposed = _selector(target, home, alternates.get(target,release))
                         pin=candidate['expectedPriorPlistSha256']
                         need(proposed is not None and digest(prior)==pin and loaded(target,pin) is True

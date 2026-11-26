@@ -15,6 +15,7 @@ SELECTORS={
     'workflow-planner':'com.vinus.workflow.planner',
     'backend-stack':'com.projectbs.backend-stack',
     'rs-mcp':'com.vinus.ngs.rs-mcp',
+    'worker-document-2':'com.vinus.workflow.document-worker-2',
     **{f'worker-image-{slot}':f'com.vinus.workflow.image-worker-{slot}' for slot in (2,3,4)},
     **{f'worker-{name}':f'com.vinus.workflow.{name}-worker'
        for name in ('document','image','animation','postprocess','audio','file')},

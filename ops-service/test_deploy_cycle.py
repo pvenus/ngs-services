@@ -73,7 +73,7 @@ class Cycle(unittest.TestCase):
     def test_bulk_uses_only_ready_rows_and_does_not_include_space(self):
         c=self.cycle(runner=self.receipt)
         self.assertEqual({r['id'] for r in c.status()['targets']},C.IDS)
-        self.assertEqual(len(C.IDS),16)
+        self.assertEqual(len(C.IDS),17)
         self.assertNotIn('ops',C.IDS)
         target='worker-document'
         self.stage(target)

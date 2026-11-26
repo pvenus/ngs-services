@@ -169,8 +169,8 @@ class WorkerCandidates(unittest.TestCase):
         self.old_bindings={p:p.read_bytes() for p in (inner,outer)}
         self.trusted=Path(workers.__file__).parent
         extra={}
-        for target in workers.IMAGE_COMPANIONS:
-            prior_slot=self.prior.with_name(self.prior.name.replace('workflows-github-',f'workflows-image{target[-1]}-github-',1))
+        for target in workers.COMPANIONS:
+            prior_slot=self.prior.with_name(self.prior.name.replace('workflows-github-',workers.TARGETS[target].release_prefix,1))
             shutil.copytree(self.prior,prior_slot)
             extra[target]=prior_slot
         for target in workers.TARGET_IDS:
@@ -187,6 +187,7 @@ class WorkerCandidates(unittest.TestCase):
                 config=write(self.runtime/'image-config.json',b'{}')
                 env={'WORKFLOW_IMAGE_HOST_CONFIG':str(config),'WORKFLOW_IMAGE_HOST_CONFIG_SHA256':digest(config.read_bytes())}
                 if target in workers.IMAGE_COMPANIONS:env['WORKFLOW_IMAGE_WORKER_SLOT']=target[-1]
+            if target=='worker-document-2':env['WORKFLOW_DOCUMENT_WORKER_SLOT']='2'
             if target=='worker-postprocess':
                 sam=self.runtime/'sam'
                 sam.mkdir(mode=0o700)
