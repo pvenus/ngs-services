@@ -186,16 +186,18 @@ Storage Root 이동, 기반 테이블, HTTP 계약을 검증합니다.
 
 ### Folder read contention
 
-Project root reads (an empty scope or one path component) and narrower reads
-have independent capacity. Each class allows one active recursive compare and
-two file reads. A Local/Space full-project sync cannot take the slots reserved
-for narrower requests. HTTP and MCP use the same limits; saturated capacity
-still returns `FOLDER_BUSY` immediately. File hashes, change detection and
-deletion evidence are unchanged.
-On contention, PDS emits a JSON `pds_folder_busy` event with UTC time, pool,
-limit, the rejected operation and scope, and the current holder(s) with elapsed
-milliseconds. Match the holder's server-generated `requestId` with the
-`pds_folder_busy_holder_released` event to see its full hold time.
+Project-wide and narrower reads have separate capacity. An empty scope
+or one path component allows one scan and two file reads; narrower scopes
+allow four compares and six file reads. MCP and HTTP share these limits.
+Contention waits in arrival order within the appropriate pool for at most
+five seconds, without marking the workflow failed or restarting the read.
+Only an expired wait returns the existing `503 FOLDER_BUSY`; no snapshot,
+hash, or deletion checks are relaxed. This wait covers admission to the
+read, not the time allowed for an acquired operation to finish.
+
+Logs identify each request and its blockers in `pds_folder_wait`, then record
+`pds_folder_wait_acquired` or `pds_folder_busy` with elapsed wait time.
+Match the blocker ID to `pds_folder_busy_holder_released` for its full hold time.
 Operation names distinguish MCP and legacy HTTP calls. These IDs are local to
 PDS (not workflow IDs). Normal uncontended reads, file contents, individual file
 paths, hashes and credentials are not logged.

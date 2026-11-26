@@ -1,6 +1,7 @@
 import base64,hashlib,json,os,tempfile,threading,unittest
 from unittest.mock import patch
 from pathlib import Path
+from time import monotonic
 from urllib.error import HTTPError
 from urllib.request import Request,urlopen
 
@@ -72,14 +73,18 @@ class Tests(unittest.TestCase):
             return original(*args,**kwargs)
         def acquire_compare():
             completed.append(self.tool('npc_folders_compare',scope='binari',files=[]))
+        capacity=recursive_folders._FolderCapacity('compare-root',1,wait_seconds=.12)
         with patch.object(recursive_folders,'_inventory',side_effect=inventory), \
+             patch.object(recursive_folders,'_ROOT_COMPARE',capacity), \
              patch.object(recursive_folders,'_log_capacity') as log:
             holder=threading.Thread(target=acquire_compare,daemon=True);holder.start()
             try:
                 self.assertTrue(entered.wait(3))
                 scoped=self.value('npc_folders_compare',scope='binari/concept',files=[])
                 self.assertEqual(scoped['groups'][0]['files'][0]['path'],'style.json')
+                began=monotonic()
                 rejected=self.tool('npc_folders_compare',scope='binari',files=[],includeDeleted=True)
+                self.assertGreaterEqual(monotonic()-began,.10)
                 self.assertTrue(rejected['isError'])
                 self.assertEqual(json.loads(rejected['content'][0]['text']),{'error':'FOLDER_BUSY','status':503})
                 busy=log.call_args
@@ -94,21 +99,22 @@ class Tests(unittest.TestCase):
                 release.set();holder.join(6)
             self.assertEqual(len(completed),1)
             self.assertIs(completed[0]['isError'],False)
-            self.assertEqual(log.call_count,2)
+            self.assertEqual(log.call_count,3)
             last=log.call_args
             self.assertEqual(last.args,('pds_folder_busy_holder_released',))
             self.assertEqual(last.kwargs['request']['requestId'],first['requestId'])
             self.assertGreaterEqual(last.kwargs['heldMs'],first['heldMs'])
             self.value('npc_folders_compare',scope='binari',files=[])
-            self.assertEqual(log.call_count,2)
+            self.assertEqual(log.call_count,3)
 
     def test_root_file_transfers_do_not_take_scoped_file_slots(self):
         scoped=self.file.parent/'concept';scoped.mkdir()
         (scoped/'style.json').write_bytes(b'{}')
-        root=recursive_folders.fetch_capacity('binari')
+        root=recursive_folders._FolderCapacity('fetch-root',2,wait_seconds=.08)
         scoped_args={'scope':'binari/concept','path':'style.json',
                      'sha256':hashlib.sha256(b'{}').hexdigest(),'offset':0}
-        with root.hold('root_transfer_1','binari'),root.hold('root_transfer_2','binari'):
+        with patch.object(recursive_folders,'_ROOT_FETCH',root), \
+             root.hold('root_transfer_1','binari'),root.hold('root_transfer_2','binari'):
             reply=self.value('npc_folder_file_chunk',**scoped_args)
             self.assertEqual(base64.b64decode(reply['base64']),b'{}')
             blocked=self.tool('npc_folder_file_chunk',scope='binari',path='guide.bin',sha256=self.sha,offset=0)
@@ -116,8 +122,46 @@ class Tests(unittest.TestCase):
             self.assertEqual(json.loads(blocked['content'][0]['text']),{'error':'FOLDER_BUSY','status':503})
         self.assertEqual(self.value('npc_folder_file_chunk',scope='binari',path='guide.bin',sha256=self.sha,offset=0)['size'],len(self.data))
 
+    def test_scoped_comparisons_have_four_slots_and_keep_root_independent(self):
+        scoped=self.file.parent/'concept';scoped.mkdir()
+        (scoped/'style.json').write_bytes(b'{}')
+        capacity=recursive_folders._FolderCapacity('compare-scoped',4,wait_seconds=.06)
+        with patch.object(recursive_folders,'_SCOPED_COMPARE',capacity):
+            with capacity.hold('fixture','binari/concept'),capacity.hold('fixture','binari/npcs'), \
+                 capacity.hold('fixture','binari/props'):
+                self.value('npc_folders_compare',scope='binari/concept',files=[])
+                with capacity.hold('fixture','binari/cinematics'):
+                    blocked=self.tool('npc_folders_compare',scope='binari/concept',files=[])
+                    self.assertTrue(blocked['isError'])
+                    self.assertEqual(json.loads(blocked['content'][0]['text']),{'error':'FOLDER_BUSY','status':503})
+                    self.value('npc_folders_compare',scope='binari',files=[])
+
+    def test_waiting_compare_succeeds_on_release_with_same_request(self):
+        capacity=recursive_folders._FolderCapacity('compare-root',1,wait_seconds=.8)
+        waiting=threading.Event();entered=threading.Event();finished=[]
+        def log(event,**_):
+            if event=='pds_folder_wait':waiting.set()
+        def requested():
+            entered.set()
+            finished.append(self.tool('npc_folders_compare',scope='binari',files=[]))
+        waiter=threading.Thread(target=requested,daemon=True)
+        with patch.object(recursive_folders,'_ROOT_COMPARE',capacity),patch.object(recursive_folders,'_log_capacity',side_effect=log) as events:
+            with capacity.hold('fixture','binari'):
+                waiter.start()
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(waiting.wait(1))
+                self.assertTrue(waiter.is_alive())
+            waiter.join(2)
+        self.assertEqual(len(finished),1)
+        self.assertFalse(finished[0]['isError'])
+        queued=next(x for x in events.call_args_list if x.args==('pds_folder_wait',))
+        acquired=next(x for x in events.call_args_list if x.args==('pds_folder_wait_acquired',))
+        self.assertEqual(queued.kwargs['request'],acquired.kwargs['request'])
+        self.assertEqual(list(capacity.waiting),[])
+        self.assertEqual(capacity.active,{})
+
     def test_fetch_contention_reports_both_holders_and_releases_after_error(self):
-        capacity=recursive_folders._FolderCapacity('fetch',2)
+        capacity=recursive_folders._FolderCapacity('fetch',2,wait_seconds=.03)
         with patch.object(recursive_folders,'_log_capacity') as log:
             with capacity.hold('http_whole_file','binari/a'):
                 with self.assertRaisesRegex(RuntimeError,'test exit'):
@@ -126,7 +170,8 @@ class Tests(unittest.TestCase):
                             with capacity.hold('mcp_file_chunk','binari/c'):self.fail('acquired third slot')
                         raise RuntimeError('test exit')
                 with capacity.hold('mcp_file_chunk','binari/c'):pass
-            busy,*released=log.call_args_list
+            waiting,busy,*released=log.call_args_list
+            self.assertEqual(waiting.args,('pds_folder_wait',))
             self.assertEqual(busy.args,('pds_folder_busy',))
             self.assertEqual([h['scope'] for h in busy.kwargs['holders']],['binari/a','binari/b'])
             self.assertEqual({c.kwargs['request']['requestId'] for c in released},

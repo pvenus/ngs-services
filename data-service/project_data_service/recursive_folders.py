@@ -1,13 +1,13 @@
 """Read-only active canonical tree comparison. Not a filesystem snapshot."""
 import hashlib
 import json
-from collections import OrderedDict
+from collections import OrderedDict,deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import os
 import re
 import stat
-from threading import Lock
+from threading import Condition,Lock
 from time import monotonic_ns
 from uuid import uuid4
 from urllib.parse import parse_qs
@@ -52,17 +52,29 @@ def _log_capacity(event,**fields):
     except (OSError,ValueError):pass
 
 
+_READ_WAIT_SECONDS=5.0
+
+
 class _FolderCapacity:
-    def __init__(self,name,limit):
+    def __init__(self,name,limit,*,wait_seconds=_READ_WAIT_SECONDS):
         self.name=name
         self.limit=limit
-        self.lock=Lock()
+        self.wait_seconds=wait_seconds
+        self.condition=Condition()
         self.active={}
+        self.waiting=deque()
+
+    def _holders(self,now,*,mark=False):
+        out=[]
+        for holder in self.active.values():
+            if mark:holder['contended']=True
+            out.append({**holder['request'],'heldMs':(now-holder['started'])//1_000_000})
+        return out
 
     @contextmanager
     def hold(self,operation,scope):
-        # Use a server-generated ID: JSON-RPC IDs are client-local and can repeat.
-        # Never log file paths, hashes, file contents, or caller-supplied metadata.
+        # JSON-RPC IDs are client-local; never log paths below the scope,
+        # hashes, file contents, or arbitrary caller metadata.
         try:
             _parts(scope,empty=True)
         except FolderError:
@@ -70,24 +82,44 @@ class _FolderCapacity:
         if len(scope)>256:scope=scope[:253]+'...'
         request_id=uuid4().hex
         request={'requestId':request_id,'operation':operation,'scope':scope}
-        with self.lock:
-            now=monotonic_ns()
-            blocked=len(self.active)>=self.limit
-            if blocked:
-                holders=[]
-                for holder in self.active.values():
-                    holder['contended']=True
-                    holders.append({**holder['request'],'heldMs':(now-holder['started'])//1_000_000})
-            else:
-                self.active[request_id]={'request':request,'started':now,'contended':False}
-        if blocked:
-            _log_capacity('pds_folder_busy',pool=self.name,limit=self.limit,request=request,holders=holders)
-            _bad(503,'FOLDER_BUSY')
+        headers={'pool':self.name,'limit':self.limit,'request':request}
+        began=monotonic_ns()
+        with self.condition:
+            waiting=bool(self.waiting) or len(self.active)>=self.limit
+            if waiting:
+                self.waiting.append(request_id)
+                initial=self._holders(monotonic_ns(),mark=True)
+            else:self.active[request_id]={'request':request,'started':began,'contended':False}
+        if waiting:
+            _log_capacity('pds_folder_wait',**headers,holders=initial,waitBudgetMs=round(self.wait_seconds*1000))
+            deadline=began+round(self.wait_seconds*1_000_000_000)
+            acquired=False
+            with self.condition:
+                try:
+                    while True:
+                        now=monotonic_ns()
+                        if now>=deadline:
+                            final=self._holders(now,mark=True)
+                            break
+                        if self.waiting[0]==request_id and len(self.active)<self.limit:
+                            self.active[request_id]={'request':request,'started':now,'contended':False}
+                            acquired=True
+                            break
+                        self.condition.wait((deadline-now)/1_000_000_000)
+                finally:
+                    self.waiting.remove(request_id)
+                    self.condition.notify_all()
+            waited=(now-began)//1_000_000
+            if not acquired:
+                _log_capacity('pds_folder_busy',**headers,holders=final,waitedMs=waited)
+                _bad(503,'FOLDER_BUSY')
+            _log_capacity('pds_folder_wait_acquired',**headers,waitedMs=waited)
         try:yield
         finally:
-            with self.lock:
+            with self.condition:
                 holder=self.active.pop(request_id)
                 held_ms=(monotonic_ns()-holder['started'])//1_000_000
+                self.condition.notify_all()
             if holder['contended']:
                 _log_capacity('pds_folder_busy_holder_released',pool=self.name,request=request,heldMs=held_ms)
 
@@ -96,9 +128,9 @@ class _FolderCapacity:
 # Replica calls cover the project root; narrow operations have bounded capacity
 # that cannot be occupied by a root traversal or its file transfers.
 _ROOT_COMPARE=_FolderCapacity('compare-root',1)
-_SCOPED_COMPARE=_FolderCapacity('compare-scoped',1)
+_SCOPED_COMPARE=_FolderCapacity('compare-scoped',4)
 _ROOT_FETCH=_FolderCapacity('fetch-root',2)
-_SCOPED_FETCH=_FolderCapacity('fetch-scoped',2)
+_SCOPED_FETCH=_FolderCapacity('fetch-scoped',6)
 
 
 def _root_scope(parts):
