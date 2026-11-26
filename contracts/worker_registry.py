@@ -2,6 +2,11 @@
 Knowledge can compose registered capabilities, but cannot invent executable code.
 """
 ADAPTERS={'npc-field-edit','motion-preset-registration','npc-animation-frames','npc-pose-expansion','npc-animation-batch','npc-animation-experiment','npc-animation','npc-category-modify','npc-category-delete','npc-category-add','npc-lifecycle','npc-category','npc-portrait','npc-category-compare','npc-portrait-compare','npc-lifecycle-delete','npc-lifecycle-restore-backup','knowledge-mutation','concept-modify'}
+# These stage adapters execute only via the durable background Planner queue.
+# They are not NPC adapters and must not be routed to the legacy NPC runtime.
+BACKGROUND_QUEUE_ADAPTERS={'background.cinematic-source':('image',1),'background.pixel-image':('image',1),
+                           'background.pixel-correct':('postprocess',0)}
+
 def validate_registry(registry):
  if not isinstance(registry,dict) or registry.get('schemaVersion')!='ngs.worker-registry.v1' or not registry.get('version'):raise ValueError('LAYA_REGISTRY_INVALID')
  threshold=registry.get('selectionPolicy',{}).get('minimumScore')
@@ -52,7 +57,15 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
  validate_registry(registry)
  for action in registry['actions']:
   worker=action['workerId'];policy=action.get('outputPolicy',{})
-  if worker not in ADAPTERS:raise ValueError('LAYA_EXECUTION_ADAPTER_UNKNOWN')
+  if worker in ('image','postprocess'):
+   expected=BACKGROUND_QUEUE_ADAPTERS.get(action['id'])
+   if (expected!=(worker,action.get('modelCalls')) or
+       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.background-pixel-workflow.v1' or
+       registry['requestTypes'].get('background.pixel.workflow',{}).get('stageIds')!=list(BACKGROUND_QUEUE_ADAPTERS) or
+       policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
+       policy.get('apply')!='authorized-mutation'):
+    raise ValueError('LAYA_BACKGROUND_QUEUE_ADAPTER_CONTRACT')
+  elif worker not in ADAPTERS:raise ValueError('LAYA_EXECUTION_ADAPTER_UNKNOWN')
   if worker.endswith('-compare'):
    if policy.get('count')!=3 or policy.get('kind')!='comparison' or policy.get('apply')!='after-selection':raise ValueError('LAYA_COMPARISON_ADAPTER_CONTRACT')
   elif policy.get('kind')=='comparison':raise ValueError('LAYA_COMPARISON_ADAPTER_REQUIRED')
