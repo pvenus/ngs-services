@@ -191,13 +191,20 @@ def seq_frame_meta(value,index=None):
  return value
 
 def seq_manifest(m):
- require(type(m)is dict and set(m) in (SEQUENCE_KEYS,SEQUENCE_KEYS|{'group'}) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
+ require(type(m)is dict and set(m) in (SEQUENCE_KEYS,SEQUENCE_KEYS|{'group'},SEQUENCE_KEYS|{'group','upscale'}) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
   m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
   cinematic_match(m['sourceSha256'],CINEMATIC_DIGEST) and type(m['masterFps'])is int and m['masterFps']==24 and
   type(m['frameCount'])is int and m['frameCount']==SEQUENCE_FRAME_COUNT and
-  all(type(m[k])is int and 128<=m[k]<=512 and m[k]%32==0 for k in ('width','height')) and
+  all(type(m[k])is int for k in ('width','height')) and
   type(m['frames'])is list and len(m['frames'])==SEQUENCE_FRAME_COUNT,'sequence manifest')
- require(sum(seq_frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=SEQUENCE_MAX_TOTAL,'sequence byte budget')
+ if 'upscale' in m:
+  u=m['upscale']
+  require(type(u)is dict and set(u)=={'model','scale','sourceWidth','sourceHeight'} and u['model']=='seedvr2-7b-fp16' and
+   type(u['scale'])is int and u['scale']==2 and
+   all(type(u[k])is int and 128<=u[k]<=512 and u[k]%32==0 for k in ('sourceWidth','sourceHeight')) and
+   (m['width'],m['height'])==(u['sourceWidth']*2,u['sourceHeight']*2),'sequence upscale geometry')
+ else:require(all(128<=m[k]<=512 and m[k]%32==0 for k in ('width','height')),'sequence legacy geometry')
+ require(sum(seq_frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=SEQUENCE_MAX_TOTAL*(2 if 'upscale' in m else 1),'sequence byte budget')
  if 'group' in m:
   group=m['group']
   require(type(group)is dict and set(group)=={'requestId','variant','backgroundSha256'} and
@@ -211,7 +218,8 @@ def seq_png(raw,line):
  require(len(raw)==line['bytes'] and sha(raw)==line['sha256'] and len(raw)>=57 and
   raw[:16]==b'\x89PNG\r\n\x1a\n\0\0\0\rIHDR' and raw[24:29]==b'\x08\x02\0\0\0','sequence RGB integrity')
  w,h=struct.unpack_from('>II',raw,16)
- require(all(128<=v<=512 and v%32==0 for v in (w,h)),'sequence geometry')
+ require(all(128<=v<=512 and v%32==0 for v in (w,h)) or
+  all(256<=v<=1024 and v%64==0 for v in (w,h)),'sequence geometry')
  png(raw)
  at=8
  while at<len(raw):
@@ -261,7 +269,7 @@ class CinematicSequenceStore(CinematicStore):
    len(frame['base64'])<=4*((SEQUENCE_MAX_FRAME+2)//3),'sequence frame packet')
   meta=seq_frame_meta({k:v for k,v in frame.items() if k!='base64'})
   data=base64.b64decode(frame['base64'],validate=True)
-  seq_png(data,meta)
+  geometry=seq_png(data,meta)
   index=meta['index']; name=f'{index:04}.png'
   with self.lock():
    final=self._seq_dir(oid)
@@ -285,7 +293,7 @@ class CinematicSequenceStore(CinematicStore):
        require(re.fullmatch(r'00(?:[0-3][0-9]|4[0-4])\.png',f.name) and stat.S_ISREG(n.st_mode) and n.st_nlink==1 and
         0<n.st_size<=SEQUENCE_MAX_FRAME,'sequence stage integrity')
        saved+=n.st_size
-     require(saved+len(data)<=SEQUENCE_MAX_TOTAL,'sequence stage byte budget')
+     require(saved+len(data)<=SEQUENCE_MAX_TOTAL*(2 if max(geometry)>512 else 1),'sequence stage byte budget')
      self.write(dest,data)
      require(self._read(dest,SEQUENCE_MAX_FRAME)==data,'sequence stage readback')
    return {'ok':True,'index':index,'sha256':meta['sha256']}

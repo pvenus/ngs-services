@@ -62,14 +62,27 @@ def frame_meta(row,index=None):
     return row
 
 
+def upscale_proof(m):
+    u=m.get('upscale')
+    return (keys(u,('model','scale','sourceWidth','sourceHeight')) and u['model']=='seedvr2-7b-fp16' and
+            type(u['scale'])is int and u['scale']==2 and
+            all(type(u[k])is int and 128<=u[k]<=512 and u[k]%32==0 for k in ('sourceWidth','sourceHeight')) and
+            (m['width'],m['height'])==(u['sourceWidth']*2,u['sourceHeight']*2))
+
+
 def verify_manifest(m,oid,inp,group=None):
-    need(keys(m,MANIFEST if group is None else MANIFEST|{'group'}) and
+    upscale=type(m)is dict and 'upscale' in m
+    need(not upscale or group is not None)
+    fields=MANIFEST if group is None else MANIFEST|{'group'}
+    if upscale:fields=fields|{'upscale'}
+    need(keys(m,fields) and
          (group is None or m['group']==group) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
          m['projectId']=='binari' and m['officialRequestId']==oid and m['sourceSha256']==inp['sourceSha256'] and
          type(m['masterFps'])is int and m['masterFps']==24 and type(m['frameCount'])is int and m['frameCount']==COUNT and
-         all(type(m[k])is int and 128<=m[k]<=512 and m[k]%32==0 for k in ('width','height')) and
+         all(type(m[k])is int for k in ('width','height')) and
+         (upscale_proof(m) if upscale else all(128<=m[k]<=512 and m[k]%32==0 for k in ('width','height'))) and
          type(m['frames'])is list and len(m['frames'])==COUNT and playback(m['playback'])==inp['playback'])
-    need(sum(frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=MAX_TOTAL)
+    need(sum(frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=MAX_TOTAL*(2 if upscale else 1))
 
 
 def sequence_graph(db,oid):
@@ -243,6 +256,7 @@ class WorkflowCinematicSequence(WorkflowCinematic):
                 need(out=={'ok':True,'index':f['index'],'sha256':f['sha256']})
                 return out
             manifest=packet['manifest'];verify_manifest(manifest,oid,inp,group)
+            if group is not None:need('upscale' in manifest)
             if group is not None:self.background_status({'backgroundSha256':group['backgroundSha256'],
                 'references':{group['variant']:inp['sourceSha256']}})
             need(self.seq_call('',{'manifest':manifest})==manifest)

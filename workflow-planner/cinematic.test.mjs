@@ -105,7 +105,8 @@ test('background requests choose one or two independent tasks and require both e
  let broken='pixel';
  const store=new PlannerStore(':memory:',{cinematicEnabled:true,readCinematicPublication:async out=>({ok:true,resultRef:out.resultRef,manifest:{
   schemaVersion:'ngs.cinematic-sequence-result.v1',projectId:'binari',officialRequestId:out.officialRequestId,
-  sourceSha256:out.group.variant===broken?'d'.repeat(64):out.sourceSha256,group:out.group,playback,width:512,height:352,
+  sourceSha256:out.group.variant===broken?'d'.repeat(64):out.sourceSha256,group:out.group,playback,width:1024,height:704,
+  upscale:{model:'seedvr2-7b-fp16',scale:2,sourceWidth:512,sourceHeight:352},
   masterFps:24,frameCount:45,frames:Array.from({length:45},(_,i)=>({index:i,bytes:1024,sha256:'e'.repeat(64)}))
  }})});
  try{

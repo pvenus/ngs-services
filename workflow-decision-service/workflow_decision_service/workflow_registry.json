@@ -1916,16 +1916,16 @@
     "id": "background.animation-cinematic",
     "workerId": "animation",
     "candidateCount": 1,
-    "modelCalls": 1,
+    "modelCalls": 2,
     "dependsOn": [],
-    "description": "Run the shared native I2V renderer on the selected immutable cinematic background only; both variants share the same motion and playback settings.",
+    "description": "Run the shared native I2V renderer then the required local SeedVR2 7B FP16 2× postprocess on the selected immutable cinematic background only; both variants share the same motion and playback settings.",
     "inputs": [
       "pinned background PNG",
       "motionPrompt",
       "playback"
     ],
     "outputs": [
-      "one native PNG sequence and immutable result manifest"
+      "one upscaled PNG sequence and immutable model proof manifest; no native frames published"
     ],
     "requires": [],
     "provides": [
@@ -1958,16 +1958,16 @@
     "id": "background.animation-pixel",
     "workerId": "animation",
     "candidateCount": 1,
-    "modelCalls": 1,
+    "modelCalls": 2,
     "dependsOn": [],
-    "description": "Run the shared native I2V renderer on the selected immutable pixel background only; both variants share the same motion and playback settings.",
+    "description": "Run the shared native I2V renderer then the required local SeedVR2 7B FP16 2× postprocess on the selected immutable pixel background only; both variants share the same motion and playback settings.",
     "inputs": [
       "pinned background PNG",
       "motionPrompt",
       "playback"
     ],
     "outputs": [
-      "one native PNG sequence and immutable result manifest"
+      "one upscaled PNG sequence and immutable model proof manifest; no native frames published"
     ],
     "requires": [],
     "provides": [

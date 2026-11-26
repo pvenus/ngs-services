@@ -127,14 +127,18 @@ console.log(payloadSha256);s.close();"""
             inp=call('/read',{'claim':claim})
             self.assertEqual(inp,{'sourceSha256':refs[v],'motionPrompt':payload['motionPrompt'],'playback':PLAYBACK})
             self.assertEqual(call('/asset',{'claim':claim},binary=True),raws[v])
-            raw=png(10 if v=='pixel' else 12);f={'bytes':len(raw),'sha256':sha(raw)}
+            raw=png(10 if v=='pixel' else 12,256,256);f={'bytes':len(raw),'sha256':sha(raw)}
             for i in range(45):
                 call('/frame',{'claim':claim,'frame':{**f,'index':i,'base64':base64.b64encode(raw).decode()}})
             group={'requestId':parent,'variant':v,'backgroundSha256':refs['pixel']}
             m={'schemaVersion':'ngs.cinematic-sequence-result.v1','projectId':'binari','officialRequestId':sid,
-               'sourceSha256':refs[v],'group':group,'width':128,'height':128,'masterFps':24,'frameCount':45,
+               'sourceSha256':refs[v],'group':group,'width':256,'height':256,'masterFps':24,'frameCount':45,
+               'upscale':{'model':'seedvr2-7b-fp16','scale':2,'sourceWidth':128,'sourceHeight':128},
                'frames':[{**f,'index':i} for i in range(45)],'playback':PLAYBACK}
             call('',{'claim':claim,'manifest':{**m,'sourceSha256':refs['draft']}},403)
+            call('',{'claim':claim,'manifest':{**m,'upscale':{**m['upscale'],'scale':1}}},403)
+            low={k:v for k,v in m.items() if k!='upscale'}
+            call('',{'claim':claim,'manifest':{**low,'width':128,'height':128}},403)
             ref='binari/cinematics/sequences/'+sid+'/manifest.json'
             self.assertEqual(call('',{'claim':claim,'manifest':m}),{'ok':True,'resultRef':ref})
             with sqlite3.connect(db) as conn:conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?",(ref,tid))
