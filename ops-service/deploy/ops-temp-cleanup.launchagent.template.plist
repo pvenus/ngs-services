@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.vinus.ops.temp-cleanup</string>
+<key>ProgramArguments</key><array>
+<string>/opt/homebrew/bin/python3.12</string><string>-I</string><string>-B</string>
+<string>REPLACE_WITH_VERIFIED_OPS_CLEANUP_PATH</string>
+</array>
+<key>StartCalendarInterval</key><dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+<key>RunAtLoad</key><false/>
+<key>KeepAlive</key><false/>
+<key>StandardOutPath</key><string>REPLACE_WITH_PRIVATE_OPS_CLEANUP_STDOUT_PATH</string>
+<key>StandardErrorPath</key><string>REPLACE_WITH_PRIVATE_OPS_CLEANUP_STDERR_PATH</string>
+</dict></plist>

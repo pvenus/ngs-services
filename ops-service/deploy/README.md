@@ -379,3 +379,58 @@ the original selector digest byte-for-byte. Capture still checks the loaded
 launchd selector, writer image/mount/authentication and live PDS binding. An
 arbitrary plist edit or replayed/failed receipt is not adoption evidence. No
 repair operation rewrites deployment history.
+
+## Daily cleanup of abandoned download files (macOS)
+
+OPS ships `cleanup_expired_temporary.py` and
+`ops-temp-cleanup.launchagent.template.plist` in the authenticated OPS-only
+archive. This is an independent user LaunchAgent, with no OPS web route or
+background loop inside the web server. Once installed, launchd schedules it
+daily at **04:00 in the Mac's timezone**. It does not run at install/load.
+This is not an unconditional filesystem retention policy.
+
+The checked-in `RULES` tuple is the extension point. Each row supplies a
+relative directory under `~/Workspaces`, an exact filename suffix, and
+optionally a producer lock policy and an entry kind. The two initial rows
+only inspect direct-child Wan `.part` and ACE-Step `.incomplete` files at
+the specified download paths. Completed models, paths outside those two
+directories, and unrelated entries are not candidates. Add a narrow new row
+for each future producer and cover it with fixture tests. An
+`empty-directory` row can remove old empty matched folders; nonempty
+folders are intentionally never removed recursively.
+
+Candidates must be at least 10×24 hours old by modification time. A positive
+or uncertain `lsof` result skips the candidate. For Hugging Face, an
+existing corresponding download lock must also be acquirable before
+deletion. The runner does not remove producer locks. Symlink components,
+symlink targets, hardlinked files, foreign-owned entries and entries mounted
+on a different device than the selected directory are not followed or
+removed. The runner compares identity, type, ownership, size and timestamps
+again before each removal. These checks make normal producer races unlikely;
+for future producers with a different locking scheme, add a producer-specific
+guard before enrolling their active cache. Outputs contain aggregate counts
+per rule and allocated bytes observed before deletion, not a claim about
+bytes physically reclaimed on APFS.
+
+**Provisioning (operator-controlled, once per policy revision):**
+
+1. Take both files from one verified OPS release whose archive and commit
+   agree. Install the Python file as an owner-only regular file in the
+   operator-managed `~/Workspaces/OPS/runtime/deploy-control/bin` directory
+   with an independently checked SHA-256. Do not point the LaunchAgent at a
+   mutable checkout. Provision private owner-only log destinations for the
+   two log placeholders.
+2. Run `/opt/homebrew/bin/python3.12 -I -B <verified-script-path> --dry-run`.
+   Check the reported rule scope, eligible counts and errors. This only
+   reads metadata and checks lsof/producer locks; it never removes entries.
+3. Render the template with the absolute private script and log paths, lint
+   it using `plutil -lint`, and install it with owner-only permissions as
+   `~/Library/LaunchAgents/com.vinus.ops.temp-cleanup.plist`. Bootstrap via
+   `launchctl bootstrap "gui/$(id -u)" <installed-plist>` and verify the
+   exact daily calendar and program via
+   `launchctl print "gui/$(id -u)/com.vinus.ops.temp-cleanup"`. Do not use
+   `kickstart` as an installation check: that would delete immediately.
+4. To replace or suspend the schedule, first boot out the uniquely named
+   LaunchAgent, without touching the OPS web process. Then re-install from
+   a new verified OPS archive if needed. Code publication alone does not
+   install the macOS job.
