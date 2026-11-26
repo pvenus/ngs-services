@@ -63,6 +63,19 @@ class AlarmTests(unittest.TestCase):
         self.assertEqual((self.path.read_bytes(),self.path.stat().st_mtime_ns),(before,stamp))
         self.assertEqual(list(self.path.parent.iterdir()),[self.path])
 
+    def test_respects_per_task_retry_limit(self):
+        self.migrate([
+            ('new-image',A,'portrait_n','npc.portrait-direction','image','failed',10,3),
+            ('new-document',A,'overview','npc.plan-overview','document','failed',11,30),
+            ('old-image',A,'portrait_e','npc.portrait-direction','image','failed',12,3),
+            ('other',A,'animation_n','npc.animation-native-png','animation','failed',13,3),
+        ])
+        with sqlite3.connect(self.path) as db:
+            db.execute('ALTER TABLE workflow_tasks ADD COLUMN retry_limit INTEGER NOT NULL DEFAULT 3')
+            db.execute("UPDATE workflow_tasks SET retry_limit=30 WHERE task_id IN ('new-image','new-document')")
+        self.assertEqual([r['key'] for r in read_alarms(self.path)['alarms']],
+                         ['animation_n','portrait_e','overview'])
+
     def test_old_schema_empty_only_when_other_schema_is_sound(self):
         with started(S.server(0,alarms=partial(read_alarms,path=self.path))) as port:
             status,body=get(port,ROUTE)

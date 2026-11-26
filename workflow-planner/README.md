@@ -124,3 +124,10 @@ Deploy Planner compatibility before enabling the new image worker. The
 previous Planner's exact-schema recognizer cannot reopen the extended database.
 To roll back to that version, verify no marked claims are outstanding, stop
 writers, and remove the column through a reviewed maintenance procedure first.
+
+## Codex worker retry policy
+Document and image jobs use a one-minute cooldown and up to 30 automatic
+retries after the initial attempt. Other workers retain the ten-minute,
+three-retry policy. The planner pins a per-task limit, preserves task state
+and already-exhausted attempts during migration, and settles failure using
+that limit. This does not retry a publication with unknown outcome.

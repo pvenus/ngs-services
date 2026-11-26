@@ -10,7 +10,7 @@ import {npcPlanningAddType,npcPlanningAddTaskKey,validateNPCPlanningAdd} from '.
 import {audioRequestType,audioTaskKey,validateAudioGenerate} from './audio-generate-envelope.mjs';
 import {audioDeleteType,audioDeleteTaskKey,validateAudioDelete} from './audio-delete-envelope.mjs';
 import {audioSeparateType,audioSeparateTaskKey,validateAudioSeparate} from './audio-separate-envelope.mjs';
-import {createWorkflowTasksSql,PORTRAIT_READ_OWNER_COLUMN,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,migrateWorkflowAudioTask} from './audio-task-schema.mjs';
+import {createWorkflowTasksSql,PORTRAIT_READ_OWNER_COLUMN,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,FAST_RETRY_LIMIT,migrateWorkflowAudioTask,migrateWorkflowRetryPolicy} from './audio-task-schema.mjs';
 
 import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit} from './motion-preset-convert-2d-plan.mjs';
@@ -232,7 +232,7 @@ function restoreStoredPlan(run){
   return plan.payload===run.payload?plan:null;
  }catch{return null;}
 }
-const exhausted=row=>row?.status==='failed'&&row.retry_count===WORKFLOW_TASK_MAX_RETRIES;
+const exhausted=row=>row?.status==='failed'&&row.retry_count===(row.retry_limit??WORKFLOW_TASK_MAX_RETRIES);
 const exactStoredTask=(row,task)=>row&&row.task_id===task.id&&row.task_key===task.key&&
  row.task_type===task.type&&row.worker_type===task.workerType&&row.task_input===canonical(task.input)&&
  row.depends_on_task_id===task.dependsOn;
@@ -318,7 +318,7 @@ export class PlannerStore{
     updated_at INTEGER NOT NULL, reason TEXT
   ) STRICT;
   ${createWorkflowTasksSql};`);
-  try{migrateWorkflowRetryCount(this.db);migrateWorkflowAudioTask(this.db);migrateNpcPortraitReadOwner(this.db);}catch(e){this.db.close();throw e;}
+  try{migrateWorkflowRetryCount(this.db);migrateWorkflowAudioTask(this.db);migrateNpcPortraitReadOwner(this.db);migrateWorkflowRetryPolicy(this.db);}catch(e){this.db.close();throw e;}
  }
  stage(row){
   const payload=checkRow(row);
@@ -341,8 +341,9 @@ export class PlannerStore{
     const plan=materializePlan(row,payload);
     this.db.prepare("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,'awaiting_rs',?,?)")
      .run(row.officialRequestId,row.projectId,row.requestType,row.schemaVersion,plan.payload,row.payloadSha256,row.registeredAt,Date.now(),null);
-    const stmt=this.db.prepare('INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,depends_on_task_id,updated_at) VALUES(?,?,?,?,?,?,?,?)');
-    for(const task of plan.tasks)stmt.run(task.id,row.officialRequestId,task.key,task.type,task.workerType,canonical(task.input),task.dependsOn,Date.now());
+    const stmt=this.db.prepare('INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,depends_on_task_id,updated_at,retry_limit) VALUES(?,?,?,?,?,?,?,?,?)');
+    for(const task of plan.tasks)stmt.run(task.id,row.officialRequestId,task.key,task.type,task.workerType,canonical(task.input),task.dependsOn,Date.now(),
+     ['image','document'].includes(task.workerType)?FAST_RETRY_LIMIT:WORKFLOW_TASK_MAX_RETRIES);
    }
    this.db.exec('COMMIT');return prior===undefined;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
@@ -466,8 +467,8 @@ export class PlannerStore{
       AND (?=1 OR r.request_type<>?) AND (?=1 OR r.request_type NOT IN (${allCinematicTypes.map(()=>'?').join(',')}))
       AND ${this.#propSql('r.request_type','r.payload')}
       AND EXISTS (SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id
-        AND t.status='failed' AND t.retry_count=?)
-    ORDER BY r.registered_at,r.official_request_id`).all(...failurePolicies.keys(),Number(this.#propImageEnabled),propImageType,Number(this.#cinematicEnabled),...allCinematicTypes,WORKFLOW_TASK_MAX_RETRIES);
+        AND t.status='failed' AND t.retry_count=t.retry_limit)
+    ORDER BY r.registered_at,r.official_request_id`).all(...failurePolicies.keys(),Number(this.#propImageEnabled),propImageType,Number(this.#cinematicEnabled),...allCinematicTypes);
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    const ready=candidates.filter(run=>failurePolicies.get(run.request_type)(run,evidence))
     .map(({official_request_id,request_type})=>({official_request_id,request_type}));

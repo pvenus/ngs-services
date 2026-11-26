@@ -124,11 +124,12 @@ def read_alarms(path=WORKFLOW_DB):
             db.execute('SELECT official_request_id FROM workflow_runs LIMIT 0')
             result=[]
             if 'retry_count' in fields:
-                rows=db.execute('''
+                retry_limit = 't.retry_limit' if 'retry_limit' in fields else '3'
+                rows=db.execute(f'''
                     SELECT t.official_request_id,t.task_key,t.task_type,t.worker_type,t.retry_count,t.updated_at,
                            EXISTS(SELECT 1 FROM workflow_runs r WHERE r.official_request_id=t.official_request_id)
                     FROM workflow_tasks t
-                    WHERE t.status='failed' AND t.retry_count >= 3
+                    WHERE t.status='failed' AND t.retry_count >= {retry_limit}
                     ORDER BY t.updated_at DESC,t.rowid DESC
                     LIMIT ?
                 ''',(MAX_ALARMS+1,)).fetchall()

@@ -162,7 +162,7 @@ test('retry count migrates existing tasks without replacing status, times or dep
  const id=tasks(s).find(x=>x.task_key==='animation_walk_s').task_id;
  s.db.prepare("UPDATE workflow_tasks SET status='failed',updated_at=123456789 WHERE task_id=?").run(id);
  const before=tasks(s).map(({retry_count,...x})=>x);
- s.db.exec('ALTER TABLE workflow_tasks DROP COLUMN portrait_read_owner_pid; ALTER TABLE workflow_tasks DROP COLUMN retry_count');
+ s.db.exec('ALTER TABLE workflow_tasks DROP COLUMN portrait_read_owner_pid; ALTER TABLE workflow_tasks DROP COLUMN retry_count; ALTER TABLE workflow_tasks DROP COLUMN retry_limit');
  s.close();
  const next=f.open();
  assert.deepEqual(tasks(next).map(({retry_count,...x})=>x),before);
@@ -276,4 +276,18 @@ test('fresh add section list is immutable intake data and creates only one docum
  assert.deepEqual(JSON.parse(runs(s)[0].payload).requiredSections,['범위','규칙']);
  const changed={...r.payload,requiredSections:['규칙','범위']};
  assert.throws(()=>s.stage({...r,payload:changed,payloadSha256:sha(canonical(changed))}),/WORKFLOW_REPLAY_CHANGED/);
+});
+
+test('new document and image have 30 retries; other lanes remain capped at three',async t=>{
+ const {open}=fixture(t),s=open();
+ await pollOnce(s,service([row()]));
+ const rows=tasks(s);
+ for(const role of ['document','image','animation','postprocess']){
+  const task=rows.find(x=>x.worker_type===role);
+  assert.ok(task);
+  const cap=['document','image'].includes(role)?30:3;
+  assert.equal(task.retry_limit,cap);
+  s.db.prepare('UPDATE workflow_tasks SET retry_count=? WHERE task_id=?').run(cap,task.task_id);
+  assert.throws(()=>s.db.prepare('UPDATE workflow_tasks SET retry_count=? WHERE task_id=?').run(cap+1,task.task_id),/CHECK constraint/);
+ }
 });
