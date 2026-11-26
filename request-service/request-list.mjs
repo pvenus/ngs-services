@@ -1,3 +1,4 @@
+import {mapTypes} from './map-contract.mjs';
 /** Operator views and bounded Planner handoff of the official request ledger. */
 import {sha,workflowStatuses} from './one-stop-envelope.mjs';
 import {canonicalWorkflowPayload,knownWorkflowSchema} from './request-envelope.mjs';
@@ -60,6 +61,8 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${propImageType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.variantPresetId')
    WHEN '${npcAnimationRegenerateType}' THEN json_extract(payload_json,'$.npcId')
+   WHEN '${mapTypes[0]}' THEN official_request_id
+   WHEN '${mapTypes[1]}' THEN json_extract(payload_json,'$.mapId')
    ELSE json_extract(payload_json,'$.character.npcId') END END AS targetNpcId,
   CASE WHEN ${terminalReason}='${unsupportedReason}' THEN '지원 종료 요청'
   ELSE CASE request_type WHEN '${conceptCategoryRequestType}' THEN json_extract(payload_json,'$.title')
@@ -73,6 +76,8 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${audioSeparateType}' THEN '음원 분리'
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.label')
    WHEN '${npcAnimationRegenerateType}' THEN '애니메이션 생성'
+   WHEN '${mapTypes[0]}' THEN json_extract(payload_json,'$.graph.title')
+   WHEN '${mapTypes[1]}' THEN json_extract(payload_json,'$.graph.title')
    WHEN '${propRegenerateType}' THEN '프랍 재생성'
    WHEN '${propAnimationType}' THEN '프랍 애니메이션 추가'
    WHEN '${cinematicType}' THEN '시네마틱 영상 생성'

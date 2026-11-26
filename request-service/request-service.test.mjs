@@ -886,5 +886,10 @@ test('local map request contracts are discoverable and the valid queued payload 
  const out=(await api.submit(map)).result.structuredContent;
  assert.equal(out.status,'registered');
  assert.equal((await api.submit(map)).result.structuredContent.officialRequestId,out.officialRequestId);
+ const operation=await api.list({limit:1});
+ const row=operation.result.structuredContent.requests[0];
+ assert.equal(row.requestType,'map.generate');
+ assert.equal(row.targetNpcId,out.officialRequestId);
+ assert.equal(row.targetName,graph.title);
  assert.ok((await api.workflow({limit:10})).result.structuredContent.requests.some(x=>x.officialRequestId===out.officialRequestId));
 });
