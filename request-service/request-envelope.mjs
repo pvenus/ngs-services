@@ -17,12 +17,12 @@ import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,validateNpcAnim
 import {propGenerateType,propGenerateSchema,validatePropGenerate,propRegenerateType,propRegenerateSchema,validatePropRegenerate,propAnimationType,propAnimationSchema,validatePropAnimation} from './prop-generate-envelope.mjs';
 import {propImageType,propImageSchema,validatePropImage} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicSchema,validateCinematic,cinematicSequenceType,cinematicSequenceSchema,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackRequestSchema,validateCinematicPlaybackUpdate,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicSchema,validateCinematic,cinematicSequenceType,cinematicSequenceSchema,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackRequestSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,backgroundAnimationStageSchema,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
 
 const fields=['sourceId','requestType','idempotencyKey','payload'];
 const workflowFamilies=new Map([
  [fileDeleteType,{schemas:[fileDeleteSchema],validate:validateFileDelete}],
- ...extraCinematicTypes.map(type=>[type,{schemas:[extraCinematicRequests[type].schema],
+ ...extraCinematicTypes.map(type=>[type,{schemas:[extraCinematicRequests[type].schema,...(type===backgroundAnimationType?[backgroundAnimationStageSchema]:[])],
   validate:(payload,project)=>validateExtraCinematic(payload,project,type)}]),
  [cinematicPlaybackType,{schemas:[cinematicPlaybackRequestSchema],validate:validateCinematicPlaybackUpdate}],
  [cinematicType,{schemas:[cinematicSchema],validate:validateCinematic}],

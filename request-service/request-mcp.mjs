@@ -19,7 +19,7 @@ import {unsupportedReason} from './pending-unsupported.mjs';
 import {propTypes,propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propRegeneratePayloadSchema,propAnimationType,propAnimationPayloadSchema} from './prop-generate-envelope.mjs';
 import {propImageType,propImagePayloadSchema,propImageInvalid,propImageUnavailable} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic,cinematicSequenceType,cinematicSequencePayloadSchema,validateCinematicSequence,cinematicLegacyRetired,cinematicPlaybackType,cinematicPlaybackStale,cinematicPlaybackRequestPayloadSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,validBackgroundAnimationLoop,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic,cinematicSequenceType,cinematicSequencePayloadSchema,validateCinematicSequence,cinematicLegacyRetired,cinematicPlaybackType,cinematicPlaybackStale,cinematicPlaybackRequestPayloadSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,backgroundAnimationStageSchema,validBackgroundAnimationLoop,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
 
 const version='2025-06-18';
 const maxBody=96*1024;
@@ -292,7 +292,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
   if(await playbackReady())submit=addPropFamily(submit,cinematicPlaybackType,cinematicPlaybackRequestPayloadSchema);
   if(cinematicEnabled===true&&typeof cinematicOperationReadiness==='function'){
    const results=await Promise.all(extraCinematicTypes.map(async type=>[type,await cinematicOperationReadiness(type)===true]));
-   for(const [type,ready] of results)if(ready)submit=addPropFamily(submit,type,extraCinematicRequests[type].payload);
+   for(const [type,ready] of results)if(ready)submit=addPropFamily(submit,type,type===backgroundAnimationType?{...extraCinematicRequests[type].payload,properties:{...extraCinematicRequests[type].payload.properties,schemaVersion:{const:backgroundAnimationStageSchema}}}:extraCinematicRequests[type].payload);
   }
   if(await packageReady()){
    const generate=propGenerateMotionEnabled===true?propGeneratePayloadSchema:{...propGeneratePayloadSchema,

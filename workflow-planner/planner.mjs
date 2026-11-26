@@ -23,7 +23,7 @@ import {buildPropGeneratePlan,exactPropTask,isPropRef,propCompletionLimit} from 
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,backgroundAnimationKeys,cinematicArchiveType,propAnimationRemoveType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic,allCinematicTypes} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,backgroundAnimationKeys,backgroundAnimationStages,backgroundAnimationStageSchema,sequenceOperations,cinematicArchiveType,propAnimationRemoveType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic,allCinematicTypes} from './cinematic-envelope.mjs';
 import {verifyCinematicReadback,verifyCinematicSequenceReadback,verifyCinematicPlaybackReadback,verifyExtraCinematicReadback} from './cinematic-readback.mjs';
 
 export const portraitPixelTaskType='npc.portrait-pixel';
@@ -72,6 +72,12 @@ function materializePlan(row,payload,pixelPortraits=true){
  }
  if(extraCinematicTypes.includes(row.requestType)){
   const cfg=extraCinematicRequests[row.requestType],input=Object.fromEntries(cfg.fields.map(k=>[k,row.payload[k]]));
+  if(row.requestType===backgroundAnimationType&&row.schemaVersion===backgroundAnimationStageSchema){
+   const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
+   return {payload,tasks:Object.entries(backgroundAnimationKeys).filter(([variant])=>Object.hasOwn(input.references,variant)).flatMap(([variant,base])=>
+    backgroundAnimationStages[variant].map((stage,i,chain)=>({id:id(base+'_'+stage),key:base+'_'+stage,type:sequenceOperations[stage],workerType:'animation',
+     dependsOn:i?id(base+'_'+chain[i-1]):null,input:{backgroundSha256:input.backgroundSha256,variant,stage,sourceSha256:input.references[variant],motionPrompt:input.motionPrompt,playback:input.playback}})))};
+  }
   if(row.requestType===backgroundAnimationType){
    return {payload,tasks:Object.entries(backgroundAnimationKeys).filter(([variant])=>Object.hasOwn(input.references,variant)).map(([variant,key])=>({
     id:'workflow.task.'+sha(canonical([row.officialRequestId,key])),key,type:backgroundAnimationType,workerType:'animation',dependsOn:null,
@@ -297,18 +303,21 @@ function hasExhaustedPropGraph(run,readTasks){
 
 // Only these families opt in. In particular, failed audio.generate tasks
 // continue to use their existing status behavior.
-function backgroundAnimationOutputs(run,plan,rows){
+function backgroundAnimationRows(run,plan,rows){
  if(!plan||rows.length!==plan.tasks.length)return null;
- const results=[];
+ const result=[];
  for(const task of plan.tasks){
   const row=rows.find(r=>exactStoredTask(r,task));if(!row)return null;
-  const officialRequestId='request.official.'+sha(canonical([run.official_request_id,task.key]));
-  const resultRef=cinematicSequenceResultRef(officialRequestId);
-  results.push({row,resultRef,officialRequestId,sourceSha256:task.input.sourceSha256,playback:task.input.playback,
+  const stage=task.input.stage??'publish';
+  const officialRequestId='request.official.'+sha(canonical([run.official_request_id,backgroundAnimationKeys[task.input.variant]]));
+  const resultRef=stage==='publish'?cinematicSequenceResultRef(officialRequestId):null;
+  result.push({row,task,stage,resultRef,officialRequestId,sourceSha256:task.input.sourceSha256,playback:task.input.playback,
    group:{requestId:run.official_request_id,variant:task.input.variant,backgroundSha256:task.input.backgroundSha256}});
  }
- return results;
+ return result;
 }
+const backgroundStageProof=({row,stage,resultRef})=>stage==='publish'?row.result_ref===resultRef:
+ /^background\.transient\.[a-f0-9]{64}$/u.test(row.result_ref??'');
 const failurePolicies=new Map([
  [npcAnimationRegenerateType,hasExhaustedRegenerationGraph],
  [audioSeparateType,hasExhaustedSingleTask],
@@ -319,9 +328,15 @@ const failurePolicies=new Map([
  [fileDeleteType,hasExhaustedSingleTask],
  ...extraCinematicTypes.map(type=>[type,hasExhaustedSingleTask]),
  [backgroundAnimationType,(run,readTasks)=>{
-  const outputs=backgroundAnimationOutputs(run,restoreStoredPlan(run),readTasks.all(run.official_request_id,3));
-  return !!outputs&&outputs.some(o=>exhausted(o.row))&&outputs.every(({row,resultRef})=>
-   row.status==='completed'?row.result_ref===resultRef:exhausted(row)&&row.result_ref===null);
+  const outputs=backgroundAnimationRows(run,restoreStoredPlan(run),readTasks.all(run.official_request_id,8));
+  if(!outputs||!outputs.some(o=>exhausted(o.row)))return false;
+  const blocked=new Set();
+  return outputs.every(o=>{
+   const {row,task}=o;
+   if(row.status==='completed')return backgroundStageProof(o)&&!blocked.has(task.dependsOn);
+   if(row.result_ref!==null||!(exhausted(row)||row.status==='pending'&&blocked.has(task.dependsOn)))return false;
+   blocked.add(task.id);return true;
+  });
  }],
  ...propTypes.map(type=>[type,hasExhaustedPropGraph]),
 ]);
@@ -415,9 +430,9 @@ export class PlannerStore{
    for(const row of candidates){
     if(row.request_type===backgroundAnimationType){
      if(!this.#cinematicEnabled)continue;
-     const outputs=backgroundAnimationOutputs(row,restoreStoredPlan(row),evidence.all(row.official_request_id,3));
-     if(outputs&&outputs.every(({row,resultRef})=>row.result_ref===resultRef))result.push({official_request_id:row.official_request_id,publication:{
-      family:backgroundAnimationType,outputs:outputs.map(({row,...out})=>out)}});
+     const outputs=backgroundAnimationRows(row,restoreStoredPlan(row),evidence.all(row.official_request_id,8));
+     if(outputs&&outputs.every(backgroundStageProof))result.push({official_request_id:row.official_request_id,publication:{
+      family:backgroundAnimationType,outputs:outputs.filter(x=>x.stage==='publish').map(({row,task,stage,...out})=>out)}});
      continue;
     }
     if(extraCinematicTypes.includes(row.request_type)){

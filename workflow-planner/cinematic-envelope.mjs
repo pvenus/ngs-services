@@ -90,6 +90,12 @@ export const cinematicSourceType='cinematic.source.generate',cinematicSourceRequ
 export const backgroundSourceType='background.source.generate',backgroundSourceRequestSchema='ngs.background-source-generate.v1';
 export const backgroundPixelType='background.pixel.workflow',backgroundPixelSchema='ngs.background-pixel-workflow.v1';
 export const backgroundAnimationType='background.animation.workflow',backgroundAnimationSchema='ngs.background-animation-workflow.v1';
+export const backgroundAnimationStageSchema='ngs.background-animation-workflow.v2';
+// Reusable operations; domain workflows choose references, prompt and ordered steps.
+export const sequenceOperations=Object.freeze({
+ wan:'media.animation.render',upscale:'media.frames.upscale',pixel_correct:'media.frames.pixel-correct',publish:'media.sequence.publish',
+});
+export const backgroundAnimationStages={cinematic:['wan','upscale','publish'],pixel:['wan','upscale','pixel_correct','publish']};
 export const backgroundAnimationKeys={cinematic:'background_animation_cinematic',pixel:'background_animation_pixel'};
 export const cinematicArchiveType='cinematic.sequences.remove',cinematicArchiveRequestSchema='ngs.cinematic-sequences-remove.v1';
 export const propAnimationRemoveType='prop.animation.remove',propAnimationRemoveRequestSchema='ngs.prop-animation-remove.v1';
@@ -150,7 +156,7 @@ export const extraCinematicTypes=Object.freeze(Object.keys(extraCinematicRequest
 export const allCinematicTypes=Object.freeze([cinematicType,cinematicSequenceType,cinematicPlaybackType,...extraCinematicTypes]);
 export function validateExtraCinematic(payload,projectId,type){
  const cfg=Object.hasOwn(extraCinematicRequests,type)?extraCinematicRequests[type]:null;
- if(!cfg||!exact(payload,cfg.payload.required)||projectId!=='binari'||payload.projectId!==projectId||payload.schemaVersion!==cfg.schema||!cfg.valid(payload))
+ if(!cfg||!exact(payload,cfg.payload.required)||projectId!=='binari'||payload.projectId!==projectId||(payload.schemaVersion!==cfg.schema&&!(type===backgroundAnimationType&&payload.schemaVersion===backgroundAnimationStageSchema))||!cfg.valid(payload))
   throw Error(cinematicInvalid);
  return JSON.stringify(sortValue(payload));
 }

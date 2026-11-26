@@ -98,6 +98,8 @@ export const validBackgroundAnimationLoop=p=>{
   validCinematicPlayback(v)&&v.durationFrames===264&&v.speedCurve.length===1&&v.speedCurve[0].rate===1/3&&
   v.cameraCurve.length===1&&v.cameraCurve[0].zoom===1&&v.cameraCurve[0].x===.5&&v.cameraCurve[0].y===.5;
 };
+export const backgroundAnimationStageSchema='ngs.background-animation-workflow.v2';
+export const backgroundAnimationStages={cinematic:['wan','upscale','publish'],pixel:['wan','upscale','pixel_correct','publish']};
 export const backgroundAnimationKeys={cinematic:'background_animation_cinematic',pixel:'background_animation_pixel'};
 export const cinematicArchiveType='cinematic.sequences.remove',cinematicArchiveRequestSchema='ngs.cinematic-sequences-remove.v1';
 export const propAnimationRemoveType='prop.animation.remove',propAnimationRemoveRequestSchema='ngs.prop-animation-remove.v1';
@@ -158,7 +160,7 @@ export const extraCinematicTypes=Object.freeze(Object.keys(extraCinematicRequest
 export const allCinematicTypes=Object.freeze([cinematicType,cinematicSequenceType,cinematicPlaybackType,...extraCinematicTypes]);
 export function validateExtraCinematic(payload,projectId,type){
  const cfg=Object.hasOwn(extraCinematicRequests,type)?extraCinematicRequests[type]:null;
- if(!cfg||!exact(payload,cfg.payload.required)||projectId!=='binari'||payload.projectId!==projectId||payload.schemaVersion!==cfg.schema||!cfg.valid(payload))
+ if(!cfg||!exact(payload,cfg.payload.required)||projectId!=='binari'||payload.projectId!==projectId||(payload.schemaVersion!==cfg.schema&&!(type===backgroundAnimationType&&payload.schemaVersion===backgroundAnimationStageSchema))||!cfg.valid(payload))
   throw Error(cinematicInvalid);
  return JSON.stringify(sortValue(payload));
 }

@@ -67,12 +67,16 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
     raise ValueError('LAYA_BACKGROUND_QUEUE_ADAPTER_CONTRACT')
   elif worker=='animation':
    stage_ids=['background.animation-cinematic','background.animation-pixel']
-   expected_pipeline=([{'id':'wan','dependsOn':[]},{'id':'seedvr2','dependsOn':['wan']},
-     {'id':'pixel-correction','dependsOn':['seedvr2']},{'id':'publish','dependsOn':['pixel-correction']}]
-    if action['id']=='background.animation-pixel' else None)
+   pixel=action['id']=='background.animation-pixel'
+   expected_pipeline=[
+    {'id':'wan','operation':'media.animation.render','dependsOn':[]},
+    {'id':'upscale','operation':'media.frames.upscale','dependsOn':['wan']},
+    *([{'id':'pixel_correct','operation':'media.frames.pixel-correct','dependsOn':['upscale']}] if pixel else []),
+    {'id':'publish','operation':'media.sequence.publish','dependsOn':['pixel_correct' if pixel else 'upscale']},
+   ]
    if (action['id'] not in stage_ids or action.get('modelCalls')!=2 or action.get('dependsOn')!=[] or
        action.get('executionStages')!=expected_pipeline or
-       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.background-animation-workflow.v1' or
+       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.background-animation-workflow.v2' or
        registry['requestTypes'].get('background.animation.workflow',{}).get('stageIds')!=stage_ids or
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
        policy.get('apply')!='authorized-mutation'):

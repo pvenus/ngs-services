@@ -44,7 +44,7 @@ test('MCP advertises scoped cinematic only when ready and rejects missing digest
 });
 
 test('one locally submitted background animation request pins both references before registration',async t=>{
- const {backgroundAnimationType:type,backgroundAnimationSchema:schema}=await import('./cinematic-envelope.mjs');
+ const {backgroundAnimationType:type,backgroundAnimationStageSchema:schema}=await import('./cinematic-envelope.mjs');
  const parent=await mkdtemp(join(await realpath(tmpdir()),'background-animation-rs-'));t.after(()=>rm(parent,{recursive:true,force:true}));
  const pixel='b'.repeat(64),refs={pixel,cinematic:'a'.repeat(64)};
  const payload={schemaVersion:schema,projectId:'binari',backgroundSha256:pixel,references:refs,motionPrompt:'Continuous seamless ambient loop, static camera. Lantern flame keeps flickering.',

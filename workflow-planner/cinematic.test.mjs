@@ -125,3 +125,34 @@ test('background requests choose one or two independent tasks and require both e
   assert.equal(await store.verifyCompletion(candidate),true);
  }finally{store.close();}
 });
+
+test('staged background is a graph of shared operations: independent lanes with real predecessor IDs',async()=>{
+ const {backgroundAnimationType:type,backgroundAnimationStageSchema:schema,validateExtraCinematic}=await import('./cinematic-envelope.mjs');
+ const playback={durationFrames:264,speedCurve:[{frame:0,rate:1/3}],cameraCurve:[{frame:0,x:.5,y:.5,zoom:1}]};
+ const pixel='a'.repeat(64);
+ const payload={schemaVersion:schema,projectId:'binari',backgroundSha256:pixel,references:{cinematic:sourceSha256,pixel},
+  motionPrompt:p.motionPrompt,playback};
+ const row={...request(payload),requestType:type,schemaVersion:schema,payloadSha256:sha(validateExtraCinematic(payload,'binari',type))};
+ const {tasks}=buildPlan(row);
+ assert.equal(tasks.length,7);
+ for(const [variant,expected] of [['cinematic',['media.animation.render','media.frames.upscale','media.sequence.publish']],
+  ['pixel',['media.animation.render','media.frames.upscale','media.frames.pixel-correct','media.sequence.publish']]]){
+  const lane=tasks.filter(t=>t.input.variant===variant);
+  assert.deepEqual(lane.map(t=>t.type),expected);
+  assert.deepEqual(lane.map(t=>t.dependsOn),[null,...lane.slice(0,-1).map(t=>t.id)]);
+ }
+ const store=new PlannerStore(':memory:',{cinematicEnabled:true});
+ try{
+  store.stage(row);store.acknowledge(oid);
+  const update=store.db.prepare("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?");
+  for(const t of tasks){
+   const id='request.official.'+sha(canonical([oid,'background_animation_'+t.input.variant]));
+   update.run(t.input.stage==='publish'?'binari/cinematics/sequences/'+id+'/manifest.json':'background.transient.'+'e'.repeat(64),t.id);
+  }
+  const [done]=store.terminalReady();assert.equal(done.publication.outputs.length,2);
+  store.db.prepare("UPDATE workflow_tasks SET status='failed',retry_count=retry_limit,result_ref=NULL WHERE task_key='background_animation_pixel_upscale'").run();
+  store.db.prepare("UPDATE workflow_tasks SET status='pending',result_ref=NULL WHERE task_key IN ('background_animation_pixel_pixel_correct','background_animation_pixel_publish')").run();
+  assert.equal(store.terminalReady().length,0);
+  assert.deepEqual(store.terminalFailures(),[{official_request_id:oid,request_type:type}]);
+ }finally{store.close();}
+});

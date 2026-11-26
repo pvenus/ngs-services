@@ -23,6 +23,10 @@ RENDER='cinematic_sequence_render'
 RENDER_TYPE=TYPE+'.render'
 BACKGROUND_TYPE='background.animation.workflow'
 BACKGROUND_SCHEMA='ngs.background-animation-workflow.v1'
+BACKGROUND_STAGE_SCHEMA='ngs.background-animation-workflow.v2'
+SEQUENCE_OPERATIONS={'wan':'media.animation.render','upscale':'media.frames.upscale',
+                     'pixel_correct':'media.frames.pixel-correct','publish':'media.sequence.publish'}
+BACKGROUND_STAGES={'cinematic':('wan','upscale','publish'),'pixel':('wan','upscale','pixel_correct','publish')}
 BACKGROUND_KEYS={variant:'background_animation_'+variant for variant in ('cinematic','pixel')}
 BACKGROUND_WRITER='/v1/workflow/cinematics-background'
 
@@ -125,27 +129,36 @@ def validate_input(value):
 def background_graph(db,oid,task_id):
     need(match(oid,OFFICIAL))
     r=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
-    need(r is not None and r['request_type']==BACKGROUND_TYPE and r['schema_version']==BACKGROUND_SCHEMA and
+    need(r is not None and r['request_type']==BACKGROUND_TYPE and r['schema_version'] in (BACKGROUND_SCHEMA,BACKGROUND_STAGE_SCHEMA) and
          r['project_id']=='binari' and r['state']=='planned' and r['reason'] in (None,'RS_COMPLETED','RS_FAILED'))
     raw=r['payload'].encode('utf-8');p=strict_json(raw)
     need(keys(p,('schemaVersion','projectId','backgroundSha256','references','motionPrompt','playback')) and
-         p['schemaVersion']==BACKGROUND_SCHEMA and p['projectId']=='binari' and
+         p['schemaVersion']==r['schema_version'] and p['projectId']=='binari' and
          sha256(raw).hexdigest()==r['payload_sha256'])
     validate_references(p['backgroundSha256'],p['references'])
-    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 3',(oid,)).fetchall()
-    need(len(rows)==len(p['references']))
+    staged=p['schemaVersion']==BACKGROUND_STAGE_SCHEMA
+    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 8',(oid,)).fetchall()
+    need(len(rows)==sum(len(BACKGROUND_STAGES[v]) if staged else 1 for v in p['references']))
     by_id={t['task_id']:t for t in rows}
     chosen=None
     for variant,source in p['references'].items():
-        key=BACKGROUND_KEYS[variant];tid='workflow.task.'+digest([oid,key])
-        t=by_id.get(tid)
+        base=BACKGROUND_KEYS[variant]
         inp=validate_input(dict(sourceSha256=source,motionPrompt=p['motionPrompt'],playback=p['playback']))
         group=dict(requestId=oid,variant=variant,backgroundSha256=p['backgroundSha256'])
-        need(t is not None and t['task_key']==key and t['task_type']==BACKGROUND_TYPE and
-             t['worker_type']=='animation' and t['depends_on_task_id'] is None and
-             strict_json(t['task_input'].encode('utf-8'))=={**inp,'variant':variant,'backgroundSha256':p['backgroundSha256']})
-        if tid==task_id:
-            chosen=(r,t,inp,'request.official.'+digest([oid,key]),group,p['references'])
+        prior=None;ancestors=[]
+        for stage in BACKGROUND_STAGES[variant] if staged else ('publish',):
+            key=base+'_'+stage if staged else base;tid='workflow.task.'+digest([oid,key])
+            t=by_id.get(tid)
+            task_in={**inp,'variant':variant,'backgroundSha256':p['backgroundSha256']}
+            if staged:task_in['stage']=stage
+            need(t is not None and t['task_key']==key and t['task_type']==(SEQUENCE_OPERATIONS[stage] if staged else BACKGROUND_TYPE) and
+                 t['worker_type']=='animation' and t['depends_on_task_id']==(prior['task_id'] if prior else None) and
+                 strict_json(t['task_input'].encode('utf-8'))==task_in)
+            if tid==task_id:
+                if staged:
+                    need(all(x['status']=='completed' and match(x['result_ref'],r'background\.transient\.[a-f0-9]{64}') for x in ancestors))
+                chosen=(r,t,inp,'request.official.'+digest([oid,base]),group,p['references'],stage if staged else None)
+            prior=t;ancestors.append(t)
     need(chosen is not None)
     return chosen
 
@@ -226,13 +239,13 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         with self.planner.snapshot() as db:
             run=db.execute('SELECT request_type FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
             if run is not None and run['request_type']==BACKGROUND_TYPE:
-                r,t,inp,save_id,group,refs=background_graph(db,oid,claim['taskId'])
+                r,t,inp,save_id,group,refs,stage=background_graph(db,oid,claim['taskId'])
             else:
-                r,t,inp=sequence_graph(db,oid);save_id=oid;group=None;refs=None
+                r,t,inp=sequence_graph(db,oid);save_id=oid;group=None;refs=None;stage=None
             need(r['reason'] is None and r['payload_sha256']==claim['payloadSha256'] and t['task_id']==claim['taskId'] and
                  t['status']=='running' and t['result_ref'] is None and t['updated_at']==claim['claimStamp'] and
                  0<=r['registered_at']<=claim['claimStamp'])
-            yield save_id,inp,group,refs
+            yield save_id,inp,group,refs,stage
 
     def operate(self,op,packet):
         if op=='background-status':return self.background_status(packet)
@@ -240,10 +253,12 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         if op=='result':return self.result(packet)
         need(op in ('read','asset','frame','publish') and keys(packet,
              ('claim','frame') if op=='frame' else ('claim','manifest') if op=='publish' else ('claim',)))
-        with self.render_claim(packet['claim']) as (oid,inp,group,refs):
+        with self.render_claim(packet['claim']) as (oid,inp,group,refs,stage):
+            if stage is not None and op in ('frame','publish'):need(stage=='publish')
             if op=='read':
                 if group is None:self.source_status({'sourceSha256':inp['sourceSha256']})
-                else:self.background_status({'backgroundSha256':group['backgroundSha256'],'references':refs})
+                else:self.background_status({'backgroundSha256':group['backgroundSha256'],
+                    'references':{group['variant']:inp['sourceSha256']} if stage is not None else refs})
                 return inp
             if op=='asset':
                 if group is None:return self.asset_bytes(inp['sourceSha256'])
@@ -274,9 +289,12 @@ class WorkflowCinematicSequence(WorkflowCinematic):
             group=packet['group']
             need(keys(group,('requestId','variant','backgroundSha256')) and match(group['requestId'],OFFICIAL) and
                  type(group['variant'])is str and group['variant'] in BACKGROUND_KEYS and match(group['backgroundSha256'],HASH))
-            tid='workflow.task.'+digest([group['requestId'],BACKGROUND_KEYS[group['variant']]])
             with self.planner.snapshot() as db:
-                _,task,inp,oid,expected,_=background_graph(db,group['requestId'],tid)
+                run=db.execute('SELECT schema_version FROM workflow_runs WHERE official_request_id=?',(group['requestId'],)).fetchone()
+                need(run is not None)
+                key=BACKGROUND_KEYS[group['variant']]+('_publish' if run['schema_version']==BACKGROUND_STAGE_SCHEMA else '')
+                tid='workflow.task.'+digest([group['requestId'],key])
+                _,task,inp,oid,expected,_,_=background_graph(db,group['requestId'],tid)
                 need(group==expected and packet['officialRequestId']==oid and task['status']=='completed' and task['result_ref']==ref(oid))
                 m=self.seq_call('/result',{'officialRequestId':oid},missing=True)
                 verify_manifest(m,oid,inp,group)

@@ -86,6 +86,12 @@ s.close();"""
         return root,db,claim,call,payload,still
 
     def test_background_animation_group_keeps_pinned_sources_and_exact_independent_sequence_results(self):
+        self.background_graph_test(staged=False)
+
+    def test_background_stage_graph_rejects_premature_or_wrong_publication_claim(self):
+        self.background_graph_test(staged=True)
+
+    def background_graph_test(self,staged):
         from project_data_service.filex_read import digest
         from media_store import CinematicProjectStore
         root,db,_,call,_,_=self.sequence()
@@ -107,7 +113,7 @@ s.close();"""
         self.assertEqual(call('/background-status',pin),{'ok':True})
         call('/background-status',{**pin,'references':{'cinematic':refs['draft']}},403)
         call('/background-status',{'backgroundSha256':refs['draft'],'references':{'cinematic':refs['draft']}},403)
-        payload={'schemaVersion':'ngs.background-animation-workflow.v1','projectId':'binari',**pin,
+        payload={'schemaVersion':'ngs.background-animation-workflow.'+('v2' if staged else 'v1'),'projectId':'binari',**pin,
                  'motionPrompt':'장지문 뒤 그림자가 흔들린다','playback':PLAYBACK}
         parent='request.official.'+'8'*64
         js="""import {PlannerStore} from './workflow-planner/planner.mjs';
@@ -122,8 +128,16 @@ console.log(payloadSha256);s.close();"""
                          cwd=REPO,check=True,capture_output=True,text=True).stdout.strip()
         for v in selected:
             key='background_animation_'+v
-            tid='workflow.task.'+digest([parent,key]);sid='request.official.'+digest([parent,key])
+            sid='request.official.'+digest([parent,key])
+            tid='workflow.task.'+digest([parent,key+('_publish' if staged else '')])
             claim={'officialRequestId':parent,'projectId':'binari','taskId':tid,'payloadSha256':payload_sha,'claimStamp':5}
+            if staged:
+                call('/read',{'claim':claim},403)
+                producer={**claim,'taskId':'workflow.task.'+digest([parent,key+'_wan'])}
+                call('/frame',{'claim':producer,'frame':{}},403)
+                with sqlite3.connect(db) as conn:
+                    conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE official_request_id=? AND task_key LIKE ? AND task_key<>?",
+                      ('background.transient.'+'b'*64,parent,key+'_%',key+'_publish'))
             inp=call('/read',{'claim':claim})
             self.assertEqual(inp,{'sourceSha256':refs[v],'motionPrompt':payload['motionPrompt'],'playback':PLAYBACK})
             self.assertEqual(call('/asset',{'claim':claim},binary=True),raws[v])

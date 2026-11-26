@@ -1918,6 +1918,11 @@
     "candidateCount": 1,
     "modelCalls": 2,
     "dependsOn": [],
+    "executionStages": [
+      {"id": "wan", "operation": "media.animation.render", "dependsOn": []},
+      {"id": "upscale", "operation": "media.frames.upscale", "dependsOn": ["wan"]},
+      {"id": "publish", "operation": "media.sequence.publish", "dependsOn": ["upscale"]}
+    ],
     "description": "Run the shared native I2V renderer then the required local SeedVR2 7B FP16 2× postprocess on the selected immutable cinematic background only; both variants share the same motion and playback settings.",
     "inputs": [
       "pinned background PNG",
@@ -1939,7 +1944,7 @@
     "requestRequirements": {
       "schemaVersion": {
         "type": "string",
-        "const": "ngs.background-animation-workflow.v1"
+        "const": "ngs.background-animation-workflow.v2"
       },
       "projectId": {
         "type": "string",
@@ -1961,10 +1966,10 @@
     "modelCalls": 2,
     "dependsOn": [],
     "executionStages": [
-      {"id": "wan", "dependsOn": []},
-      {"id": "seedvr2", "dependsOn": ["wan"]},
-      {"id": "pixel-correction", "dependsOn": ["seedvr2"]},
-      {"id": "publish", "dependsOn": ["pixel-correction"]}
+      {"id": "wan", "operation": "media.animation.render", "dependsOn": []},
+      {"id": "upscale", "operation": "media.frames.upscale", "dependsOn": ["wan"]},
+      {"id": "pixel_correct", "operation": "media.frames.pixel-correct", "dependsOn": ["upscale"]},
+      {"id": "publish", "operation": "media.sequence.publish", "dependsOn": ["pixel_correct"]}
     ],
     "description": "Run the shared native I2V renderer then the required local SeedVR2 7B FP16 2× postprocess on the selected immutable pixel background, then correct final PNG colors using the pinned pixel still palette. Publish only the corrected frames.",
     "inputs": [
@@ -1987,7 +1992,7 @@
     "requestRequirements": {
       "schemaVersion": {
         "type": "string",
-        "const": "ngs.background-animation-workflow.v1"
+        "const": "ngs.background-animation-workflow.v2"
       },
       "projectId": {
         "type": "string",
