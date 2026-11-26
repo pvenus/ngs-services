@@ -1,3 +1,4 @@
+import {mapTypes,mapSchemas,validMapRequest,mapCanonical} from './map-contract.mjs';
 import {fileDeleteType,fileDeleteSchema,validateFileDelete} from './file-delete-envelope.mjs';
 /** Known typed workflow families accepted by the Request Service MCP. */
 import {ident,oneStopSchemas,requestType as npcRequestType,sha,validateOneStop} from './one-stop-envelope.mjs';
@@ -21,6 +22,7 @@ import {cinematicType,cinematicSchema,validateCinematic,cinematicSequenceType,ci
 
 const fields=['sourceId','requestType','idempotencyKey','payload'];
 const workflowFamilies=new Map([
+ ...mapTypes.map((type,i)=>[type,{schemas:[mapSchemas[i]],validate:(v)=>{if(!validMapRequest(v,type))throw Error('NGS_MAP_PAYLOAD_INVALID');return mapCanonical(v);}}]),
  [fileDeleteType,{schemas:[fileDeleteSchema],validate:validateFileDelete}],
  ...extraCinematicTypes.map(type=>[type,{schemas:[extraCinematicRequests[type].schema,...(type===backgroundAnimationType?[backgroundAnimationStageSchema]:[])],
   validate:(payload,project)=>validateExtraCinematic(payload,project,type)}]),

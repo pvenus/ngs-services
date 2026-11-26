@@ -65,6 +65,13 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
        policy.get('apply')!='authorized-mutation'):
     raise ValueError('LAYA_BACKGROUND_QUEUE_ADAPTER_CONTRACT')
+  elif worker=='document':
+   mode=action['id']
+   if (mode not in ('map.generate','map.update') or action.get('modelCalls')!=int(mode=='map.generate') or
+       action.get('dependsOn')!=[] or registry['requestTypes'].get(mode,{}).get('stageIds')!=[mode] or
+       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.map-'+mode.split('.')[1]+'.v1' or
+       policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or policy.get('apply')!='authorized-mutation'):
+    raise ValueError('LAYA_MAP_DOCUMENT_ADAPTER_CONTRACT')
   elif worker=='animation':
    stage_ids=['background.animation-cinematic','background.animation-pixel']
    pixel=action['id']=='background.animation-pixel'

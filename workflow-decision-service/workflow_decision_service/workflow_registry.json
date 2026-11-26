@@ -2006,9 +2006,87 @@
       "apply": "authorized-mutation",
       "authorization": "same-authorized-actor-target-and-action-or-fail"
     }
+  },
+{
+  "candidateCount": 1,
+  "dependsOn": [],
+  "description": "사용자가 확정한 방향 연결을 바꾸지 않는다. 선택된 배경 이미지의 고정본을 분석해 지정된 연결별 포털 영역과 도착점 좌표만 채운다.",
+  "generationKind": "structure",
+  "id": "map.generate",
+  "inputs": [
+    "authorized map request",
+    "published background identities"
+  ],
+  "modelCalls": 1,
+  "outputPolicy": {
+    "kind": "single-result",
+    "count": 1,
+    "selection": "none",
+    "apply": "authorized-mutation",
+    "authorization": "same-authorized-actor-target-and-action-or-fail"
+  },
+  "outputs": [
+    "map metadata revision"
+  ],
+  "provides": [
+    "map.metadata"
+  ],
+  "requires": [],
+  "selectable": true,
+  "workerId": "document",
+  "requestRequirements": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "ngs.map-generate.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "const": "binari"
+    }
   }
+},
+{
+  "candidateCount": 1,
+  "dependsOn": [],
+  "description": "세션에서 확정한 좌표와 연결을 그대로 반영한다. 기존 리비전이 다르면 실패한다.",
+  "generationKind": "structure",
+  "id": "map.update",
+  "inputs": [
+    "authorized map request",
+    "published background identities"
+  ],
+  "modelCalls": 0,
+  "outputPolicy": {
+    "kind": "single-result",
+    "count": 1,
+    "selection": "none",
+    "apply": "authorized-mutation",
+    "authorization": "same-authorized-actor-target-and-action-or-fail"
+  },
+  "outputs": [
+    "map metadata revision"
+  ],
+  "provides": [
+    "map.metadata"
+  ],
+  "requires": [],
+  "selectable": true,
+  "workerId": "document",
+  "requestRequirements": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "ngs.map-update.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "const": "binari"
+    }
+  }
+}
   ],
   "requestTypes": {
+    "map.generate":{"stageIds":["map.generate"],"eligibleStageIds":["map.generate"]},
+    "map.update":{"stageIds":["map.update"],"eligibleStageIds":["map.update"]},
   "background.animation.workflow": {
     "eligibleStageIds": [
       "background.animation-cinematic",
