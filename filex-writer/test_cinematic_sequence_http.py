@@ -68,6 +68,10 @@ s.close();"""
         app.workflow_cinematic_playback=WorkflowCinematicPlayback(planner,writer_factory=lambda:FilexCASTransport(writer))
         app.workflow_cinematic_source=WorkflowCinematicProject(planner,SOURCE,writer_factory=lambda:FilexCASTransport(writer))
         app.workflow_cinematic_background=WorkflowCinematicProject(planner,BACKGROUND,writer_factory=lambda:FilexCASTransport(writer))
+        from project_data_service.workflow_file_delete import BACKGROUND_ROOT,storage_provider
+        from project_data_service.single_target_delete import SingleTargetDelete
+        app.single_target_delete=SingleTargetDelete({BACKGROUND_ROOT:storage_provider(
+            planner,lambda:FilexCASTransport(writer),lambda:True,root=BACKGROUND_ROOT)},dedicated=[BACKGROUND_ROOT])
         t=Thread(target=app.serve_forever,daemon=True);t.start()
         def stop():app.shutdown();app.server_close();t.join()
         self.addCleanup(stop)
@@ -99,6 +103,45 @@ s.close();"""
         result=call('/result',{'officialRequestId':OID},base=base)
         self.assertEqual(result['resultRef'],ref)
         self.assertEqual(result['manifest']['schemaVersion'],'ngs.background-source-result.v1')
+
+    def test_background_two_independent_pinned_deletes_and_no_resurrection(self):
+        from project_data_service.workflow_file_delete import BACKGROUND_ROOT
+        from project_data_service.single_target_delete import PATH as DELETE_PATH
+        from project_data_service.filex_read import canonical,digest
+        root,db,claim,call,_,_=self.sequence(background=True)
+        raw=png(1,1536,1024); h=sha(raw)
+        artifact={'sha256':h,'bytes':len(raw),'width':1536,'height':1024,'base64':base64.b64encode(raw).decode()}
+        generation={'claim':claim,'artifact':artifact}
+        base=PROJECT_ORIGIN+BACKGROUND
+        call('',generation,base=base)
+        self.assertEqual(call('/background',None,base=DELETE_PATH)['roots'],[BACKGROUND_ROOT])
+        self.assertEqual(call('',None,base=DELETE_PATH)['roots'],[])
+        def offer(label,suffix,source=OID):
+            oid='request.official.'+label*64
+            tid='workflow.task.'+digest([oid,'file_delete'])
+            t={'root':BACKGROUND_ROOT,'path':h+suffix,'kind':'file'}
+            inp={'target':t,'expected':{'sourceRequestId':source}}
+            p={'schemaVersion':'ngs.file-delete.v1','projectId':'binari',**inp}
+            with sqlite3.connect(db) as conn:
+                conn.execute("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,1,'planned',1,NULL)",
+                             (oid,'binari','file.delete',p['schemaVersion'],canonical(p).decode(),digest(p)))
+                conn.execute("INSERT INTO workflow_tasks (task_id,official_request_id,task_key,task_type,worker_type,task_input,depends_on_task_id,updated_at,result_ref,status) VALUES(?,?,'file_delete','file.delete','file',?,NULL,20,NULL,'running')",
+                             (tid,oid,canonical(inp).decode()))
+            return {'target':t,'claim':{'officialRequestId':oid,'taskId':tid,'projectId':'binari',
+                                       'payloadSha256':digest(p),'claimStamp':20}}
+        call('',offer('5','.json','request.official.'+'6'*64),409,base=DELETE_PATH)
+        image=root/'backgrounds'/(h+'.png'); metadata=root/'backgrounds'/(h+'.json')
+        self.assertTrue(image.exists() and metadata.exists())
+        meta_delete=offer('7','.json')
+        meta_result=call('',meta_delete,base=DELETE_PATH)
+        self.assertTrue(meta_result['targetAbsent'])
+        self.assertFalse(metadata.exists())
+        self.assertEqual(image.read_bytes(),raw)
+        self.assertEqual(call('',meta_delete,base=DELETE_PATH),meta_result)
+        self.assertTrue(call('',offer('8','.png'),base=DELETE_PATH)['targetAbsent'])
+        self.assertFalse(image.exists())
+        call('',generation,503,base=base)
+        self.assertFalse(metadata.exists() or image.exists())
 
     def test_source_reconcile_fences_late_publish_and_preserves_already_stored_png(self):
         root,db,claim,call,_,_=self.sequence(source_job=True)

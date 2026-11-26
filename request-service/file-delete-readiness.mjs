@@ -1,8 +1,8 @@
-import {propDeleteRoot,npcDeleteRoot} from './file-delete-envelope.mjs';
+import {propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot} from './file-delete-envelope.mjs';
 export async function fileDeleteReady(root=propDeleteRoot,fetcher=fetch){
  try{
-  if(![propDeleteRoot,npcDeleteRoot].includes(root))return false;
-  const result=await fetcher('http://127.0.0.1:8030/v1/storage/delete-target'+(root===npcDeleteRoot?'/npc-standalone':''),
+  if(![propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot].includes(root))return false;
+  const result=await fetcher('http://127.0.0.1:8030/v1/storage/delete-target'+(root===npcDeleteRoot?'/npc-standalone':root===backgroundDeleteRoot?'/background':''),
    {redirect:'error',cache:'no-store',signal:AbortSignal.timeout(3000)});
   if(result.status!==200||!/^application\/json(?:;|$)/iu.test(result.headers.get('content-type')??'')){
    await result.body?.cancel();return false;

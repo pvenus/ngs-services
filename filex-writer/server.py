@@ -223,7 +223,8 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     from single_target_delete import PinnedDeleteRejected,SingleTargetDelete
                     ordinary=isinstance(single_target_delete,SingleTargetDelete) and single_target_delete.store is store
                     audio=workflow_audio_delete is True and workflow_audio is not None and workflow_audio.store is store
-                    if not (ordinary or audio or workflow_props is store):
+                    background=hasattr(store,'remove_background_file')
+                    if not (ordinary or audio or workflow_props is store or background):
                         return self.reply(404,{'error':'NOT_FOUND'})
                     headers=self.headers
                     if (self.command!='POST' or url.query or headers.get('Origin') is not None or
@@ -240,6 +241,9 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         return self.reply(200,workflow_audio.remove_result(command))
                     if workflow_props is store:
                         try:return self.reply(200,workflow_props.remove_package(command))
+                        except PinnedDeleteRejected:return self.reply(409,{'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'})
+                    if background and type(target) is dict and target.get('root')=='canonical-files/binari/cinematics/backgrounds':
+                        try:return self.reply(200,store.remove_background_file(command))
                         except PinnedDeleteRejected:return self.reply(409,{'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'})
                     if not ordinary:return self.reply(404,{'error':'NOT_FOUND'})
                     return self.reply(200,single_target_delete.remove(command))

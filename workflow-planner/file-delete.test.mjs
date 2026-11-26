@@ -25,3 +25,20 @@ test('NPC plans one physical target pinned to the published creation task',()=>{
  assert.deepEqual(buildPlan(row).tasks.map(({type,workerType,input})=>({type,workerType,input})),
   [{type:'file.delete',workerType:'file',input:{target,expected}}]);
 });
+
+test('background flat pair is planned as two independent one-file requests',()=>{
+ const root='canonical-files/binari/cinematics/backgrounds',hash='e'.repeat(64);
+ const expected={sourceRequestId:'request.official.'+'a'.repeat(64)};
+ const payload={schemaVersion:'ngs.file-delete.v1',projectId:'binari',expected};
+ const plan=(target,i)=>{const p={...payload,target};return buildPlan({
+  officialRequestId:'request.official.'+i.repeat(64),requestType:'file.delete',schemaVersion:payload.schemaVersion,
+  projectId:'binari',payload:p,payloadSha256:sha(canonical(p)),status:'registered',registeredAt:1});};
+ for(const [extension,i] of [['json','b'],['png','c']]){
+  const target={root,path:hash+'.'+extension,kind:'file'};
+  const result=plan(target,i);
+  assert.equal(result.tasks.length,1);
+  assert.deepEqual(result.tasks[0].input,{target,expected});
+ }
+ assert.throws(()=>plan({root,path:hash,kind:'directory'},'d'));
+ assert.throws(()=>plan({root,path:hash+'.mp4',kind:'file'},'d'));
+});

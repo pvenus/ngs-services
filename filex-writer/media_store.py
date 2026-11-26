@@ -413,7 +413,57 @@ def archive_ids(ids,limit=30):
   len(set(ids))==len(ids),'archive selection')
  return ids
 
+BACKGROUND_DELETE_ROOT='canonical-files/binari/cinematics/backgrounds'
+
 class CinematicProjectStore(CinematicPlaybackStore):
+ def _background_delete_marker(self,digest):
+  require(cinematic_match(digest,CINEMATIC_DIGEST),'background removal digest')
+  folder=self.root/'.background-deleted'
+  require(not folder.is_symlink(),'background removal marker folder')
+  return folder/(digest+'.json')
+ def remove_background_file(self,command):
+  from types import SimpleNamespace
+  from single_target_delete import PinnedDeleteRejected,SingleTargetDelete,validate_target
+  try:
+   require(type(command)is dict and set(command)=={'operationId','target','expected'},'background deletion envelope')
+   target=validate_target(command['target']); expected=command['expected']; operation=command['operationId']
+   require(target['root']==BACKGROUND_DELETE_ROOT and target['kind']=='file' and
+           cinematic_match(target['path'],r'[a-f0-9]{64}\.(?:png|json)') and
+           type(expected)is dict and set(expected)=={'sourceRequestId'} and
+           cinematic_match(expected['sourceRequestId'],CINEMATIC_ID) and
+           cinematic_match(operation,r'workflow\.task\.[a-f0-9]{64}'),'background deletion binding')
+  except (ValueError,KeyError) as exc:raise PinnedDeleteRejected('background deletion rejected before moving') from exc
+  digest=target['path'].split('.')[0];oid=expected['sourceRequestId']
+  with self.lock():
+   try:
+    marker=self._background_delete_marker(digest)
+    try: frozen=self._read(marker,8192)
+    except FileNotFoundError: frozen=None
+    if frozen is None:
+     current=self._result_source(oid,background=True)
+     require(current['sha256']==digest,'background digest pin')
+     frozen=wire(current)
+     require(self._read(self._path('backgrounds',digest+'.json'),8192)==frozen,'background generation pin')
+    else:
+     current=source_entry(json.loads(frozen),True)
+     require(wire(current)==frozen and current['sha256']==digest and current['officialRequestId']==oid,
+             'background removal pin')
+    leaf=self._path('backgrounds',target['path'])
+    try: raw=self._read(leaf,CINEMATIC_MAX if target['path'].endswith('.png') else 8192)
+    except FileNotFoundError:
+     if not marker.exists():raise
+    else:
+     if target['path'].endswith('.png'):source_image(raw,current)
+     else:require(raw==frozen,'background metadata pin')
+   except (Conflict,ValueError,FileNotFoundError) as exc:
+    raise PinnedDeleteRejected('background file changed before moving') from exc
+   # The marker authorizes only the published pair, and prevents a delayed worker
+   # from recreating either leaf between deletes or after the pair has been retired.
+   if not marker.exists():self.write(marker,frozen)
+   root=self._path('backgrounds',target['path']).parent
+   return SingleTargetDelete(SimpleNamespace(root=root),BACKGROUND_DELETE_ROOT).remove_locked(
+    {'operationId':operation,'target':target})
+
  def _private_result(self,folder,oid):
   require(cinematic_match(oid,CINEMATIC_ID) and folder in ('.source-receipts','.source-abandoned','.archive-receipts','.background-receipts','.background-abandoned'),'cinematic receipt')
   directory=self.root/folder;require(not directory.is_symlink(),'cinematic receipt folder')
@@ -459,6 +509,10 @@ class CinematicProjectStore(CinematicPlaybackStore):
   m=source_entry(p['manifest'],background); raw=base64.b64decode(p['base64'],validate=True);source_image(raw,m)
   oid=m['officialRequestId'];s=m['sha256'];frozen=wire(m)
   with self.lock():
+   if background:
+    try:self._read(self._background_delete_marker(s),8192)
+    except FileNotFoundError:pass
+    else:raise Conflict('background source retired')
    _,fence=self._source_fence(oid,background)
    if p['claimStamp']<=fence:raise Conflict('source claim fenced')
    receipt=self._private_result('.background-receipts' if background else '.source-receipts',oid)
