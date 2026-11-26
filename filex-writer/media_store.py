@@ -88,7 +88,7 @@ def validate_cinematic_mp4(data,m):
 class CinematicStore(Store):
  namespace='canonical-files/binari/cinematics/'
  def _path(self,folder,name):
-  require(folder in ('sources','results') and not (self.root/folder).is_symlink(),'cinematic folder')
+  require(folder in ('sources','results','backgrounds') and not (self.root/folder).is_symlink(),'cinematic folder')
   p=self.root/folder/name
   require(not p.is_symlink(),'cinematic symlink')
   return p
@@ -383,13 +383,15 @@ class CinematicPlaybackStore(CinematicSequenceStore):
 SOURCE_ROUTE='/v1/workflow/cinematics-source'
 ARCHIVE_ROUTE='/v1/workflow/cinematics-sequence-remove'
 SOURCE_SCHEMA='ngs.cinematic-source-result.v1'
+BACKGROUND_ROUTE='/v1/workflow/cinematics-background'
+BACKGROUND_SCHEMA='ngs.background-source-result.v1'
 ARCHIVE_SCHEMA='ngs.cinematic-sequence-archive.v1'
 ARCHIVE_LIMIT=1024*1024
 MAX_ARCHIVED=4096
 
-def source_entry(m):
+def source_entry(m,background=False):
  require(type(m)is dict and set(m)=={'schemaVersion','projectId','officialRequestId','title','sha256','bytes','width','height'} and
-  m['schemaVersion']==SOURCE_SCHEMA and m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
+  m['schemaVersion']==(BACKGROUND_SCHEMA if background else SOURCE_SCHEMA) and m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
   cinematic_match(m['sha256'],CINEMATIC_DIGEST) and type(m['bytes'])is int and 0<m['bytes']<=CINEMATIC_MAX and
   type(m['title'])is str and 1<=len(m['title'])<=120 and m['title']==m['title'].strip() and
   type(m['width'])is int and type(m['height'])is int and m['width']==1536 and m['height']==1024,'source metadata')
@@ -413,21 +415,21 @@ def archive_ids(ids,limit=30):
 
 class CinematicProjectStore(CinematicPlaybackStore):
  def _private_result(self,folder,oid):
-  require(cinematic_match(oid,CINEMATIC_ID) and folder in ('.source-receipts','.source-abandoned','.archive-receipts'),'cinematic receipt')
+  require(cinematic_match(oid,CINEMATIC_ID) and folder in ('.source-receipts','.source-abandoned','.archive-receipts','.background-receipts','.background-abandoned'),'cinematic receipt')
   directory=self.root/folder;require(not directory.is_symlink(),'cinematic receipt folder')
   return directory/(oid+'.json')
- def _result_source(self,oid):
-  receipt=self._private_result('.source-receipts',oid)
-  raw=self._read(receipt,8192);m=source_entry(json.loads(raw))
+ def _result_source(self,oid,background=False):
+  receipt=self._private_result('.background-receipts' if background else '.source-receipts',oid)
+  raw=self._read(receipt,8192);m=source_entry(json.loads(raw),background)
   require(wire(m)==raw and m['officialRequestId']==oid,'source receipt integrity')
-  p=self._path('sources',m['sha256']+'.png')
+  p=self._path('backgrounds' if background else 'sources',m['sha256']+'.png')
   source_image(self._read(p,CINEMATIC_MAX),m)
-  public=self._read(self._path('sources',m['sha256']+'.json'),8192)
-  alias=source_entry(json.loads(public))
+  public=self._read(self._path('backgrounds' if background else 'sources',m['sha256']+'.json'),8192)
+  alias=source_entry(json.loads(public),background)
   require(wire(alias)==public and all(alias[k]==m[k] for k in ('sha256','bytes','width','height')),'source alias integrity')
   return m
- def _source_fence(self,oid):
-  path=self._private_result('.source-abandoned',oid)
+ def _source_fence(self,oid,background=False):
+  path=self._private_result('.background-abandoned' if background else '.source-abandoned',oid)
   try:raw=self._read(path,256)
   except FileNotFoundError:return path,0
   record=json.loads(raw)
@@ -437,42 +439,42 @@ class CinematicProjectStore(CinematicPlaybackStore):
  @staticmethod
  def _source_stamp(stamp):
   return type(stamp)is int and 0<stamp<=2**53-1
- def cinematic_source_reconcile(self,p):
+ def cinematic_source_reconcile(self,p,*,background=False):
   require(type(p)is dict and set(p)=={'officialRequestId','claimStamp'} and
           self._source_stamp(p['claimStamp']),'source reconcile packet')
   oid=p['officialRequestId'];stamp=p['claimStamp']
   with self.lock():
-   receipt=self._private_result('.source-receipts',oid)
+   receipt=self._private_result('.background-receipts' if background else '.source-receipts',oid)
    # Receipt is written before media. A partial publish is not an absent publish.
    try:self._read(receipt,8192)
    except FileNotFoundError:pass
-   else:return {'state':'published','manifest':self._result_source(oid)}
-   path,fence=self._source_fence(oid)
+   else:return {'state':'published','manifest':self._result_source(oid,background)}
+   path,fence=self._source_fence(oid,background)
    # Under the writer lock, fence all delayed sends for this exact or older claim.
    if stamp>fence:self.write(path,wire({'claimStamp':stamp}))
    return {'state':'absent_fenced'}
- def cinematic_source_generate(self,p):
+ def cinematic_source_generate(self,p,*,background=False):
   require(type(p)is dict and set(p)=={'manifest','base64','claimStamp'} and self._source_stamp(p['claimStamp']) and type(p['base64'])is str and
    len(p['base64'])<=4*((CINEMATIC_MAX+2)//3),'source generation packet')
-  m=source_entry(p['manifest']); raw=base64.b64decode(p['base64'],validate=True);source_image(raw,m)
+  m=source_entry(p['manifest'],background); raw=base64.b64decode(p['base64'],validate=True);source_image(raw,m)
   oid=m['officialRequestId'];s=m['sha256'];frozen=wire(m)
   with self.lock():
-   _,fence=self._source_fence(oid)
+   _,fence=self._source_fence(oid,background)
    if p['claimStamp']<=fence:raise Conflict('source claim fenced')
-   receipt=self._private_result('.source-receipts',oid)
+   receipt=self._private_result('.background-receipts' if background else '.source-receipts',oid)
    if receipt.exists() or receipt.is_symlink():
     if self._read(receipt,8192)!=frozen:raise Conflict('source image request reused')
    else:self.write(receipt,frozen)
-   image=self._path('sources',s+'.png'); meta=self._path('sources',s+'.json')
+   image=self._path('backgrounds' if background else 'sources',s+'.png'); meta=self._path('backgrounds' if background else 'sources',s+'.json')
    if image.exists():
     require(self._read(image,CINEMATIC_MAX)==raw,'source bytes collision')
    else:self.write(image,raw)
    require(self._read(image,CINEMATIC_MAX)==raw,'source bytes readback')
    if not meta.exists():self.write(meta,frozen)
-   return self._result_source(oid)
- def cinematic_source_result(self,p):
+   return self._result_source(oid,background)
+ def cinematic_source_result(self,p,*,background=False):
   require(type(p)is dict and set(p)=={'officialRequestId'},'source result packet')
-  with self.lock():return self._result_source(p['officialRequestId'])
+  with self.lock():return self._result_source(p['officialRequestId'],background)
  def _archived(self):
   path=self.root/'sequence-archive.json'
   try:raw=self._read(path,ARCHIVE_LIMIT)

@@ -8,17 +8,23 @@ from .workflow_cinematic_sequence import exact_claim, strict_json, sequence_grap
 ORIGIN='/v1/cinematics/ownership/workflow-'
 WRITER='/v1/workflow/cinematics-'
 SOURCE='source'
+BACKGROUND='background'
+SOURCE_MODES=(SOURCE,BACKGROUND)
 ARCHIVE='sequence-remove'
 CONFIG={
  SOURCE:{'type':'cinematic.source.generate','schema':'ngs.cinematic-source-generate.v1',
          'key':'cinematic_source_generate','worker':'image','input':('title','prompt'),
          'capability':'workflow.cinematic-source-write.v1','filex':'workflowCinematicSourceV1'},
+ BACKGROUND:{'type':'background.source.generate','schema':'ngs.background-source-generate.v1',
+             'key':'background_source_generate','worker':'image','input':('title','timeOfDay','season','mood','color','location','requirements','additionalNotes'),
+             'capability':'workflow.background-source-write.v1','filex':'workflowBackgroundSourceV1'},
  ARCHIVE:{'type':'cinematic.sequences.remove','schema':'ngs.cinematic-sequences-remove.v1',
           'key':'cinematic_sequences_remove','worker':'file','input':('sequenceIds',),
           'capability':'workflow.cinematic-sequence-remove.v1','filex':'workflowCinematicSequenceRemoveV1'},
 }
 RESULT_ARCHIVE='binari/cinematics/sequence-archive.json'
 ROUTES=(ORIGIN+SOURCE,ORIGIN+SOURCE+'/read',ORIGIN+SOURCE+'/result',ORIGIN+SOURCE+'/reconcile',
+        *(ORIGIN+BACKGROUND+suffix for suffix in ('','/read','/result','/reconcile')),
         ORIGIN+ARCHIVE,ORIGIN+ARCHIVE+'/result')
 
 
@@ -30,6 +36,9 @@ def clean(v,chars,bytes_max):
 def validate_input(mode,v):
     need(keys(v,CONFIG[mode]['input']))
     if mode==SOURCE:need(clean(v['title'],120,480) and clean(v['prompt'],2000,4000))
+    elif mode==BACKGROUND:
+        limits={'title':120,'timeOfDay':80,'season':80,'mood':160,'color':120,'location':160,'requirements':900,'additionalNotes':900}
+        need(all((k=='additionalNotes' and v[k]=='') or clean(v[k],n,n*4) for k,n in limits.items()))
     else:
         ids=v['sequenceIds']
         need(type(ids)is list and 1<=len(ids)<=30 and all(match(x,OFFICIAL) for x in ids) and len(set(ids))==len(ids))
@@ -53,12 +62,12 @@ def graph(mode,db,oid):
     return r,t,inp
 
 
-def source_result(m,oid,title):
+def source_result(m,oid,title,mode=SOURCE):
     need(keys(m,('schemaVersion','projectId','officialRequestId','title','sha256','bytes','width','height')) and
-         m['schemaVersion']=='ngs.cinematic-source-result.v1' and m['projectId']=='binari' and m['officialRequestId']==oid and
+         m['schemaVersion']==('ngs.background-source-result.v1' if mode==BACKGROUND else 'ngs.cinematic-source-result.v1') and m['projectId']=='binari' and m['officialRequestId']==oid and
          m['title']==title and match(m['sha256'],HASH) and type(m['bytes'])is int and 0<m['bytes']<=8*1024*1024 and
          type(m['width'])is int and type(m['height'])is int and m['width']==1536 and m['height']==1024)
-    return 'binari/cinematics/sources/'+m['sha256']+'.json'
+    return 'binari/cinematics/'+('backgrounds' if mode==BACKGROUND else 'sources')+'/'+m['sha256']+'.json'
 
 
 class WorkflowCinematicProject(WorkflowCinematic):
@@ -84,8 +93,8 @@ class WorkflowCinematicProject(WorkflowCinematic):
         with self.planner.snapshot() as db:
             _,task,inp=self.graph(db,oid)
             need(task['status']=='completed')
-            if self.mode==SOURCE:
-                m=self.provider('/result',p,missing=True);ref=source_result(m,oid,inp['title']);out={'manifest':m}
+            if self.mode in SOURCE_MODES:
+                m=self.provider('/result',p,missing=True);ref=source_result(m,oid,inp['title'],self.mode);out={'manifest':m}
             else:
                 expected={**p,**inp};need(self.provider('/result',expected,missing=True)==expected)
                 ref=RESULT_ARCHIVE;out={**inp}
@@ -93,21 +102,21 @@ class WorkflowCinematicProject(WorkflowCinematic):
         return {'ok':True,'resultRef':ref,**out}
     def operate(self,op,p):
         if op=='result':return self.result(p)
-        need((op in ('read','publish','reconcile') if self.mode==SOURCE else op=='publish') and
-             keys(p,('claim','artifact') if self.mode==SOURCE and op=='publish' else ('claim',)))
+        need((op in ('read','publish','reconcile') if self.mode in SOURCE_MODES else op=='publish') and
+             keys(p,('claim','artifact') if self.mode in SOURCE_MODES and op=='publish' else ('claim',)))
         with exact_claim(self.planner,p['claim'],self.graph) as (oid,inp):
             if op=='read':return inp
             if op=='reconcile':
                 value=self.provider('/reconcile',{'officialRequestId':oid,'claimStamp':p['claim']['claimStamp']})
                 if value=={'state':'absent_fenced'}:return value
                 need(keys(value,('state','manifest')) and value['state']=='published')
-                return {'state':'published','resultRef':source_result(value['manifest'],oid,inp['title'])}
-            if self.mode==SOURCE:
+                return {'state':'published','resultRef':source_result(value['manifest'],oid,inp['title'],self.mode)}
+            if self.mode in SOURCE_MODES:
                 a=p['artifact'];need(keys(a,('sha256','bytes','width','height','base64')) and type(a['base64'])is str and
                                     0<len(a['base64'])<=4*((8*1024*1024+2)//3))
-                m={**{k:v for k,v in a.items() if k!='base64'},'schemaVersion':'ngs.cinematic-source-result.v1',
+                m={**{k:v for k,v in a.items() if k!='base64'},'schemaVersion':('ngs.background-source-result.v1' if self.mode==BACKGROUND else 'ngs.cinematic-source-result.v1'),
                    'projectId':'binari','officialRequestId':oid,'title':inp['title']}
-                ref=source_result(m,oid,inp['title'])
+                ref=source_result(m,oid,inp['title'],self.mode)
                 need(self.provider('',{'manifest':m,'base64':a['base64'],'claimStamp':p['claim']['claimStamp']})==m)
             else:
                 with self.planner.snapshot() as db:
@@ -119,6 +128,7 @@ class WorkflowCinematicProject(WorkflowCinematic):
             return {'ok':True,'resultRef':ref}
 
 def serve(handler):
-    mode=SOURCE if handler.path.split('?',1)[0] in (ORIGIN+SOURCE,ORIGIN+SOURCE+'/read',ORIGIN+SOURCE+'/result',ORIGIN+SOURCE+'/reconcile') else ARCHIVE
+    pathname=handler.path.split('?',1)[0]
+    mode=next((x for x in SOURCE_MODES if pathname in tuple(ORIGIN+x+y for y in ('','/read','/result','/reconcile'))),ARCHIVE)
     return serve_cinematic(handler,attribute='workflow_cinematic_'+mode.replace('-','_'),path=ORIGIN+mode,
                            capability=CONFIG[mode]['capability'])

@@ -12,7 +12,7 @@ import {audioSeparateType} from './audio-separate-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
 import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
 import {propTypes,propGenerateType,propRegenerateType,propAnimationType} from './prop-generate-envelope.mjs';
-import {cinematicType,cinematicSequenceType,cinematicPlaybackType,allCinematicTypes,cinematicSourceType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicSequenceType,cinematicPlaybackType,allCinematicTypes,cinematicSourceType,backgroundSourceType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
 import {propImageType} from './prop-image-envelope.mjs';
 export const listTool='request_list',workflowListTool='request_workflow_list';
 export const statuses=Object.freeze(['registered',...workflowStatuses,'cancelled']);
@@ -49,6 +49,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${cinematicSequenceType}' THEN official_request_id
    WHEN '${cinematicPlaybackType}' THEN json_extract(payload_json,'$.sequenceId')
    WHEN '${cinematicSourceType}' THEN official_request_id
+   WHEN '${backgroundSourceType}' THEN official_request_id
    WHEN '${cinematicArchiveType}' THEN official_request_id
    WHEN '${propAnimationRemoveType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propGenerateType}' THEN json_extract(payload_json,'$.propId')
@@ -73,6 +74,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${cinematicSequenceType}' THEN '시네마틱 프레임 생성'
    WHEN '${cinematicPlaybackType}' THEN '시네마틱 재생 수정'
    WHEN '${cinematicSourceType}' THEN json_extract(payload_json,'$.title')
+   WHEN '${backgroundSourceType}' THEN json_extract(payload_json,'$.title')
    WHEN '${cinematicArchiveType}' THEN '시네마틱 애니메이션 삭제'
    WHEN '${propAnimationRemoveType}' THEN '프랍 애니메이션 삭제'
    WHEN '${propGenerateType}' THEN '프랍 패키지 생성'

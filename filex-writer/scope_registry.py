@@ -53,7 +53,7 @@ _ALLOW=MappingProxyType({
  'props':(_EXACT,frozenset(_PROPS_POST)),
  'cinematics':(_EXACT,frozenset('/v1/workflow/cinematics'+p for p in
   ('','/asset','/source-status','/result','-sequence','-sequence/frame','-sequence/result','-playback','-playback/target-status','-playback/result','-source','-source/result','-source/reconcile',
-   '-sequence-remove','-sequence-remove/result'))),
+   '-sequence-remove','-sequence-remove/result','-background','-background/result','-background/reconcile'))),
 })
 _DYNAMIC=MappingProxyType({
  'concept':(('GET',r'/v1/requests/'+RECEIPT_TOKEN),),
@@ -101,7 +101,7 @@ def _special_caps(profile,folder):
        'media':{'mediaArtifactsV1':True},
        'audio':{'workflowAudioResultV1':True,'workflowAudioSeparateV1':True,'workflowAudioDeleteV1':True},
        'props':{'workflowPropPackageV1':True,'workflowPropAnimationRemoveV1':True},
-       'cinematics':{'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True,'workflowCinematicSourceV1':True,'workflowCinematicSequenceRemoveV1':True},
+       'cinematics':{'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True,'workflowCinematicSourceV1':True,'workflowBackgroundSourceV1':True,'workflowCinematicSequenceRemoveV1':True},
     }
     return {'namespace':CANONICAL_NAMESPACE+folder+'/',**entries[profile]} if profile in entries else None
 

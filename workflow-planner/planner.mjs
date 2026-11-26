@@ -22,7 +22,7 @@ import {buildPropGeneratePlan,exactPropTask,isPropRef,propCompletionLimit} from 
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate,cinematicSourceType,cinematicArchiveType,propAnimationRemoveType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic,allCinematicTypes} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate,cinematicSourceType,backgroundSourceType,cinematicArchiveType,propAnimationRemoveType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic,allCinematicTypes} from './cinematic-envelope.mjs';
 import {verifyCinematicReadback,verifyCinematicSequenceReadback,verifyCinematicPlaybackReadback,verifyExtraCinematicReadback} from './cinematic-readback.mjs';
 
 export const portraitPixelTaskType='npc.portrait-pixel';
@@ -381,6 +381,7 @@ export class PlannerStore{
      const resultRef=rows[0].result_ref;
      if(typeof resultRef!=='string')continue;
      if(row.request_type===cinematicSourceType&&!/^binari\/cinematics\/sources\/[a-f0-9]{64}\.json$/u.test(resultRef)||
+        row.request_type===backgroundSourceType&&!/^binari\/cinematics\/backgrounds\/[a-f0-9]{64}\.json$/u.test(resultRef)||
         row.request_type===cinematicArchiveType&&resultRef!=='binari/cinematics/sequence-archive.json'||
         row.request_type===propAnimationRemoveType&&!/^prop\.package\.[a-f0-9]{64}$/u.test(resultRef))continue;
      result.push({official_request_id:row.official_request_id,publication:{

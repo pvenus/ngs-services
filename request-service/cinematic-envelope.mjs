@@ -87,6 +87,7 @@ export function validateCinematicPlaybackUpdate(p,projectId){
 export const cinematicPlaybackResultRef=id=>'binari/cinematics/sequences/'+id+'/timeline.json';
 
 export const cinematicSourceType='cinematic.source.generate',cinematicSourceRequestSchema='ngs.cinematic-source-generate.v1';
+export const backgroundSourceType='background.source.generate',backgroundSourceRequestSchema='ngs.background-source-generate.v1';
 export const cinematicArchiveType='cinematic.sequences.remove',cinematicArchiveRequestSchema='ngs.cinematic-sequences-remove.v1';
 export const propAnimationRemoveType='prop.animation.remove',propAnimationRemoveRequestSchema='ngs.prop-animation-remove.v1';
 const familyBase={projectId:{const:'binari'}}, hashSchema={type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64};
@@ -107,6 +108,14 @@ export const extraCinematicRequests=Object.freeze({
   capability:'workflow.cinematic-source-write.v1',
   payload:req(cinematicSourceRequestSchema,{title:{type:'string',minLength:1,maxLength:120},prompt:{type:'string',minLength:1,maxLength:2000}}),
   fields:['title','prompt'],valid:v=>cleanText(v.title,120,480)&&cleanText(v.prompt,2000,4000)},
+ [backgroundSourceType]:{schema:backgroundSourceRequestSchema,key:'background_source_generate',worker:'image',route:'/v1/cinematics/ownership/workflow-background',
+  capability:'workflow.background-source-write.v1',
+  payload:req(backgroundSourceRequestSchema,Object.fromEntries(
+   Object.entries({title:120,timeOfDay:80,season:80,mood:160,color:120,location:160,requirements:900,additionalNotes:900})
+   .map(([k,maxLength])=>[k,{type:'string',minLength:k==='additionalNotes'?0:1,maxLength}]))),
+  fields:['title','timeOfDay','season','mood','color','location','requirements','additionalNotes'],
+  valid:v=>Object.entries({title:120,timeOfDay:80,season:80,mood:160,color:120,location:160,requirements:900,additionalNotes:900})
+   .every(([k,n])=>k==='additionalNotes'&&v[k]===''||cleanText(v[k],n,n*4))},
  [cinematicArchiveType]:{schema:cinematicArchiveRequestSchema,key:'cinematic_sequences_remove',worker:'file',route:'/v1/cinematics/ownership/workflow-sequence-remove',
   capability:'workflow.cinematic-sequence-remove.v1',
   payload:req(cinematicArchiveRequestSchema,{sequenceIds:selection({type:'string',minLength:81,maxLength:81,pattern:sequenceId.source})}),
