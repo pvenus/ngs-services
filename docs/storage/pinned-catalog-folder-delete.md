@@ -1,7 +1,7 @@
 # Exact published catalog folder deletion (staged)
 
 The standalone `file.delete` request (schema `ngs.file-delete.v1`) accepts one
-published managed prop. It plans exactly one `file_delete` task on the existing
+published managed prop or NPC folder. It plans exactly one `file_delete` task on the existing
 file worker (no new process/model and no separate batch request). Selection,
 hashing and safety checks must not involve an LLM. The precise typed Planner
 is the execution registry for this machine-only operation; the separate
@@ -30,12 +30,38 @@ worker have been staged together and the file worker runs in its existing
 advertise the type in `request_submit`. A client/consumer must not offer
 deletion if not supported. No live operation or deployment is part of staging.
 
-Legacy props lacking managed metadata are not accepted. NPC replacement
-already has a generation-aware folder transaction that updates shared metadata
-and retires old leases, but standalone NPC deletion still needs a publication
-generation pin available to both NGS replicas. Looking up generation at delete
-execution (rather than at selection) is unsafe. Background and cinematic
-sources are still separate files under shared roots; a full item has no exact
-single folder to move. Cinematic clips may also exist under separate immutable
-sequence or legacy result IDs. Do not substitute archival/hiding or deletion
-of the broad shared directory for full-item deletion.
+## NPC selection pin
+
+```json
+{"schemaVersion":"ngs.file-delete.v1","projectId":"binari","target":{"root":"canonical-files/binari/npcs","path":"npc.example","kind":"directory"},"expected":{"creationTaskId":"workflow.task.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+```
+
+Read the selection pin from the same replicated NPC row the person saw:
+the canonical per-NPC `metadata.json` has `creationBasis.requestId`, the exact
+preset task ID. Do not query current generation at button press or replace
+the pin after acceptance. Only expose the public preset task ID, not the
+private generation token. The committed Filex preset receipt pins that
+task to its original NPC ID and private generation. PDS verifies the
+receipt, same current metadata creation task, and same active generation
+before using the existing fenced NPC folder move. Filex validates generation
+and by-source revision again under the Writer lock. It quarantines the whole
+folder, updates the catalog index, and retires old leases as one transaction.
+The earlier NPC replacement path remains exactly as before.
+
+The additive `PDS_WORKFLOW_NPC_STANDALONE_DELETE=1` is also off by default and
+requires `PDS_WORKFLOW_NPC_FOLDER_DELETE=1`. Importantly the NPC root appearing
+on the generic capability endpoint means the established replacement flow
+is available, **not** that a standalone NPC delete is available. Probe the
+dedicated `GET /v1/storage/delete-target/npc-standalone` capability first.
+The standalone payload still uses the same official `file.delete` type and
+writes to the same exact single-target PDS worker port. Legacy NPCs without a
+valid current preset receipt are not accepted; legacy props without managed
+metadata are not accepted either.
+
+## Remaining catalog kinds
+
+Background and cinematic sources are still separate files under shared
+roots; a full item has no exact single folder to move. Cinematic clips may
+also exist under separate immutable sequence or legacy result IDs. Do not
+substitute archival/hiding or deletion of the broad shared directory for
+full-item deletion.

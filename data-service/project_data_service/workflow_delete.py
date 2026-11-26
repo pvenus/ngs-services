@@ -57,18 +57,38 @@ class WorkflowDelete:
             raise WorkflowDeleteDenied('WORKFLOW_DELETE_CLAIM_DENIED')
         return self._commit(b)
 
-    def _resolve(self,identity):
+    def _resolve(self,identity,*,creation_task=None):
         # No caller CAS. Matching history binds exact replay to the original
         # committed generation and source, never a recreated owner.
         with self.source.store.factory() as tx:
             require(isinstance(tx,OwnedNPCTransport),'WORKFLOW_DELETE_FILEX_AUTHORITY_REQUIRED')
+            expected_generation=None
+            if creation_task is not None:
+                from .filex_cas_transport import PinnedDeleteRejected
+                origin=tx.receipt(creation_task) or {}
+                binding=origin.get('workflowPresetBinding',{})
+                expected_generation=origin.get('generationId')
+                if (origin.get('status')!='committed' or origin.get('requestId')!=creation_task
+                    or type(binding) is not dict or binding.get('taskId')!=creation_task or binding.get('npcId')!=identity['npcId']
+                    or binding.get('projectId')!='binari' or origin.get('workflowPresetBindingHash')!=digest(binding)
+                    or type(expected_generation) is not str or not re.fullmatch(r'[a-f0-9]{48}',expected_generation)):
+                    raise PinnedDeleteRejected('unknown NPC publication')
             prior=tx.receipt(identity['taskId'])
             if prior is not None:
                 b=prior.get('workflowDeleteBinding',{})
                 require(set(b)==KEYS and all(b[k]==v for k,v in identity.items()),'WORKFLOW_DELETE_REPLAY_BINDING')
+                if creation_task is not None and b['generationId']!=expected_generation:
+                    raise PinnedDeleteRejected('NPC delete receipt generation differs')
                 return b
             snap,marker,_=self.source._read()
+            if creation_task is not None:
+                owner=snap['documents'].get(identity['npcId']+'/metadata.json',{})
+                basis=owner.get('creationBasis')
+                if type(basis) is not dict or basis.get('requestId')!=creation_task:
+                    raise PinnedDeleteRejected('NPC selection stale')
             g=tx.get_generation(identity['npcId'])
+            if creation_task is not None and (g.get('generationId')!=expected_generation or g.get('state')!='active'):
+                raise PinnedDeleteRejected('NPC selection stale')
             require(g.get('npcId')==identity['npcId'] and g.get('state')=='active','WORKFLOW_DELETE_GENERATION')
             return {**identity,'generationId':g['generationId'],'expectedSourceVersion':snap['sourceVersion'],
                     'expectedRevision':marker['revision']}
@@ -101,6 +121,32 @@ class WorkflowDelete:
             return self._commit(self._resolve(selected[1]),target=command['target'],selection=selected[2],pose_recipe=selected[3])
 
         return AuthorizedStorage(authorize,execute,ready)
+
+    def with_standalone_storage(self, legacy):
+        from .single_target_delete import AuthorizedStorage,ClaimDenied as StorageClaimDenied
+        from .workflow_file_delete import authorize_for
+        authorized=authorize_for(self.verifier,NPC_ROOT)
+        selection=ContextVar('npc_pinned_delete_selection',default=None)
+
+        @contextmanager
+        def authorize(claim):
+            if type(claim) is dict and 'npcId' in claim:
+                with legacy.authorize(claim) as binding:yield binding
+                return
+            with authorized(claim) as command:
+                identity={k:claim[k] for k in ('officialRequestId','taskId','projectId','payloadSha256')}
+                token=selection.set((command,identity|{'npcId':command['target']['path']}))
+                try:yield command
+                finally:selection.reset(token)
+
+        def execute(command):
+            selected=selection.get()
+            if selected is None:return legacy.execute(command)
+            if command!=selected[0]:raise StorageClaimDenied()
+            binding=self._resolve(selected[1],creation_task=command['expected']['creationTaskId'])
+            return self._commit(binding,target=command['target'])
+
+        return AuthorizedStorage(authorize,execute,legacy.ready)
 
     def _commit(self,b,*,target=None,selection=(),pose_recipe=False):
         bh=digest(b);rid=b['taskId'];owner=b['npcId'];revision=b['expectedRevision']

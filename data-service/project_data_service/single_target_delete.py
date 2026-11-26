@@ -7,6 +7,7 @@ from .database import DataError
 from .filex_cas_transport import PinnedDeleteRejected
 
 PATH='/v1/storage/delete-target'
+NPC_STANDALONE_CAPABILITY=PATH+'/npc-standalone'
 SCHEMA='workflow.single-target-delete.v1'
 SEGMENT=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}',re.ASCII)
 OPERATION=re.compile(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,179}',re.ASCII)
@@ -67,7 +68,8 @@ class SingleTargetDelete:
 def serve(handler):
     svc=getattr(handler.server,'single_target_delete',None)
     if not isinstance(svc,SingleTargetDelete):return handler.respond(404,{'error':'STORAGE_DELETE_DISABLED'})
-    if (handler.path!=PATH or handler.command not in ('GET','POST') or
+    npc_only=handler.path==NPC_STANDALONE_CAPABILITY and handler.command=='GET'
+    if (not npc_only and (handler.path!=PATH or handler.command not in ('GET','POST')) or
         handler.server.server_address[0]!='127.0.0.1' or handler.client_address[0]!='127.0.0.1' or
         handler.headers.get_all('Host')!=['127.0.0.1:'+str(handler.server.server_port)] or
         handler.headers.get('Origin') is not None or handler.headers.get('Transfer-Encoding') is not None or
@@ -75,6 +77,10 @@ def serve(handler):
         return handler.respond(403,{'error':'STORAGE_DELETE_INTERNAL_ONLY'})
     started=[]
     try:
+        if npc_only:
+            from .workflow_file_delete import NPC_ROOT
+            enabled=getattr(handler.server,'npc_standalone_delete',False) is True and NPC_ROOT in svc.roots and svc.roots[NPC_ROOT].ready() is True
+            return handler.respond(200,{'enabled':enabled,'schemaVersion':SCHEMA,'roots':[NPC_ROOT] if enabled else []})
         if handler.command=='GET':return handler.respond(200,svc.capability())
         handler.connection.settimeout(5)
         return handler.respond(200,svc.run(handler.read_json(max_body=8192),started))

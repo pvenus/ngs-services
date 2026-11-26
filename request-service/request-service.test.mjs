@@ -837,3 +837,24 @@ test('pinned prop file.delete advertises and admits exactly one folder only when
  assert.equal(accepted.result.structuredContent.status,'registered');
  assert.equal(read(path).length,1);
 });
+
+test('standalone NPC deletion capability is separate from pinned props',async t=>{
+ const {directory,path}=folder(t);
+ const npcRoot='canonical-files/binari/npcs';
+ const service=createRequestService({directory,fileDeleteReadiness:async root=>root===npcRoot});
+ await new Promise(resolve=>service.listen(0,host,resolve));
+ t.after(()=>new Promise(resolve=>service.close(resolve)));
+ const rpc=async(method,params={})=>await (await fetch('http://'+host+':'+service.address().port+'/mcp',{
+  method:'POST',headers:{Accept:'application/json, text/event-stream','Content-Type':'application/json'},
+  body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})})).json();
+ const submit=payload=>rpc('tools/call',{name:'request_submit',arguments:{sourceId:'local',requestType:'file.delete',idempotencyKey:'one-npc',payload}});
+ const target={root:npcRoot,path:'npc.lantern',kind:'directory'};
+ const body={schemaVersion:'ngs.file-delete.v1',projectId:'binari',target,expected:{creationTaskId:'workflow.task.'+'a'.repeat(64)}};
+ const listed=JSON.stringify((await rpc('tools/list')).result);
+ assert.match(listed,/creationTaskId/);
+ assert.doesNotMatch(listed,/canonical-files\/binari\/props/);
+ assert.match(JSON.stringify(await submit({...body,expected:{}})),/NGS_FILE_DELETE_PAYLOAD_INVALID/);
+ assert.match(JSON.stringify(await submit({...body,target:{...target,root:'canonical-files/binari/props',path:'lantern'},expected:{revision:1,sha256:'b'.repeat(64)}})),/NGS_FILE_DELETE_UNAVAILABLE/);
+ assert.equal((await submit(body)).result.structuredContent.status,'registered');
+ assert.equal(read(path).length,1);
+});

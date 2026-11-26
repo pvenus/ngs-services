@@ -13,8 +13,11 @@ TYPE='file.delete'
 SCHEMA='ngs.file-delete.v1'
 KEY='file_delete'
 PROP_ROOT='canonical-files/binari/props'
+NPC_ROOT='canonical-files/binari/npcs'
+NPC_ID=r'(?:character|npc|entity|enemy)\.[a-z0-9._-]{2,80}'
+TASK_ID=r'workflow\.task\.[a-f0-9]{64}'
 
-def storage_provider(planner,writer_factory,readiness):
+def authorize_for(planner,root):
     def graph(db,oid):
         run=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
         need(run is not None and run['project_id']=='binari' and run['request_type']==TYPE and
@@ -24,10 +27,14 @@ def storage_provider(planner,writer_factory,readiness):
         need(keys(payload,('schemaVersion','projectId','target','expected')) and payload['schemaVersion']==SCHEMA
              and payload['projectId']=='binari' and sha256(raw).hexdigest()==run['payload_sha256'] and canonical(payload)==raw)
         target=payload['target'];expected=payload['expected']
-        need(target_value(target) and target['root']==PROP_ROOT and target['kind']=='directory'
-             and 2<=len(target['path'])<=80 and re.fullmatch(r'[a-z0-9]+(?:[-._][a-z0-9]+)*',target['path']))
-        need(keys(expected,('revision','sha256')) and type(expected['revision']) is int and 1<=expected['revision']<=2147483647
-             and type(expected['sha256']) is str and re.fullmatch('[a-f0-9]{64}',expected['sha256']))
+        need(target_value(target) and target['root']==root and target['kind']=='directory')
+        if root==PROP_ROOT:
+            need(2<=len(target['path'])<=80 and re.fullmatch(r'[a-z0-9]+(?:[-._][a-z0-9]+)*',target['path']))
+            need(keys(expected,('revision','sha256')) and type(expected['revision']) is int and 1<=expected['revision']<=2147483647
+                 and type(expected['sha256']) is str and re.fullmatch('[a-f0-9]{64}',expected['sha256']))
+        else:
+            need(root==NPC_ROOT and re.fullmatch(NPC_ID,target['path']) and keys(expected,('creationTaskId',))
+                 and type(expected['creationTaskId']) is str and re.fullmatch(TASK_ID,expected['creationTaskId']))
         rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 2',(oid,)).fetchall()
         need(len(rows)==1)
         task=rows[0]
@@ -43,4 +50,7 @@ def storage_provider(planner,writer_factory,readiness):
                 yield {'operationId':claim['taskId'],'target':target,'expected':expected}
         except (Denied,PlannerDenied) as exc:raise ClaimDenied() from exc
 
-    return AuthorizedStorage(authorize,lambda command:filex_execute(writer_factory,command),readiness)
+    return authorize
+
+def storage_provider(planner,writer_factory,readiness):
+    return AuthorizedStorage(authorize_for(planner,PROP_ROOT),lambda command:filex_execute(writer_factory,command),readiness)

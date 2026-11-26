@@ -1,4 +1,4 @@
-import {fileDeleteType,fileDeleteSchema,propDeleteRoot} from './file-delete-envelope.mjs';
+import {fileDeleteType,fileDeleteSchema,propDeleteRoot,npcDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
 import {cancelTool,basicSchemaVersion,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema,conceptCategoryAddIdPattern,conceptCategoryIdPattern,conceptCategoryGroupIdPattern} from './concept-category-envelope.mjs';
@@ -103,6 +103,12 @@ const fileDeletePayload={type:'object',properties:{
  kind:{const:'directory'}},required:['root','path','kind'],additionalProperties:false},
  expected:{type:'object',properties:{revision:{type:'integer',minimum:1,maximum:2147483647},sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['revision','sha256'],additionalProperties:false},
  },required:['schemaVersion','projectId','target','expected'],additionalProperties:false};
+const npcFileDeletePayload={...fileDeletePayload,properties:{...fileDeletePayload.properties,
+ target:{...fileDeletePayload.properties.target,properties:{...fileDeletePayload.properties.target.properties,
+  root:{const:npcDeleteRoot},path:{type:'string',pattern:'^(?:character|npc|entity|enemy)\\.[a-z0-9._-]{2,80}$'}}},
+ expected:{type:'object',properties:{creationTaskId:{type:'string',pattern:'^workflow\\.task\\.[a-f0-9]{64}$',minLength:78,maxLength:78}},
+  required:['creationTaskId'],additionalProperties:false},
+}};
 const audioDeletePayload={type:'object',properties:{
  schemaVersion:{const:audioDeleteSchema},projectId:{const:'binari'},officialRequestId:{type:'string',pattern:audioOfficialIdPattern,minLength:81,maxLength:81},
  },required:['schemaVersion','projectId','officialRequestId'],additionalProperties:false};
@@ -260,11 +266,14 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
  const playbackReady=async()=>cinematicEnabled===true&&typeof cinematicPlaybackReadiness==='function'&&await cinematicPlaybackReadiness()===true;
  const packageReady=async()=>propGenerateEnabled===true&&(!propPackageReadiness||await propPackageReadiness()===true);
  const animationReady=async()=>propAnimationEnabled===true&&(!propAnimationReadiness||await propAnimationReadiness()===true);
- const deleteReady=async()=>typeof fileDeleteReadiness==='function'&&await fileDeleteReadiness()===true;
+ const deleteReady=async(root)=>typeof fileDeleteReadiness==='function'&&await fileDeleteReadiness(root)===true;
  const ready=async()=>propImageEnabled===true&&(!propImageReadiness||await propImageReadiness()===true);
  if(method==='tools/list'&&!Object.keys(params).length){
   let submit=await ready()?addPropImage(tool):tool;
-  if(await deleteReady())submit=addPropFamily(submit,fileDeleteType,fileDeletePayload);
+  const deleteShapes=[];
+  if(await deleteReady(propDeleteRoot))deleteShapes.push(fileDeletePayload);
+  if(await deleteReady(npcDeleteRoot))deleteShapes.push(npcFileDeletePayload);
+  if(deleteShapes.length)submit=addPropFamily(submit,fileDeleteType,deleteShapes.length===1?deleteShapes[0]:{oneOf:deleteShapes});
   if(cinematicLegacyAdmission&&await cinematicReady())submit=addPropFamily(submit,cinematicType,cinematicPayloadSchema);
   if(await sequenceReady())submit=addPropFamily(submit,cinematicSequenceType,cinematicSequencePayloadSchema);
   if(await playbackReady())submit=addPropFamily(submit,cinematicPlaybackType,cinematicPlaybackRequestPayloadSchema);
@@ -293,7 +302,11 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
   return rpcError(res,id,-32602,'Unknown tool or invalid tool call');
  try{
   const args=site?await verifiedSpaceRequest(params.arguments,readSpaceRequest):params.arguments;
-  if((site||params.name===submitTool)&&args?.requestType===fileDeleteType&&!await deleteReady())throw Error('NGS_FILE_DELETE_UNAVAILABLE');
+  if((site||params.name===submitTool)&&args?.requestType===fileDeleteType){
+   const payload=site?JSON.parse(args.payload):args.payload;
+   validateFileDelete(payload,'binari');
+   if(!await deleteReady(payload.target.root))throw Error('NGS_FILE_DELETE_UNAVAILABLE');
+  }
   if((site||params.name===submitTool)&&args?.requestType===propImageType&&propImageReadiness&&!await ready())throw Error(propImageUnavailable);
   if((site||params.name===submitTool)&&propTypes.includes(args?.requestType)&&!await packageReady())throw Error(propGenerateUnavailable);
   if((site||params.name===submitTool)&&args?.requestType===propAnimationType&&!await animationReady())throw Error(propGenerateMotionUnavailable);

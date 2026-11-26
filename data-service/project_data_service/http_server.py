@@ -61,8 +61,8 @@ class Handler(DomainHandler):
         if media_path in (npc_planning_add_path,npc_planning_add_path+'/read'):
             return npc_planning_add(self)
 
-        from .single_target_delete import PATH as single_delete_path,serve as single_delete
-        if media_path==single_delete_path:return single_delete(self)
+        from .single_target_delete import PATH as single_delete_path,NPC_STANDALONE_CAPABILITY,serve as single_delete
+        if media_path in (single_delete_path,NPC_STANDALONE_CAPABILITY):return single_delete(self)
 
         from .workflow_motion_2d import ROUTES as motion_2d_routes,serve as motion_2d
         if media_path in motion_2d_routes:return motion_2d(self)
@@ -680,6 +680,9 @@ def serve(storage_root: Path, host: str, port: int):
     # Only owner-local hosts with the existing managed prop workflow opt in.
     prop_folder_delete=os.getenv('PDS_WORKFLOW_PROP_FOLDER_DELETE',
         '1' if host=='127.0.0.1' and os.getenv('PDS_WORKFLOW_PROP_STATIC')=='1' else '0')
+    npc_standalone_delete=os.getenv('PDS_WORKFLOW_NPC_STANDALONE_DELETE','0')
+    if npc_standalone_delete not in ('0','1') or npc_standalone_delete=='1' and npc_folder_delete!='1':
+        raise ValueError('WORKFLOW_NPC_STANDALONE_DELETE_OPT_IN')
     if prop_folder_delete not in ('0','1'):raise ValueError('WORKFLOW_PROP_FOLDER_DELETE_OPT_IN')
     if npc_folder_delete=='1' or concept_folder_delete=='1' or audio_delete=='1' or prop_folder_delete=='1':
         from .single_target_delete import SingleTargetDelete
@@ -688,6 +691,9 @@ def serve(storage_root: Path, host: str, port: int):
             from .workflow_delete import NPC_ROOT
             if not hasattr(server,'workflow_preset'):raise ValueError('WORKFLOW_NPC_FOLDER_DELETE_PRESET_REQUIRED')
             roots[NPC_ROOT]=server.workflow_delete.storage_provider()
+            if npc_standalone_delete=='1':
+                roots[NPC_ROOT]=server.workflow_delete.with_standalone_storage(roots[NPC_ROOT])
+                server.npc_standalone_delete=True
         if concept_folder_delete=='1':
             from .workflow_concept_category import CONCEPT_ROOT
             if not hasattr(server,'workflow_concept_category'):raise ValueError('WORKFLOW_CONCEPT_FOLDER_DELETE_CATEGORY_REQUIRED')

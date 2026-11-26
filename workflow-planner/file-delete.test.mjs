@@ -14,3 +14,14 @@ test('pinned prop delete plans one physical folder, no grouped or stale counterp
    type:'file.delete',workerType:'file',dependsOn:null,input:{target,expected}}]});
  assert.throws(()=>buildPlan({...row,payload:{...payload,target:{...target,kind:'file'}}}));
 });
+
+test('NPC plans one physical target pinned to the published creation task',()=>{
+ const target={root:'canonical-files/binari/npcs',path:'npc.lantern',kind:'directory'};
+ const expected={creationTaskId:'workflow.task.'+'a'.repeat(64)};
+ const payload={schemaVersion:'ngs.file-delete.v1',projectId:'binari',target,expected};
+ const officialRequestId='request.official.'+'b'.repeat(64);
+ const row={officialRequestId,requestType:'file.delete',schemaVersion:payload.schemaVersion,projectId:'binari',
+  payload,payloadSha256:sha(canonical(payload)),status:'registered',registeredAt:1};
+ assert.deepEqual(buildPlan(row).tasks.map(({type,workerType,input})=>({type,workerType,input})),
+  [{type:'file.delete',workerType:'file',input:{target,expected}}]);
+});
