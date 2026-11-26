@@ -28,6 +28,25 @@ export function validMapGraph(v,{partial=false}={}){
   unique.add(e.id);return true;
  });
 }
+// Advertise the same request families to MCP clients. Cross-field graph
+// and normalized rectangle checks are enforced by validMapRequest.
+const obj=(properties)=>({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
+const key={type:'string',pattern:'^[a-z][a-z0-9-]{0,31}$'};
+const title={type:'string',minLength:1,maxLength:100};
+const count=(minimum,maximum)=>({type:'integer',minimum,maximum});
+const pointSchema=obj({x:count(0,1000),y:count(0,1000)});
+const rectangleSchema=obj({...pointSchema.properties,width:count(1,1000),height:count(1,1000)});
+const regionSchema=obj({id:key,name:title,description:{type:'string',minLength:1,maxLength:1000},
+ backgroundId:{type:'string',pattern:'^background\\.[a-f0-9]{64}$'},imageSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}});
+const graphSchema=(generate)=>obj({title,startRegionId:key,
+ regions:{type:'array',minItems:generate?2:1,maxItems:generate?12:24,items:regionSchema},
+ connections:{type:'array',minItems:generate?1:0,maxItems:96,items:obj({id:key,from:key,to:key,
+  hit:generate?{type:'null'}:rectangleSchema,spawn:generate?{type:'null'}:pointSchema,label:title})}});
+export const mapPayloadSchemas=mapSchemas.map((id,i)=>obj({schemaVersion:{const:id},projectId:{const:'binari'},
+ graph:graphSchema(i===0),...(i===0?{intent:{type:'string',minLength:1,maxLength:2000}}:{
+  mapId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
+  expectedRevision:count(1,Number.MAX_SAFE_INTEGER-1),
+ })}));
 export function validMapRequest(v,type){
  const generate=type===mapTypes[0], i=generate?0:1;
  return (generate||type===mapTypes[1])&&mapFields(v,generate?['schemaVersion','projectId','graph','intent']:

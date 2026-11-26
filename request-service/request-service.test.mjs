@@ -455,7 +455,7 @@ const conceptExisting=(operation,categoryId='concept.test-fixture')=>({...legacy
 test('exact concept envelopes reject mismatched families, unsafe placement, legacy extras and malformed text',async t=>{
  const {directory,path}=folder(t),{submit,rpc}=await listener(t,directory);
  const schema=(await rpc('tools/list',{})).result.tools[0].inputSchema;
- assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','audio.separate','motion-preset.convert-2d','npc.animation.regenerate']);
+ assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','audio.separate','motion-preset.convert-2d','npc.animation.regenerate','map.generate','map.update']);
  assert.deepEqual(schema.oneOf[1].properties.payload.required,['schemaVersion','projectId','operation','categoryId','groupId','title','outline','requirements']);
  const expected={error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400};
  for(const bad of [
@@ -867,4 +867,24 @@ test('standalone NPC deletion capability is separate from pinned props',async t=
  assert.match(JSON.stringify(await submit({...body,target:{...target,root:'canonical-files/binari/props',path:'lantern'},expected:{revision:1,sha256:'b'.repeat(64)}})),/NGS_FILE_DELETE_UNAVAILABLE/);
  assert.equal((await submit(body)).result.structuredContent.status,'registered');
  assert.equal(read(path).length,1);
+});
+
+test('local map request contracts are discoverable and the valid queued payload reaches planner intake',async t=>{
+ const {directory}=folder(t),api=await listener(t,directory);
+ const advertised=(await api.rpc('tools/list',{})).result.tools.find(v=>v.name==='request_submit').inputSchema;
+ for(const [type,schema] of [['map.generate','ngs.map-generate.v1'],['map.update','ngs.map-update.v1']]){
+  assert.ok(advertised.properties.requestType.enum.includes(type));
+  assert.equal(advertised.oneOf.find(x=>x.properties.requestType.const===type).properties.payload.properties.schemaVersion.const,schema);
+ }
+ const graph={title:'Ritual yard',startRegionId:'first',
+  regions:['first','second'].map((id,i)=>({id,name:id,description:'Area',backgroundId:'background.'+String(i+1).repeat(64),imageSha256:'a'.repeat(64)})),
+  connections:[{id:'route',from:'first',to:'second',hit:null,spawn:null,label:'Next'}]};
+ const map={sourceId:'local',requestType:'map.generate',idempotencyKey:'map-queued-fixture',
+  payload:{schemaVersion:'ngs.map-generate.v1',projectId:'binari',graph,intent:'Find visible pathways.'}};
+ assert.deepEqual((await api.submit({...map,payload:{...map.payload,intent:''}})).result.structuredContent,
+  {error:'NGS_MAP_PAYLOAD_INVALID',status:400});
+ const out=(await api.submit(map)).result.structuredContent;
+ assert.equal(out.status,'registered');
+ assert.equal((await api.submit(map)).result.structuredContent.officialRequestId,out.officialRequestId);
+ assert.ok((await api.workflow({limit:10})).result.structuredContent.requests.some(x=>x.officialRequestId===out.officialRequestId));
 });

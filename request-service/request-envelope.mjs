@@ -73,4 +73,4 @@ function validateSubmit(value,sourceId,allowedType){
 }
 
 export const validateOfficialSubmit=value=>validateSubmit(value,'local',()=>true);
-export const validateVerifiedSpaceSubmit=value=>validateSubmit(value,'space',()=>true);
+export const validateVerifiedSpaceSubmit=value=>validateSubmit(value,'space',type=>!mapTypes.includes(type));
