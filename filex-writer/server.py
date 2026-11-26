@@ -459,6 +459,8 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                                        SOURCE_ROUTE+'/reconcile':store.cinematic_source_reconcile,
                                        BACKGROUND_ROUTE:lambda p:store.cinematic_source_generate(p,background=True),
                                        BACKGROUND_ROUTE+'/result':lambda p:store.cinematic_source_result(p,background=True),
+                                       BACKGROUND_ROUTE+'/source-status':lambda p:store.background_pixel_source(p,status=True),
+                                       BACKGROUND_ROUTE+'/asset':store.background_pixel_source,
                                        BACKGROUND_ROUTE+'/reconcile':lambda p:store.cinematic_source_reconcile(p,background=True),
                                        ARCHIVE_ROUTE:store.cinematic_sequences_archive,ARCHIVE_ROUTE+'/result':store.cinematic_sequences_archive_result})
                     action=routes.get(url.path)

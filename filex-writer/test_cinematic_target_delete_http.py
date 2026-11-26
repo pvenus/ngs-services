@@ -17,6 +17,7 @@ from project_data_service.workflow_file_delete import (
     CINEMATIC_ROOT,cinematic_inventory,cinematic_storage_provider,
 )
 from project_data_service.workflow_delete_claim import PrivatePlannerClaim
+from project_data_service.workflow_cinematic_project import WorkflowCinematicProject,PIXEL_MODES,ORIGIN,CONFIG
 from test_cinematic_sequence_http import REPO,OID,png,sha,PLAYBACK
 from test_scope_registry import UnifiedFixture
 
@@ -56,6 +57,7 @@ store.close();"""
         def ready():
             with factory() as client:return client.capabilities().get('workflowPinnedCinematicTargetDeleteV1') is True
         app=ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        for mode in PIXEL_MODES:setattr(app,'workflow_cinematic_'+mode.replace('-','_'),WorkflowCinematicProject(planner,mode,writer_factory=factory))
         app.single_target_delete=SingleTargetDelete({CINEMATIC_ROOT:cinematic_storage_provider(planner,factory,ready)},dedicated=[CINEMATIC_ROOT])
         app.cinematic_delete_inventory=lambda source:cinematic_inventory(planner,factory,source)
         th=Thread(target=app.serve_forever,daemon=True);th.start()
@@ -88,6 +90,44 @@ store.close();"""
             'officialRequestId':sequenceId,'sourceSha256':source,'width':128,'height':128,'frameCount':45,'masterFps':24,'frames':frames,'playback':PLAYBACK}))
         self.store.write(path/'frames'/'0000.png',png(1))
         return path
+
+    def test_background_original_reference_and_full_pixel_are_distinct_pinned_publications(self):
+        from sqlite3 import connect
+        self.setup_scope()
+        parent=oid('9')
+        body=dict(schemaVersion='ngs.background-pixel-workflow.v1',projectId='binari',title='어두운 마당',
+                  timeOfDay='밤',season='가을',mood='고요',color='청색',location='한옥',
+                  requirements='순수 배경',additionalNotes='')
+        self.planner_claim(parent,'background.pixel.workflow',body,status='pending')
+        paths=[];previous=None
+        for i,mode in enumerate(PIXEL_MODES):
+            route=ORIGIN+mode
+            self.assertEqual(self.pds_call(route)['enabled'],True)
+            stamp=10+i
+            with connect(self.db) as conn:
+                key=CONFIG[mode]['key']
+                t=conn.execute('SELECT task_id FROM workflow_tasks WHERE official_request_id=? AND task_key=?',(parent,key)).fetchone()[0]
+                sha_payload=conn.execute('SELECT payload_sha256 FROM workflow_runs WHERE official_request_id=?',(parent,)).fetchone()[0]
+                conn.execute("UPDATE workflow_tasks SET status='running', updated_at=? WHERE task_id=?",(stamp,t))
+            claim=dict(officialRequestId=parent,projectId='binari',taskId=t,payloadSha256=sha_payload,claimStamp=stamp)
+            if i:
+                with urlopen(Request(self.origin_pds+route+'/asset',data=json.dumps({'claim':claim}).encode(),
+                        headers={'Content-Type':'application/json'}),timeout=10) as reply:
+                    self.assertEqual(reply.read(),previous)
+                lookup=self.pds_call(route+'/read',{'claim':claim})
+                self.assertEqual(lookup['sourceSha256'],sha(previous))
+                if i==1:self.assertEqual(base64.b64decode(lookup['base64']),previous)
+            raw=png(11+i,1536,1024)
+            artifact=dict(sha256=sha(raw),bytes=len(raw),width=1536,height=1024,base64=base64.b64encode(raw).decode())
+            ack=self.pds_call(route,{'claim':claim,'artifact':artifact})
+            self.assertEqual(ack['resultRef'],'binari/cinematics/backgrounds/'+sha(raw)+'.json')
+            paths.append(ack['resultRef']);previous=raw
+            with connect(self.db) as conn:conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?",(paths[-1],t))
+        self.assertEqual(len(set(paths)),3)
+        final=self.pds_call(ORIGIN+PIXEL_MODES[-1]+'/result',{'officialRequestId':parent})
+        self.assertEqual(final['resultRef'],paths[-1])
+        self.assertEqual(final['manifest']['title'],'어두운 마당 · 픽셀 보정')
+        for path in paths:self.assertTrue((self.root_scope/'backgrounds'/path.split('/')[-1]).is_file())
 
     def test_archived_sequence_and_source_have_independent_exact_recoverable_moves(self):
         self.setup_scope()

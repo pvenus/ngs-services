@@ -1,4 +1,4 @@
-import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
+import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,backgroundPixelType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
 import {canonical} from './envelope.mjs';
 
 export async function readCinematicPublication({officialRequestId,family}){
@@ -54,13 +54,13 @@ export function verifyCinematicPlaybackReadback(candidate,value){
 export function verifyExtraCinematicReadback(candidate,value){
  if(!value||value.ok!==true||value.resultRef!==candidate.resultRef)return false;
  const keys=Object.keys(value).sort().join(',');
- if([cinematicSourceType,backgroundSourceType].includes(candidate.family)){
-  const background=candidate.family===backgroundSourceType;
+ if([cinematicSourceType,backgroundSourceType,backgroundPixelType].includes(candidate.family)){
+  const pixel=candidate.family===backgroundPixelType,background=pixel||candidate.family===backgroundSourceType;
   const m=value.manifest;
   return keys==='manifest,ok,resultRef'&&m&&
    Object.keys(m).sort().join(',')==='bytes,height,officialRequestId,projectId,schemaVersion,sha256,title,width'&&
    m.schemaVersion===(background?'ngs.background-source-result.v1':'ngs.cinematic-source-result.v1')&&m.projectId==='binari'&&m.officialRequestId===candidate.officialRequestId&&
-   m.title===candidate.title&&m.width===1536&&m.height===1024&&Number.isInteger(m.bytes)&&m.bytes>0&&m.bytes<=8*1024*1024&&
+   (pixel?m.title===candidate.title+' · 픽셀 보정':m.title===candidate.title)&&m.width===1536&&m.height===1024&&Number.isInteger(m.bytes)&&m.bytes>0&&m.bytes<=8*1024*1024&&
    typeof m.sha256==='string'&&m.sha256.length===64&&/^[a-f0-9]{64}$/u.test(m.sha256)&&
    candidate.resultRef==='binari/cinematics/'+(background?'backgrounds':'sources')+'/'+m.sha256+'.json';
  }

@@ -532,6 +532,19 @@ class CinematicProjectStore(CinematicPlaybackStore):
    require(self._read(image,CINEMATIC_MAX)==raw,'source bytes readback')
    if not meta.exists():self.write(meta,frozen)
    return self._result_source(oid,background)
+ def background_pixel_source(self,p,*,status=False):
+  require(type(p)is dict and set(p)=={'sourceSha256'} and cinematic_match(p['sourceSha256'],r'[a-f0-9]{64}'),'background pixel source')
+  sha=p['sourceSha256']
+  with self.lock():
+   raw=self._read(self._path('backgrounds',sha+'.json'),8192)
+   m=source_entry(json.loads(raw),True)
+   require(wire(m)==raw and m['sha256']==sha,'background pixel source proof')
+   result={'sourceSha256':sha,'title':m['title']}
+   if not status:
+    image=self._read(self._path('backgrounds',sha+'.png'),CINEMATIC_MAX)
+    source_image(image,m)
+    result['base64']=base64.b64encode(image).decode('ascii')
+   return result
  def cinematic_source_result(self,p,*,background=False):
   require(type(p)is dict and set(p)=={'officialRequestId'},'source result packet')
   with self.lock():return self._result_source(p['officialRequestId'],background)

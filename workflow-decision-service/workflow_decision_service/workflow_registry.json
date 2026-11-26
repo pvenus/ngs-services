@@ -1779,9 +1779,152 @@
         "apply": "authorized-mutation",
         "authorization": "same-authorized-actor-target-and-action-or-fail"
       }
+    },
+    {
+      "id": "background.cinematic-source",
+      "workerId": "image",
+      "candidateCount": 1,
+      "modelCalls": 1,
+      "dependsOn": [],
+      "description": "Create the pure cinematic-style environment only. Respect common art and the published cinematic style for mood and light; hold the game layout and avoid independent props or people.",
+      "inputs": [
+        "scene requirements",
+        "published common, background and cinematic design"
+      ],
+      "outputs": [
+        "one canonical 1536×1024 original PNG"
+      ],
+      "requires": [],
+      "provides": [
+        "background.cinematic-original"
+      ],
+      "generationKind": "generative",
+      "variations": [],
+      "requiredUserFields": [
+        "title",
+        "timeOfDay",
+        "season",
+        "mood",
+        "color",
+        "location",
+        "requirements"
+      ],
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.background-pixel-workflow.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        }
+      },
+      "outputPolicy": {
+        "kind": "single-result",
+        "count": 1,
+        "selection": "none",
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail"
+      }
+    },
+    {
+      "id": "background.pixel-image",
+      "workerId": "image",
+      "candidateCount": 1,
+      "modelCalls": 1,
+      "dependsOn": [
+        "background.cinematic-source"
+      ],
+      "description": "Use the exact previous PNG as a real image reference. Translate to authored pixel art without moving doors, paths, geometry or focal light.",
+      "inputs": [
+        "exact canonical original SHA-256 and PNG"
+      ],
+      "outputs": [
+        "one canonical 1536×1024 pixel artwork PNG"
+      ],
+      "requires": [
+        "background.cinematic-original"
+      ],
+      "provides": [
+        "background.pixel-draft"
+      ],
+      "generationKind": "generative",
+      "variations": [],
+      "requiredUserFields": [],
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.background-pixel-workflow.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        }
+      },
+      "outputPolicy": {
+        "kind": "single-result",
+        "count": 1,
+        "selection": "none",
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail"
+      }
+    },
+    {
+      "id": "background.pixel-correct",
+      "workerId": "postprocess",
+      "candidateCount": 1,
+      "modelCalls": 0,
+      "dependsOn": [
+        "background.pixel-image"
+      ],
+      "description": "Run the existing CPU pixel palette correction at every original coordinate. Never reduce, recrop, upsample, antialias, segment or regenerate. Preserve 1536×1024, and verify immutable publication and source digest.",
+      "inputs": [
+        "exact previous pixel image SHA-256 and 1536×1024 PNG"
+      ],
+      "outputs": [
+        "one verified full-resolution corrected PNG"
+      ],
+      "requires": [
+        "background.pixel-draft"
+      ],
+      "provides": [
+        "background.pixel-final"
+      ],
+      "generationKind": "deterministic",
+      "variations": [],
+      "requiredUserFields": [],
+      "requestRequirements": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "ngs.background-pixel-workflow.v1"
+        },
+        "projectId": {
+          "type": "string",
+          "const": "binari"
+        }
+      },
+      "outputPolicy": {
+        "kind": "single-result",
+        "count": 1,
+        "selection": "none",
+        "apply": "authorized-mutation",
+        "authorization": "same-authorized-actor-target-and-action-or-fail"
+      }
     }
   ],
   "requestTypes": {
+    "background.pixel.workflow": {
+      "eligibleStageIds": [
+        "background.cinematic-source",
+        "background.pixel-image",
+        "background.pixel-correct"
+      ],
+      "stageIds": [
+        "background.cinematic-source",
+        "background.pixel-image",
+        "background.pixel-correct"
+      ]
+    },
     "concept.modify": {
       "eligibleStageIds": [
         "concept.modify"

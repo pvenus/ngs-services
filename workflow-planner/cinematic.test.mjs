@@ -72,3 +72,20 @@ test('PNG sequence graph and completion prove exact authored numeric curves with
   assert.equal(await store.verifyCompletion(evidence),true);
  }finally{store.close();}
 });
+
+test('formal pixel background has three exact dependencies and two image calls',async()=>{
+ const {buildPlan}=await import('./planner.mjs');
+ const {validateExtraCinematic,backgroundPixelType,backgroundPixelSchema}=await import('./cinematic-envelope.mjs');
+ const payload={schemaVersion:backgroundPixelSchema,projectId:'binari',title:'어두운 앞마당',
+  timeOfDay:'밤',season:'늦가을',mood:'고요함',color:'남청',location:'한옥',
+  requirements:'동선을 읽을 수 있게',additionalNotes:''};
+ const payloadSha256=sha(validateExtraCinematic(payload,'binari',backgroundPixelType));
+ const officialRequestId='request.official.'+'a'.repeat(64);
+ const row={officialRequestId,projectId:'binari',requestType:backgroundPixelType,schemaVersion:backgroundPixelSchema,
+  payload,payloadSha256,registeredAt:1,status:'registered'};
+ const plan=buildPlan(row);
+ assert.deepEqual(plan.tasks.map(x=>[x.key,x.workerType]),[
+  ['background_cinematic_source','image'],['background_pixel_generate','image'],['background_pixel_postprocess','postprocess']]);
+ assert.deepEqual(plan.tasks.map(x=>x.dependsOn),[null,plan.tasks[0].id,plan.tasks[1].id]);
+ assert.throws(()=>validateExtraCinematic({...payload,width:384},'binari',backgroundPixelType));
+});

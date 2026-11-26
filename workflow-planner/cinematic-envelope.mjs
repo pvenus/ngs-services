@@ -88,6 +88,7 @@ export const cinematicPlaybackResultRef=id=>'binari/cinematics/sequences/'+id+'/
 
 export const cinematicSourceType='cinematic.source.generate',cinematicSourceRequestSchema='ngs.cinematic-source-generate.v1';
 export const backgroundSourceType='background.source.generate',backgroundSourceRequestSchema='ngs.background-source-generate.v1';
+export const backgroundPixelType='background.pixel.workflow',backgroundPixelSchema='ngs.background-pixel-workflow.v1';
 export const cinematicArchiveType='cinematic.sequences.remove',cinematicArchiveRequestSchema='ngs.cinematic-sequences-remove.v1';
 export const propAnimationRemoveType='prop.animation.remove',propAnimationRemoveRequestSchema='ngs.prop-animation-remove.v1';
 const familyBase={projectId:{const:'binari'}}, hashSchema={type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64};
@@ -115,6 +116,14 @@ export const extraCinematicRequests=Object.freeze({
    .map(([k,maxLength])=>[k,{type:'string',minLength:k==='additionalNotes'?0:1,maxLength}]))),
   fields:['title','timeOfDay','season','mood','color','location','requirements','additionalNotes'],
   valid:v=>Object.entries({title:120,timeOfDay:80,season:80,mood:160,color:120,location:160,requirements:900,additionalNotes:900})
+   .every(([k,n])=>k==='additionalNotes'&&v[k]===''||cleanText(v[k],n,n*4))},
+ [backgroundPixelType]:{schema:backgroundPixelSchema,key:'background_pixel_postprocess',worker:'postprocess',route:'/v1/cinematics/ownership/workflow-background-pixel',
+  capability:'workflow.background-pixel-write.v1',
+  payload:req(backgroundPixelSchema,Object.fromEntries(
+   Object.entries({title:105,timeOfDay:80,season:80,mood:160,color:120,location:160,requirements:900,additionalNotes:900})
+   .map(([k,maxLength])=>[k,{type:'string',minLength:k==='additionalNotes'?0:1,maxLength}]))),
+  fields:['title','timeOfDay','season','mood','color','location','requirements','additionalNotes'],
+  valid:v=>Object.entries({title:105,timeOfDay:80,season:80,mood:160,color:120,location:160,requirements:900,additionalNotes:900})
    .every(([k,n])=>k==='additionalNotes'&&v[k]===''||cleanText(v[k],n,n*4))},
  [cinematicArchiveType]:{schema:cinematicArchiveRequestSchema,key:'cinematic_sequences_remove',worker:'file',route:'/v1/cinematics/ownership/workflow-sequence-remove',
   capability:'workflow.cinematic-sequence-remove.v1',

@@ -23,7 +23,7 @@ import {buildPropGeneratePlan,exactPropTask,isPropRef,propCompletionLimit} from 
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate,cinematicSourceType,backgroundSourceType,cinematicArchiveType,propAnimationRemoveType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic,allCinematicTypes} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate,cinematicSourceType,backgroundSourceType,backgroundPixelType,cinematicArchiveType,propAnimationRemoveType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic,allCinematicTypes} from './cinematic-envelope.mjs';
 import {verifyCinematicReadback,verifyCinematicSequenceReadback,verifyCinematicPlaybackReadback,verifyExtraCinematicReadback} from './cinematic-readback.mjs';
 
 export const portraitPixelTaskType='npc.portrait-pixel';
@@ -72,6 +72,13 @@ function materializePlan(row,payload,pixelPortraits=true){
  }
  if(extraCinematicTypes.includes(row.requestType)){
   const cfg=extraCinematicRequests[row.requestType],input=Object.fromEntries(cfg.fields.map(k=>[k,row.payload[k]]));
+  if(row.requestType===backgroundPixelType){
+   const stages=[['background_cinematic_source','image'],['background_pixel_generate','image'],['background_pixel_postprocess','postprocess']];
+   const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
+   return {payload,tasks:stages.map(([key,workerType],i)=>({id:id(key),key,type:row.requestType,workerType,
+    dependsOn:i?id(stages[i-1][0]):null,input}))};
+  }
+
   return {payload,tasks:[{id:'workflow.task.'+sha(canonical([row.officialRequestId,cfg.key])),
    key:cfg.key,type:row.requestType,workerType:cfg.worker,dependsOn:null,input}]};
  }
@@ -385,12 +392,12 @@ export class PlannerStore{
    for(const row of candidates){
     if(extraCinematicTypes.includes(row.request_type)){
      if(!this.#cinematicEnabled)continue;
-     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,2);
-     if(!plan||rows.length!==1||!exactStoredTask(rows[0],plan.tasks[0]))continue;
-     const resultRef=rows[0].result_ref;
+     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,4);
+     if(!plan||rows.length!==plan.tasks.length||!plan.tasks.every(t=>rows.some(r=>exactStoredTask(r,t))))continue;
+     const final=plan.tasks.at(-1),resultRef=rows.find(r=>r.task_id===final.id)?.result_ref;
      if(typeof resultRef!=='string')continue;
      if(row.request_type===cinematicSourceType&&!/^binari\/cinematics\/sources\/[a-f0-9]{64}\.json$/u.test(resultRef)||
-        row.request_type===backgroundSourceType&&!/^binari\/cinematics\/backgrounds\/[a-f0-9]{64}\.json$/u.test(resultRef)||
+        [backgroundSourceType,backgroundPixelType].includes(row.request_type)&&!/^binari\/cinematics\/backgrounds\/[a-f0-9]{64}\.json$/u.test(resultRef)||
         row.request_type===cinematicArchiveType&&resultRef!=='binari/cinematics/sequence-archive.json'||
         row.request_type===propAnimationRemoveType&&!/^prop\.package\.[a-f0-9]{64}$/u.test(resultRef))continue;
      result.push({official_request_id:row.official_request_id,publication:{

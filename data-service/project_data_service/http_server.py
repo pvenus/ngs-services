@@ -807,9 +807,12 @@ def serve(storage_root: Path, host: str, port: int):
         server.workflow_cinematic_sequence=WorkflowCinematicSequence(planner)
         from .workflow_cinematic_playback import WorkflowCinematicPlayback
         server.workflow_cinematic_playback=WorkflowCinematicPlayback(planner)
-        from .workflow_cinematic_project import WorkflowCinematicProject,SOURCE,BACKGROUND,ARCHIVE
+        from .workflow_cinematic_project import WorkflowCinematicProject,SOURCE,BACKGROUND,CINE_BG,DRAFT,PIXEL,ARCHIVE
         server.workflow_cinematic_source=WorkflowCinematicProject(planner,SOURCE)
         server.workflow_cinematic_background=WorkflowCinematicProject(planner,BACKGROUND)
+        server.workflow_cinematic_background_pixel=WorkflowCinematicProject(planner,PIXEL)
+        server.workflow_cinematic_background_cinematic_source=WorkflowCinematicProject(planner,CINE_BG)
+        server.workflow_cinematic_background_pixel_draft=WorkflowCinematicProject(planner,DRAFT)
         server.workflow_cinematic_sequence_remove=WorkflowCinematicProject(planner,ARCHIVE)
         from .workflow_prop_animation_remove import WorkflowPropAnimationRemove
         server.workflow_prop_animation_remove=WorkflowPropAnimationRemove(planner)
