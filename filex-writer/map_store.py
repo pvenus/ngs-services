@@ -6,6 +6,7 @@ from hashlib import sha256
 MAP_ROUTE='/v1/workflow/maps'
 OID=re.compile(r'request\.official\.[a-f0-9]{64}\Z')
 HASH=re.compile(r'[a-f0-9]{64}\Z')
+KEY=re.compile(r'[a-z][a-z0-9-]{0,31}\Z')
 
 def match(v,p):return type(v) is str and p.fullmatch(v) is not None
 def need(ok):
@@ -15,11 +16,28 @@ def map_base(store,mid):
     root=store.root/'maps'; target=root/mid
     need(not root.is_symlink() and not target.is_symlink())
     return target
+def validate_colliders(graph):
+    need(type(graph)is dict)
+    if 'colliders' not in graph:return
+    colliders=graph['colliders']
+    regions=graph.get('regions')
+    need(type(colliders)is list and len(colliders)<=96 and type(regions)is list and
+         all(type(r)is dict and match(r.get('id'),KEY) for r in regions))
+    region_ids={r['id'] for r in regions}
+    ids=set()
+    for c in colliders:
+        need(type(c)is dict and set(c)=={'id','regionId','rect'} and match(c['id'],KEY) and c['id'] not in ids and
+             match(c['regionId'],KEY) and c['regionId'] in region_ids)
+        r=c['rect']
+        need(type(r)is dict and set(r)=={'x','y','width','height'} and all(type(x)is int for x in r.values()) and
+             0<=r['x'] and 0<=r['y'] and 0<r['width']<=1000-r['x'] and 0<r['height']<=1000-r['y'])
+        ids.add(c['id'])
 def read_revision(store,base,n):
     p=base/(str(n)+'.json')
     need(not p.is_symlink())
     state=json.loads(store._read(p,65536))
     need(type(state)is dict and state.get('revision')==n and state.get('mapId')==base.name)
+    validate_colliders(state.get('graph'))
     return state
 def map_context(store,p):
     ids=p.get('backgroundIds') if type(p)is dict else None
@@ -50,6 +68,7 @@ def map_revision(store,p,write=False):
     if not write:return read_revision(store,base,n)
     need(set(p)=={'schemaVersion','projectId','mapId','revision','updatedAt','officialRequestId','graph'} and
          p['schemaVersion']=='ngs.map-metadata.v1' and p['projectId']=='binari' and match(p['officialRequestId'],OID))
+    validate_colliders(p['graph'])
     raw=(json.dumps(p,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()
     need(len(raw)<65536)
     with store.lock():

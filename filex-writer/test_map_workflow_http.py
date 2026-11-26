@@ -36,13 +36,16 @@ class MapWorkflowFixture(UnifiedFixture):
         db=self.root/'planner.sqlite'
         script="""import {PlannerStore} from './workflow-planner/planner.mjs';
 import {canonical,sha} from './workflow-planner/envelope.mjs';
-const [db,id,raw]=process.argv.slice(1),payload=JSON.parse(raw),s=new PlannerStore(db,{multiDependencies:true}),h=sha(canonical(payload));
-s.stage({officialRequestId:id,requestType:'map.generate',projectId:'binari',schemaVersion:payload.schemaVersion,payload,payloadSha256:h,registeredAt:1,status:'registered'});
+const [db,id,raw,requestType]=process.argv.slice(1),payload=JSON.parse(raw),s=new PlannerStore(db,{multiDependencies:true}),h=sha(canonical(payload));
+s.stage({officialRequestId:id,requestType,projectId:'binari',schemaVersion:payload.schemaVersion,payload,payloadSha256:h,registeredAt:1,status:'registered'});
 s.acknowledge(id);
-s.db.prepare("UPDATE workflow_tasks SET status='running',updated_at=5").run();
-console.log(JSON.stringify({officialRequestId:id,projectId:'binari',taskId:s.db.prepare('SELECT task_id FROM workflow_tasks').get().task_id,payloadSha256:h,claimStamp:5}));
+s.db.prepare("UPDATE workflow_tasks SET status='running',updated_at=5 WHERE official_request_id=?").run(id);
+console.log(JSON.stringify({officialRequestId:id,projectId:'binari',taskId:s.db.prepare('SELECT task_id FROM workflow_tasks WHERE official_request_id=?').get(id).task_id,payloadSha256:h,claimStamp:5}));
 s.close();"""
-        claim=json.loads(subprocess.check_output(['node','--input-type=module','-e',script,str(db),oid,json.dumps(body)],cwd=REPO))
+        def stage(request_id,payload,request_type):
+            return json.loads(subprocess.check_output(['node','--input-type=module','-e',script,str(db),request_id,
+                json.dumps(payload),request_type],cwd=REPO))
+        claim=stage(oid,body,'map.generate')
         db.chmod(0o600);st=db.stat()
         planner=PrivatePlannerClaim(str(db),st.st_dev,st.st_ino)
         def factory():
@@ -75,3 +78,20 @@ s.close();"""
         with sqlite3.connect(db) as conn:
             conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=?", (result['resultRef'],))
         self.assertEqual(call('/result',{'officialRequestId':oid}),result)
+
+        original=f.read_bytes()
+        box={'id':'wall-1','regionId':'zone-2','rect':{'x':10,'y':20,'width':130,'height':300}}
+        changed={**posted,'colliders':[box]}
+        update_id='request.official.'+'b'*64
+        update_claim=stage(update_id,{'schemaVersion':'ngs.map-update.v1','projectId':'binari','mapId':oid,
+            'expectedRevision':1,'graph':changed},'map.update')
+        call('',{'claim':update_claim,'graph':posted},403)
+        call('',{'claim':update_claim,'graph':{**changed,'colliders':[box,box]}},403)
+        update_result=call('',{'claim':update_claim,'graph':changed})
+        self.assertEqual(update_result,{'ok':True,'resultRef':f'binari/cinematics/maps/{oid}/2.json'})
+        self.assertEqual(f.read_bytes(),original)
+        self.assertEqual(json.loads(f.with_name('2.json').read_text())['graph'],changed)
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE official_request_id=?",
+                (update_result['resultRef'],update_id))
+        self.assertEqual(call('/result',{'officialRequestId':update_id}),update_result)

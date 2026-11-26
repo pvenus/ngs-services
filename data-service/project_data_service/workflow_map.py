@@ -18,7 +18,8 @@ def rect(v):
     return (keys(v,('x','y','width','height')) and all(type(x)is int for x in v.values()) and
             0<=v['x'] and 0<=v['y'] and 0<v['width']<=1000-v['x'] and 0<v['height']<=1000-v['y'])
 def graph_valid(v,partial=False):
-    need(keys(v,('title','startRegionId','regions','connections')) and text(v['title'],100))
+    fields=('title','startRegionId','regions','connections')
+    need((keys(v,fields) or keys(v,(*fields,'colliders'))) and text(v['title'],100))
     regions=v['regions']; edges=v['connections']
     need(type(regions)is list and 1<=len(regions)<=24 and type(edges)is list and len(edges)<=96)
     bg=set()
@@ -34,6 +35,13 @@ def graph_valid(v,partial=False):
              type(e['from'])is str and type(e['to'])is str and e['from'] in bg and e['to'] in bg and e['from']!=e['to'] and text(e['label'],100) and
              (rect(e['hit']) or partial and e['hit'] is None) and (point(e['spawn']) or partial and e['spawn'] is None))
         chosen.add(e['id'])
+    colliders=v.get('colliders',[])
+    need(type(colliders)is list and len(colliders)<=96)
+    collider_ids=set()
+    for c in colliders:
+        need(keys(c,('id','regionId','rect')) and match(c['id'],r'[a-z][a-z0-9-]{0,31}') and
+             c['id'] not in collider_ids and type(c['regionId'])is str and c['regionId'] in bg and rect(c['rect']))
+        collider_ids.add(c['id'])
     return v
 def graph(db,oid):
     need(match(oid,OFFICIAL))
@@ -44,7 +52,7 @@ def graph(db,oid):
     need(keys(p,('schemaVersion','projectId','graph',*(('intent',) if gen else ('mapId','expectedRevision')))) and
          p['schemaVersion']==r['schema_version'] and p['projectId']=='binari' and digest(p)==r['payload_sha256'])
     graph_valid(p['graph'],gen)
-    need((2<=len(p['graph']['regions'])<=12 and p['graph']['connections'] and
+    need((2<=len(p['graph']['regions'])<=12 and p['graph']['connections'] and not p['graph'].get('colliders') and
           all(e['hit'] is None and e['spawn'] is None for e in p['graph']['connections']) and text(p['intent'],2000)) if gen else match(p['mapId'],OFFICIAL) and
          type(p['expectedRevision'])is int and 1<=p['expectedRevision']<SAFE_INT)
     rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 2',(oid,)).fetchall();need(len(rows)==1)
