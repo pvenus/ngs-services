@@ -92,8 +92,21 @@ class _FolderCapacity:
                 _log_capacity('pds_folder_busy_holder_released',pool=self.name,request=request,heldMs=held_ms)
 
 
-_COMPARE=_FolderCapacity('compare',1)
-_FETCH=_FolderCapacity('fetch',2)
+# Classify by the requested root, not by the caller or project identity.
+# Replica calls cover the project root; narrow operations have bounded capacity
+# that cannot be occupied by a root traversal or its file transfers.
+_ROOT_COMPARE=_FolderCapacity('compare-root',1)
+_SCOPED_COMPARE=_FolderCapacity('compare-scoped',1)
+_ROOT_FETCH=_FolderCapacity('fetch-root',2)
+_SCOPED_FETCH=_FolderCapacity('fetch-scoped',2)
+
+
+def _root_scope(parts):
+    return len(parts)<=1
+
+
+def fetch_capacity(scope):
+    return _ROOT_FETCH if _root_scope(_parts(scope,empty=True)) else _SCOPED_FETCH
 
 
 @contextmanager
@@ -232,7 +245,8 @@ def compare(folders,value,*,operation='internal_compare'):
         key=_parts(item['path'])
         if key in seen or include_deleted and len(paths)+len(key)>64:_bad(400,'FOLDER_COMPARE_INVALID')
         seen[key]=item['sha256']
-    with _COMPARE.hold(operation,value['scope']),folders._root() as root:
+    capacity=_ROOT_COMPARE if _root_scope(paths) else _SCOPED_COMPARE
+    with capacity.hold(operation,value['scope']),folders._root() as root:
         checkpoint=_checkpoint(folders,root,paths)
         opened=False
         try:
@@ -320,7 +334,7 @@ def route(handler,parsed,folders):
             if set(q)!={'scope','path','sha256'} or any(len(v)!=1 for v in q.values()):
                 _bad(400,'FOLDER_QUERY_INVALID')
             handler.connection.settimeout(15)
-            with _FETCH.hold('http_whole_file',q['scope'][0]):
+            with fetch_capacity(q['scope'][0]).hold('http_whole_file',q['scope'][0]):
                 raw=fetch(folders,*(q[k][0] for k in ('scope','path','sha256')))
                 try:
                     handler.send_response(200)

@@ -60,11 +60,13 @@ class Tests(unittest.TestCase):
         self.assertTrue(all(t['annotations']['readOnlyHint'] and t['outputSchema']['type']=='object' for t in tools))
         self.assertEqual(self.value('npc_project_folders_list'),{'projects':['binari']})
 
-    def test_compare_contention_names_mcp_holder_and_rejected_request(self):
+    def test_root_compare_blocks_root_but_not_scoped_compare(self):
         entered=threading.Event();release=threading.Event();completed=[]
         original=recursive_folders._inventory
+        concept=self.file.parent/'concept';concept.mkdir()
+        (concept/'style.json').write_bytes(b'{}')
         def inventory(*args,**kwargs):
-            if kwargs.get('hash_files'):
+            if kwargs.get('hash_files') and not entered.is_set():
                 entered.set()
                 if not release.wait(4):raise AssertionError('compare holder not released')
             return original(*args,**kwargs)
@@ -75,14 +77,16 @@ class Tests(unittest.TestCase):
             holder=threading.Thread(target=acquire_compare,daemon=True);holder.start()
             try:
                 self.assertTrue(entered.wait(3))
-                rejected=self.tool('npc_folders_compare',scope='binari/concept',files=[])
+                scoped=self.value('npc_folders_compare',scope='binari/concept',files=[])
+                self.assertEqual(scoped['groups'][0]['files'][0]['path'],'style.json')
+                rejected=self.tool('npc_folders_compare',scope='binari',files=[],includeDeleted=True)
                 self.assertTrue(rejected['isError'])
                 self.assertEqual(json.loads(rejected['content'][0]['text']),{'error':'FOLDER_BUSY','status':503})
                 busy=log.call_args
                 self.assertEqual(busy.args,('pds_folder_busy',))
                 data=busy.kwargs
-                self.assertEqual((data['pool'],data['limit']),('compare',1))
-                self.assertEqual((data['request']['operation'],data['request']['scope']),('mcp_compare','binari/concept'))
+                self.assertEqual((data['pool'],data['limit']),('compare-root',1))
+                self.assertEqual((data['request']['operation'],data['request']['scope']),('mcp_compare','binari'))
                 first,=data['holders']
                 self.assertEqual((first['operation'],first['scope']),('mcp_compare','binari'))
                 self.assertNotEqual(first['requestId'],data['request']['requestId'])
@@ -97,6 +101,20 @@ class Tests(unittest.TestCase):
             self.assertGreaterEqual(last.kwargs['heldMs'],first['heldMs'])
             self.value('npc_folders_compare',scope='binari',files=[])
             self.assertEqual(log.call_count,2)
+
+    def test_root_file_transfers_do_not_take_scoped_file_slots(self):
+        scoped=self.file.parent/'concept';scoped.mkdir()
+        (scoped/'style.json').write_bytes(b'{}')
+        root=recursive_folders.fetch_capacity('binari')
+        scoped_args={'scope':'binari/concept','path':'style.json',
+                     'sha256':hashlib.sha256(b'{}').hexdigest(),'offset':0}
+        with root.hold('root_transfer_1','binari'),root.hold('root_transfer_2','binari'):
+            reply=self.value('npc_folder_file_chunk',**scoped_args)
+            self.assertEqual(base64.b64decode(reply['base64']),b'{}')
+            blocked=self.tool('npc_folder_file_chunk',scope='binari',path='guide.bin',sha256=self.sha,offset=0)
+            self.assertTrue(blocked['isError'])
+            self.assertEqual(json.loads(blocked['content'][0]['text']),{'error':'FOLDER_BUSY','status':503})
+        self.assertEqual(self.value('npc_folder_file_chunk',scope='binari',path='guide.bin',sha256=self.sha,offset=0)['size'],len(self.data))
 
     def test_fetch_contention_reports_both_holders_and_releases_after_error(self):
         capacity=recursive_folders._FolderCapacity('fetch',2)

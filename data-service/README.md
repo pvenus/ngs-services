@@ -186,8 +186,12 @@ Storage Root 이동, 기반 테이블, HTTP 계약을 검증합니다.
 
 ### Folder read contention
 
-The compare pool allows one active recursive comparison; the separate file-read
-pool allows two reads. Both retain immediate `FOLDER_BUSY` responses when full.
+Project root reads (an empty scope or one path component) and narrower reads
+have independent capacity. Each class allows one active recursive compare and
+two file reads. A Local/Space full-project sync cannot take the slots reserved
+for narrower requests. HTTP and MCP use the same limits; saturated capacity
+still returns `FOLDER_BUSY` immediately. File hashes, change detection and
+deletion evidence are unchanged.
 On contention, PDS emits a JSON `pds_folder_busy` event with UTC time, pool,
 limit, the rejected operation and scope, and the current holder(s) with elapsed
 milliseconds. Match the holder's server-generated `requestId` with the
