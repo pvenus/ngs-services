@@ -8,6 +8,7 @@ import {audioRequestType} from './audio-generate-envelope.mjs';
 import {motion2DRequestType} from './motion-preset-convert-2d-envelope.mjs';
 import {npcAnimationRegenerateType} from './npc-animation-regenerate-envelope.mjs';
 import {audioDeleteType} from './audio-delete-envelope.mjs';
+import {fileDeleteType} from './file-delete-envelope.mjs';
 import {audioSeparateType} from './audio-separate-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
 import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
@@ -42,6 +43,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${npcPlanningAddType}' THEN json_extract(payload_json,'$.npcId')
    WHEN '${audioRequestType}' THEN json_extract(payload_json,'$.conceptId')
    WHEN '${audioDeleteType}' THEN json_extract(payload_json,'$.officialRequestId')
+   WHEN '${fileDeleteType}' THEN json_extract(payload_json,'$.target.path')
    WHEN '${audioSeparateType}' THEN json_extract(payload_json,'$.sourceOfficialRequestId')
    WHEN '${propRegenerateType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propAnimationType}' THEN json_extract(payload_json,'$.propId')
@@ -65,6 +67,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${audioDeleteType}' THEN coalesce((SELECT json_extract(g.payload_json,'$.title') FROM official_requests g
       WHERE g.official_request_id=json_extract(official_requests.payload_json,'$.officialRequestId')
        AND g.request_type='${audioRequestType}' AND g.project_id=official_requests.project_id),'BGM 삭제')
+   WHEN '${fileDeleteType}' THEN CASE json_extract(payload_json,'$.target.kind') WHEN 'directory' THEN '폴더 삭제' ELSE '파일 삭제' END
    WHEN '${audioSeparateType}' THEN '음원 분리'
    WHEN '${motion2DRequestType}' THEN json_extract(payload_json,'$.label')
    WHEN '${npcAnimationRegenerateType}' THEN '애니메이션 생성'

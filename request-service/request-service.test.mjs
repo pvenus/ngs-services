@@ -836,6 +836,16 @@ test('pinned prop file.delete advertises and admits exactly one folder only when
  const accepted=await submit(body);
  assert.equal(accepted.result.structuredContent.status,'registered');
  assert.equal(read(path).length,1);
+ const updated=await rpc('tools/call',{name:'request_update_status',arguments:{
+  officialRequestId:accepted.result.structuredContent.officialRequestId,status:'planned'}});
+ assert.equal(updated.result.isError,false);
+ const completed=await rpc('tools/call',{name:'request_update_status',arguments:{
+  officialRequestId:accepted.result.structuredContent.officialRequestId,status:'completed'}});
+ assert.equal(completed.result.isError,false);
+ const list=(await rpc('tools/call',{name:'request_list',arguments:{limit:25}})).result;
+ assert.equal(list.isError,false);
+ assert.deepEqual(list.structuredContent.requests.map(x=>[x.requestType,x.status,x.targetNpcId,x.targetName]),
+  [['file.delete','completed','lantern','폴더 삭제']]);
 });
 
 test('standalone NPC deletion capability is separate from pinned props',async t=>{
