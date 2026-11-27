@@ -1,5 +1,6 @@
 """A short, exact SQLite reservation for a document publication."""
 from contextlib import closing
+from http.client import HTTPException
 import sqlite3
 import time
 
@@ -36,7 +37,6 @@ class SaveReservation:
             (start,claim['taskId'],claim['officialRequestId'],claim['claimStamp'],claim['payloadSha256']))
         require(n==1)
         self.started=start
-        return {'taskId':claim['taskId'],'claimStamp':claim['claimStamp']}
 
     def finish(self):
         claim=self.claim
@@ -45,32 +45,22 @@ class SaveReservation:
             AND status='running' AND result_ref IS NULL AND save_started_at=?""",
             (claim['taskId'],claim['officialRequestId'],claim['claimStamp'],self.started))==1)
 
-def publish_reserved(reservation, source, operation):
-    # The first Filex call after reserving is outside every SQLite transaction.
-    # Keep the old claim pinned on an uncertain error until Filex confirms its fence.
-    with source.store.factory() as writer:
-        if writer.capabilities().get('workflowDocumentSaveFenceV1') is not True:
-            raise OSError('DOCUMENT_SAVE_FENCE_UNAVAILABLE')
-    fence=reservation.enter()
+def publish_reserved(reservation, operation):
+    # Only PDS owns workflow state. Never hold the SQLite transaction over Filex I/O.
+    reservation.enter()
     try:
-        result=operation(fence)
-    except Exception:
-        try:
-            with source.store.factory() as writer:
-                if writer.revoke_workflow_document_save(fence)!={'ok':True}:
-                    raise OSError('DOCUMENT_SAVE_FENCE_UNCONFIRMED')
-        except Exception as error:
-            raise OSError('DOCUMENT_SAVE_FENCE_UNCONFIRMED') from error
+        return operation()
+    except Exception as error:
         reservation.finish()
-        # Only a completed writer-side fence may allow ordinary retry.
-        raise ValueError('DOCUMENT_SAVE_FENCED_FAILURE') from None
-    # The worker clears the reservation in the same transaction that records completion.
-    return result
+        if isinstance(error,(OSError,HTTPException)):
+            raise ValueError('DOCUMENT_SAVE_IO_FAILED') from error
+        raise
+    # On success the worker records completion and clears the marker atomically.
 
 DOCUMENT_SAVE_TIMEOUT_MS=180_000
 
-def expire_document_saves(verifier, source, *, now_ms=None):
-    """Ordinary retry only after an authoritative Filex rejection of old writes."""
+def expire_document_saves(verifier, *, now_ms=None):
+    """Fail abandoned saves; no Filex reconciliation or replay."""
     now=int(time.time()*1000) if now_ms is None else now_ms
     with verifier.snapshot() as db:
         if not any(row['name']=='save_started_at' for row in db.execute('PRAGMA table_info(workflow_tasks)')):
@@ -80,12 +70,7 @@ def expire_document_saves(verifier, source, *, now_ms=None):
               AND save_started_at<=? ORDER BY save_started_at LIMIT 10""",(now-DOCUMENT_SAVE_TIMEOUT_MS,))]
     released=[]
     for row in pending:
-        fence={'taskId':row['task_id'],'claimStamp':row['updated_at']}
-        if len(fence['taskId'])!=78 or not fence['taskId'].startswith('workflow.task.') or any(c not in '0123456789abcdef' for c in fence['taskId'][14:]):
-            continue
         try:
-            with source.store.factory() as writer:
-                if writer.revoke_workflow_document_save(fence)!={'ok':True}:continue
             changed=SaveReservation(verifier,None)._change("""UPDATE workflow_tasks
                 SET save_started_at=NULL,status='failed',updated_at=?
                 WHERE task_id=? AND official_request_id=? AND updated_at=? AND save_started_at=?
@@ -93,6 +78,6 @@ def expire_document_saves(verifier, source, *, now_ms=None):
                 (max(now,row['updated_at']+1),row['task_id'],row['official_request_id'],row['updated_at'],row['save_started_at']))
             if changed:released.append(row['task_id'])
         except (OSError,ValueError,sqlite3.Error):
-            # Retry the fence later. Do not advertise a failure without proof.
+            # A busy DB can be checked again on the next sweep.
             continue
     return released

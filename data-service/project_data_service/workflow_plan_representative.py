@@ -101,17 +101,17 @@ class RepresentativePlan:
         require(type(envelope) is dict and set(envelope)=={'claim','basis','artifact'},
                 'WORKFLOW_REPRESENTATIVE_PUBLISH')
         b=envelope['basis'];a=envelope['artifact']
-        def publish(fence=None):
+        def publish():
             if chain:
                 from .workflow_plan_idle import IdlePlan
-                return IdlePlan(self.source,self.verifier,stage='representative').publish_authorized(identity,b,a,True,fence)
-            return self._publish_legacy(identity,character,b,a,fence)
+                return IdlePlan(self.source,self.verifier,stage='representative').publish_authorized(identity,b,a,True)
+            return self._publish_legacy(identity,character,b,a)
         reservation=SaveReservation(self.verifier,envelope['claim'])
         with self.verifier.authorized_document_chain(envelope['claim'],'representative',read_save_support=True) as (identity,character,chain,enabled):
-            if not enabled:return publish()
-        return publish_reserved(reservation,self.source,publish)
+            pass
+        return publish_reserved(reservation,publish) if enabled else publish()
 
-    def _publish_legacy(self,identity,character,b,a,save_fence=None):
+    def _publish_legacy(self,identity,character,b,a):
         require(type(b) is dict and set(b)==BASIS and type(b['revision']) is int and b['revision']>=0
                 and type(b['sourceVersion']) is str and re.fullmatch(r'[a-f0-9]{64}',b['sourceVersion'])
                 and type(b['generationId']) is str and re.fullmatch(r'[a-f0-9]{48}',b['generationId'])
@@ -132,14 +132,14 @@ class RepresentativePlan:
             metadata=copy.deepcopy(snap['documents']['metadata.json'])
             metadata['_pdsCurrent']={'revision':b['revision']+1,'savedAt':datetime.now(timezone.utc).isoformat(),
                 'note':'Workflow representative planning','operationHash':digest(binding),'documentHash':digest(doc)}
-            ack=tx.workflow_plan_representative(binding,a['content'],metadata,**({'save_fence':save_fence} if save_fence is not None else {}))
+            ack=tx.workflow_plan_representative(binding,a['content'],metadata)
         require(type(ack) is dict and set(ack)=={'ok'} and ack['ok'] is True,
                 'WORKFLOW_REPRESENTATIVE_WRITE_NOT_CONFIRMED')
         return {'ok':True}
 
 
 _PLAN_CONFLICT_REASONS={
-    'DOCUMENT_SAVE_FENCED_FAILURE':'FILEX_ATTEMPT_FENCED',
+    'DOCUMENT_SAVE_IO_FAILED':'FILEX_WRITE_UNCONFIRMED',
     'WORKFLOW_REPRESENTATIVE_WRITE_NOT_CONFIRMED':'WRITER_ACK_INVALID',
     'WORKFLOW_IDLE_PLAN_WRITE_NOT_CONFIRMED':'WRITER_ACK_INVALID',
     'WORKFLOW_IDLE_PLAN_ARTIFACT':'INVALID_ARTIFACT',

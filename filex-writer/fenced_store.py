@@ -541,29 +541,6 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                                             owner+'/.owned-assets.json':encoded(new_plan)})
             return {'ok':True}
 
-    def _document_save_fence(self,fence):
-        if (type(fence) is not dict or set(fence)!={'taskId','claimStamp'}
-            or not re.fullmatch(r'workflow\.task\.[a-f0-9]{64}',str(fence['taskId']))
-            or type(fence['claimStamp']) is not int or not 0<fence['claimStamp']<2**53):
-            raise ValueError('workflow document save fence')
-        return self.safe('.workflow-save-fences/'+fence['taskId'][14:]+'.json')
-
-    def workflow_document_save(self,fence,task_id,write):
-        fp=self._document_save_fence(fence)
-        if fence['taskId']!=task_id:raise ValueError('workflow document save binding')
-        with self.lock():
-            if fp.exists() and json.loads(fp.read_bytes())['revokedThrough']>=fence['claimStamp']:
-                raise Conflict('workflow document save attempt revoked')
-            return write()
-
-    def revoke_workflow_document_save(self,fence):
-        fp=self._document_save_fence(fence)
-        with self.lock():
-            previous=json.loads(fp.read_bytes())['revokedThrough'] if fp.exists() else 0
-            if previous<fence['claimStamp']:
-                self.write(fp,encoded({'revokedThrough':fence['claimStamp']}))
-            return {'ok':True}
-
     def workflow_plan_idle(self,b,content):
         return self.workflow_plan_current('idle',b,content,shared=False)
 

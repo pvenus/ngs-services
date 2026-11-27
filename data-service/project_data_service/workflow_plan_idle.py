@@ -96,7 +96,7 @@ class IdlePlan:
             identity,character,chain=pinned
         return self.read_authorized(identity,character,chain)
 
-    def publish_authorized(self,identity,b,a,chain,save_fence=None):
+    def publish_authorized(self,identity,b,a,chain):
         require(type(b) is dict and set(b)==BASIS
                 and type(b['categoryId']) is str and re.fullmatch(r'category\.preset\.[a-f0-9]{32}',b['categoryId']),
                 'WORKFLOW_IDLE_PLAN_BASIS')
@@ -108,9 +108,8 @@ class IdlePlan:
         with self.source.store.factory() as tx:
             self._writer(tx,chain)
             binding={**identity,**b}
-            opts={'save_fence':save_fence} if save_fence is not None else {}
-            ack=(tx.workflow_plan_current(self.stage,binding,a['content'],**opts) if chain else
-                 tx.workflow_plan_idle(binding,a['content'],**opts))
+            ack=(tx.workflow_plan_current(self.stage,binding,a['content']) if chain else
+                 tx.workflow_plan_idle(binding,a['content']))
         require(type(ack) is dict and set(ack)=={'ok'} and ack['ok'] is True,
                 'WORKFLOW_IDLE_PLAN_WRITE_NOT_CONFIRMED')
         return {'ok':True}
@@ -119,10 +118,10 @@ class IdlePlan:
         require(type(envelope) is dict and set(envelope)=={'claim','basis','artifact'},'WORKFLOW_IDLE_PLAN_PUBLISH')
         reservation=SaveReservation(self.verifier,envelope['claim'])
         with self.verifier.authorized_document_chain(envelope['claim'],self.stage,read_save_support=True) as (identity,_,chain,enabled):
-            if not enabled:
-                return self.publish_authorized(identity,envelope['basis'],envelope['artifact'],chain)
-        return publish_reserved(reservation,self.source,
-            lambda fence:self.publish_authorized(identity,envelope['basis'],envelope['artifact'],chain,fence))
+            pass
+        def operation():
+            return self.publish_authorized(identity,envelope['basis'],envelope['artifact'],chain)
+        return publish_reserved(reservation,operation) if enabled else operation()
 
 
 def serve(handler,stage='idle'):

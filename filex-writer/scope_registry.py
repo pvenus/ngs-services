@@ -37,7 +37,7 @@ _NPC_POST={'/v1/asset','/v1/batch','/v1/cas','/v1/create-character','/v1/restore
  '/v1/workflow/portrait-pixel','/v1/workflow/portrait-pixel/read',
  '/v1/workflow/npc-planning-add','/v1/workflow/npc-planning-add/read',
  '/v1/workflow/npc-planning-update','/v1/workflow/npc-planning-update/read',
- '/v1/workflow/plan-current','/v1/workflow/plan-idle','/v1/workflow/plan-representative','/v1/workflow/plan-revoke',
+ '/v1/workflow/plan-current','/v1/workflow/plan-idle','/v1/workflow/plan-representative',
  '/v1/workflow/portrait-representative','/v1/workflow/portrait-idle-reference','/v1/workflow/portrait-direction',
  '/v1/workflow/portrait-combat-direction','/v1/workflow/portrait-combat-reference'}
 _AUDIO_POST={'/v1/workflow/audio','/v1/workflow/audio/read','/v1/workflow/audio-separate',

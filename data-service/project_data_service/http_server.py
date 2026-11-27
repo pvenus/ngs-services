@@ -885,7 +885,7 @@ def serve(storage_root: Path, host: str, port: int):
         def watch_document_saves():
             while not stopped.wait(15):
                 try:
-                    for task in expire_document_saves(planner,app.domains.npcs):
+                    for task in expire_document_saves(planner):
                         print(json.dumps({'event':'workflow_document_save_timeout_failed','taskId':task}),flush=True)
                 except (ClaimDenied,OSError,ValueError,sqlite3.Error):
                     continue
