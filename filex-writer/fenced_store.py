@@ -525,8 +525,8 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                 or marker.get('revision')!=b['revision']+1 or marker.get('operationHash')!=binding_hash
                 or not re.fullmatch(r'[a-f0-9]{64}',str(marker.get('documentHash')))):
                 raise Conflict('workflow representative metadata changed')
-            if self.safe(markdown_path(cat)).exists():raise Conflict('NPC_PLANNING_MARKDOWN_WORKFLOW_REQUIRED')
             updated={**old,'content':content};after={**docs,cat:updated,'metadata.json':metadata_after}
+            category_writes=(planning_write_bytes(cat,updated) if self.safe(markdown_path(cat)).exists() else {cat:encoded(updated)})
             self.check_document_hash(after)
             from ownership_plan import plan
             prefix=owner+'/'
@@ -537,7 +537,7 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                 or new_plan['nonSlotReferences']!=prev_plan['nonSlotReferences']):
                 raise Conflict('workflow representative asset changes prohibited')
             # Keep only the recoverable byte transaction, not an operation receipt.
-            super().commit_owned(None,None,{cat:encoded(updated),'metadata.json':encoded(metadata_after),
+            super().commit_owned(None,None,{**category_writes,'metadata.json':encoded(metadata_after),
                                             owner+'/.owned-assets.json':encoded(new_plan)})
             return {'ok':True}
 
@@ -600,14 +600,14 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                         or type(dep.get('content')) is not str or not dep['content'].strip()
                         or any(i!=dep_id for i,val in rows.items() if val.get('planningRole')==dep_role)):
                         raise Conflict('workflow planning current prerequisite required')
-            if self.safe(markdown_path(cat)).exists():
-                # The scoped PDS workflow already approved the exact running
-                # task and target. The writer only enforces the storage format
-                # and atomically updates bytes together with their pointer.
-                if not markdown:raise Conflict('NPC_PLANNING_MARKDOWN_WORKFLOW_REQUIRED')
-                if row.get('planningRole')==role and row.get('content')==content:return {'ok':True}
+            # Preserve a pre-existing Markdown storage representation even
+            # for callers using the historical JSON-shaped document route.
+            # Existing content does not decide whether the workflow may write.
+            stored_markdown=self.safe(markdown_path(cat)).exists()
+            if stored_markdown and row.get('planningRole')==role and row.get('content')==content:
+                return {'ok':True}
             updated={**row,'content':content,'planningRole':role}
-            category_writes=planning_write_bytes(cat,updated) if markdown else {cat:encoded(updated)}
+            category_writes=planning_write_bytes(cat,updated) if markdown or stored_markdown else {cat:encoded(updated)}
             after={**docs,cat:updated}
             prev_plan=self.manifests().get(owner)
             if prev_plan!=plan(owner,{k.removeprefix(prefix):v for k,v in docs.items() if k.startswith(prefix)}):
