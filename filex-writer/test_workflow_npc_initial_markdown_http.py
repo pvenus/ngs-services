@@ -75,6 +75,22 @@ class Tests(unittest.TestCase):
         self.assertEqual(code,200)
         self.assertEqual(result['planningContent'],outputs['representative'])
 
+    def test_approved_retry_replaces_existing_markdown_but_completed_claim_cannot(self):
+        stage='overview'
+        self.state(stage,'running')
+        status,view=self.read(stage);self.assertEqual(status,200)
+        basis=view['basis']
+        self.assertEqual(self.publish(stage,basis,'# First body'),(200,{'ok':True}))
+        self.assertEqual(self.publish(stage,basis,'# Retried body'),(200,{'ok':True}))
+        key=f"{self.c['npcId']}/planning/{basis['categoryId']}"
+        content=self.writer.safe(key+'/content.md')
+        self.assertEqual(content.read_bytes(),b'# Retried body')
+        pointer=json.loads(self.writer.safe(key+'.json').read_bytes())
+        self.assertEqual(pointer['contentSha256'],hashlib.sha256(content.read_bytes()).hexdigest())
+        self.state(stage,'completed')
+        self.assertEqual(self.publish(stage,basis,'# Unauthorized after completion')[0],403)
+        self.assertEqual(content.read_bytes(),b'# Retried body')
+
     def test_markdown_pointer_still_checks_file_integrity(self):
         relative='npc.new/planning/category.test.json'
         row={'id':'category.test','planningRole':'future','content':'# Original'}

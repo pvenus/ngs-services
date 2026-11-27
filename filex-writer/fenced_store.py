@@ -601,8 +601,11 @@ class FencedOwnedNPCStore(NPCPlanningMarkdown,WorkflowNativeMedia,PortraitAssets
                         or any(i!=dep_id for i,val in rows.items() if val.get('planningRole')==dep_role)):
                         raise Conflict('workflow planning current prerequisite required')
             if self.safe(markdown_path(cat)).exists():
-                if markdown and row.get('planningRole')==role and row.get('content')==content:return {'ok':True}
-                raise Conflict('NPC_PLANNING_MARKDOWN_WORKFLOW_REQUIRED')
+                # The scoped PDS workflow already approved the exact running
+                # task and target. The writer only enforces the storage format
+                # and atomically updates bytes together with their pointer.
+                if not markdown:raise Conflict('NPC_PLANNING_MARKDOWN_WORKFLOW_REQUIRED')
+                if row.get('planningRole')==role and row.get('content')==content:return {'ok':True}
             updated={**row,'content':content,'planningRole':role}
             category_writes=planning_write_bytes(cat,updated) if markdown else {cat:encoded(updated)}
             after={**docs,cat:updated}
