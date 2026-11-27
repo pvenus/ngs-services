@@ -12,9 +12,9 @@ const generated={schemaVersion:'ngs.audio-generate.v1',projectId:'binari',kind:'
 const deleted=officialRequestId=>({schemaVersion:'ngs.audio-delete.v1',projectId:'binari',officialRequestId});
 const toolSubmit='request_submit_space';
 const spaceQueue=(queueId,requestType,payload)=>({queueId,requestType,idempotencyKey:queueId,payload});
-async function fixture(t,readSpaceRequest) {
+async function fixture(t,readSpaceRequest,options={}) {
  const root=mkdtempSync(join(realpathSync(tmpdir()),'rs-site-fixture-'));
- const server=createRequestService({directory:join(root,'requests'),readSpaceRequest});
+ const server=createRequestService({directory:join(root,'requests'),readSpaceRequest,...options});
  await new Promise(ok=>server.listen(0,'127.0.0.1',ok));
  t.after(async()=>{await new Promise(ok=>server.close(ok));rmSync(root,{recursive:true,force:true});});
  const port=server.address().port;
@@ -248,4 +248,70 @@ test('formal Local and verified Space separation require a completed BGM and nev
  assert(feed.every(r=>r.payloadSha256===feed[0].payloadSha256));
  assert.deepEqual(feed.find(r=>r.officialRequestId===third.officialRequestId).payload,body);
  assert.equal(feed.find(r=>r.officialRequestId===third.officialRequestId).sourceKey,'site-audio-stems');
+});
+
+test('owner-refetched Space map and assembly tickets use exact Local contracts and protected delete readiness',async t=>{
+ const mapId='request.official.'+'a'.repeat(64),assemblyId='request.official.'+'b'.repeat(64);
+ const mapRoot='canonical-files/binari/cinematics/maps',assemblyRoot='canonical-files/binari/cinematics/assemblies';
+ const pins={revision:2,officialRequestId:'request.official.'+'c'.repeat(64)};
+ const region=(id,h)=>({id,name:id,description:'Fixture region',backgroundId:'background.'+h.repeat(64),imageSha256:h.repeat(64)});
+ const graph={title:'굿터',startRegionId:'yard',regions:[region('yard','a'),region('gate','b')],
+  connections:[{id:'trail',from:'yard',to:'gate',hit:null,spawn:null,label:'길'}]};
+ const bases={projectId:'binari'};
+ const type='binari.ritual-well-water-demo';
+ const mapGeneration={...bases,schemaVersion:'ngs.map-generate.v2',graph,intent:'동선 밑그림',
+  design:{startNotes:'',portalNotes:'사이 문',collisionNotes:'',collisionMode:'none'}};
+ const mapUpdate={...bases,schemaVersion:'ngs.map-update.v1',mapId,expectedRevision:1,
+  graph:{...graph,connections:[{...graph.connections[0],hit:{x:2,y:3,width:20,height:30},spawn:{x:10,y:20}}]}};
+ const assemblyGeneration={...bases,schemaVersion:'ngs.assembly-generate.v2',title:'우물',mapId,intent:'굿터',puzzles:[{id:'well-run',type,intent:''}]};
+ const assemblyV1={...bases,schemaVersion:'ngs.assembly-generate.v1',title:'우물',mapId,intent:'굿터',puzzleType:type};
+ const assemblyUpdate={...bases,schemaVersion:'ngs.assembly-update.v1',assemblyId,expectedRevision:2,puzzles:[]};
+ const deletion=(root,path,expected=pins)=>({...bases,schemaVersion:'ngs.file-delete.v1',target:{root,path,kind:'directory'},expected});
+ const mapDelete=deletion(mapRoot,mapId),assemblyDelete=deletion(assemblyRoot,assemblyId);
+ const records=[['map.generate',mapGeneration],['map.update',mapUpdate],['assembly.generate',assemblyGeneration],
+  ['assembly.update',assemblyUpdate],['assembly.generate',assemblyV1],['file.delete',mapDelete],['file.delete',assemblyDelete]];
+ const snapshots=new Map(records.map(([type,payload],i)=>['space-parity-'+i,spaceQueue('space-parity-'+i,type,payload)]));
+ let ready=false,reads=0,probed=[];
+ const {call}=await fixture(t,async id=>{reads++;return snapshots.get(id);},{fileDeleteReadiness:async root=>{
+  probed.push(root);return ready; // intentionally serve true even for other roots; the hosted gate must still deny them.
+ }});
+ const submit=queueId=>call(toolSubmit,{queueId});
+ assert.equal((await call('request_submit',{sourceId:'space',requestType:'map.generate',idempotencyKey:'spoof',payload:mapGeneration})).status,400);
+ assert.equal((await call(toolSubmit,{queueId:'space-parity-0',payload:mapGeneration})).status,400);
+ assert.equal(reads,0);
+ const first=await submit('space-parity-0');
+ assert.equal(first.status,'registered');
+ assert.deepEqual(await submit('space-parity-0'),first);
+ assert.deepEqual(await submit('space-parity-5'),{error:'NGS_FILE_DELETE_UNAVAILABLE',status:503});
+ assert.deepEqual(await submit('space-parity-6'),{error:'NGS_FILE_DELETE_UNAVAILABLE',status:503});
+ assert.deepEqual(probed,[mapRoot,assemblyRoot]);ready=true;
+ for(let i=1;i<records.length;i++)assert.equal((await submit('space-parity-'+i)).status,'registered',records[i][0]);
+
+ for(const [id,t,p] of [
+  ['bad-project','map.generate',{...mapGeneration,projectId:'other'}],
+  ['bad-map','map.update',{...mapUpdate,expectedRevision:0}],
+  ['bad-assembly','assembly.generate',{...assemblyGeneration,puzzles:[]}],
+  ['bad-delete','file.delete',deletion(assemblyRoot,'../'+assemblyId)],
+  ['no-pin','file.delete',deletion(mapRoot,mapId,{revision:1})],
+  ['prop-delete','file.delete',deletion('canonical-files/binari/props','asset',{revision:1,sha256:'a'.repeat(64)})],
+ ]) {
+  snapshots.set(id,spaceQueue(id,t,p));assert.equal((await submit(id)).status,400,id);
+ }
+ snapshots.set('borrowed',{...spaceQueue('borrowed','map.generate',mapGeneration),idempotencyKey:'space-parity-0'});
+ assert.equal((await submit('borrowed')).status,403);
+ snapshots.set('space-parity-0',spaceQueue('space-parity-0','map.generate',{...mapGeneration,intent:'다른 입력'}));
+ assert.equal((await submit('space-parity-0')).status,409);
+ const {requests}=await call('request_workflow_list',{});
+ const {buildPlan}=await import('../workflow-planner/planner.mjs');
+ assert.equal(requests.length,records.length);
+ for(const row of requests){
+  assert.equal(row.sourceId,'space');
+  assert.equal(row.officialRequestId,'request.official.'+sha(canonical(['request.official.v1','space','binari',row.sourceKey])));
+  const plan=buildPlan(row,{multiDependencies:true});
+  assert.equal(plan.tasks[0].workerType,row.requestType==='file.delete'?'file':'document');
+ }
+ // The preexisting explicit Local typed prop delete remains available.
+ const propDelete=deletion('canonical-files/binari/props','asset',{revision:1,sha256:'a'.repeat(64)});
+ assert.equal((await call('request_submit',{sourceId:'local',requestType:'file.delete',idempotencyKey:'local-prop-delete',
+  payload:propDelete})).status,'registered');
 });
