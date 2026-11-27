@@ -7,7 +7,7 @@ from .filex_read import digest
 from .prop_package_contract import sha
 from .prop_design_context import PropDesignContext
 from .prop_stage_claim import (
-    APPEND,BASE,DESIGN,DETAIL,GENERATE,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,SPIRIT,PUBLISH,REGENERATE,
+    APPEND,BASE,DESIGN,DETAIL,GENERATE,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PIXEL_SOURCE,PIXEL_DETAIL,SPIRIT,PUBLISH,REGENERATE,
     PropClaimAuthority,ref_name,task_id,valid_ref,
 )
 from .prop_stage_store import PropStageStore,STAGES
@@ -112,6 +112,10 @@ class RealPropAuthority:
                     line=record['lineage']
                     if k==DESIGN:need(line is None)
                     elif k==BASE:need(line=={'design':source(DESIGN)})
+                    elif k==PIXEL_SOURCE:need(line=={'design':source(DESIGN),'source':source(DETAIL)})
+                    elif k==PIXEL_DETAIL:need(line=={'source':source(PIXEL_SOURCE)})
+                    elif k==PIXEL and PIXEL_DETAIL in records:
+                        need(line=={'source':source(PIXEL_DETAIL),'geometry':source(DETAIL)})
                     elif k in (DETAIL,PIXEL,SPIRIT):need(line=={'source':source(BASE if k==DETAIL else DETAIL)})
                     elif k==MOTION:
                         need(line==({'package':p['source']} if kind==APPEND else {'source':source(BASE)}))
@@ -122,6 +126,10 @@ class RealPropAuthority:
                         geometry={**p['source'],'media':prior['media'][lane]} if kind==APPEND else {
                             **source(geom),'media':records[geom]['artifact']}
                         need(line=={'source':source(dep),'geometry':geometry})
+                for k in (PIXEL_SOURCE,PIXEL_DETAIL):
+                    if k in records and not replayed:
+                        member=records[k]
+                        self.staging.bytes(run['official_request_id'],member['taskId'],k,member['resultRef'])
                 if kind==APPEND:
                     clips=m.get('animations')
                     need(prior is not None and type(clips)is list and bool(clips) and type(clips[-1])is dict and
@@ -244,9 +252,16 @@ class RealPropAuthority:
             if kind==APPEND:
                 return {'package':p['source'],'media':prior['media']['detail'],'motionPrompt':p['prompt'],**profile}
             return {'source':_source(get(BASE)),'media':get(BASE)['artifact'],'motionPrompt':get(DESIGN)['artifact']['motionPrompt']}
-        if key in (DETAIL,PIXEL,SPIRIT):
-            src=get(BASE if key==DETAIL else DETAIL);media=src['artifact']
-            canvas=canvas_of(media) if key==DETAIL else fifth_canvas(media) if 'presentationProfile' in p else half_canvas(media)
+        if key==PIXEL_SOURCE:
+            src=get(DETAIL);media=src['artifact']
+            return {'design':get(DESIGN),'context':self.context(p,kind),'source':_source(src),
+                    'media':{k:media[k] for k in ('sha256','bytes','width','height','mediaType')},'canvas':canvas_of(media)}
+        if key in (DETAIL,PIXEL_DETAIL,PIXEL,SPIRIT):
+            v2_pixel=key==PIXEL and PIXEL_DETAIL in rows
+            dep=BASE if key==DETAIL else PIXEL_SOURCE if key==PIXEL_DETAIL else PIXEL_DETAIL if v2_pixel else DETAIL
+            src=get(dep);media=src['artifact']
+            geo=get(DETAIL)['artifact'] if v2_pixel else media
+            canvas=canvas_of(media) if key in (DETAIL,PIXEL_DETAIL) else fifth_canvas(geo) if 'presentationProfile' in p else half_canvas(geo)
             return {'source':_source(src),'canvas':canvas,'media':media}
         src=get(MOTION if key==MOTION_DETAIL else MOTION_DETAIL)
         lane='detail' if key==MOTION_DETAIL else 'pixel'
@@ -274,7 +289,12 @@ class RealPropAuthority:
                 line=self.details(run,p,rows,key)
                 lineage={k:line[k] for k in ('source','geometry','package') if k in line}
                 if key==BASE:lineage={'design':_source(line['design'])}
-                if key in (DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL):
+                if key==PIXEL_SOURCE:
+                    lineage={'design':_source(line['design']),'source':line['source']}
+                    need(type(artifact)is dict and type(artifact.get('media'))is dict and
+                         all(artifact['media'].get(k)==line['canvas'][k] for k in ('width','height')))
+                if key==PIXEL and PIXEL_DETAIL in rows:lineage['geometry']=_source(self.stored(run,rows,DETAIL))
+                if key in (DETAIL,PIXEL_DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL):
                     need(type(artifact)is dict and type(artifact.get('media'))is dict and
                          all(artifact['media'].get(k)==line['canvas'][k] for k in ('width','height')))
                     times=line['manifest']['frameDurationsMs'] if key==MOTION_DETAIL else line['media'].get('frameDurationsMs',[]) if key==MOTION_PIXEL else []
@@ -284,7 +304,7 @@ class RealPropAuthority:
 
     def stage_asset(self,claim,purpose,index):
         need(purpose in ('input','geometry'))
-        with self.planner.selected(claim,(MOTION,DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL)) as (run,p,rows,key):
+        with self.planner.selected(claim,(MOTION,DETAIL,PIXEL_SOURCE,PIXEL_DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL)) as (run,p,rows,key):
             self.require_mode(run,p)
             info=self.details(run,p,rows,key);kind=run['request_type'];oid=run['official_request_id']
             if purpose=='geometry':
@@ -300,7 +320,9 @@ class RealPropAuthority:
                 raw=base64.b64decode(file['base64'],validate=True);need(file['sha256']==m['sha256'] and len(raw)==m['bytes'])
                 need(sha(raw)==m['sha256']);return raw,m['mediaType']
             else:
-                source={MOTION:BASE,DETAIL:BASE,PIXEL:DETAIL,SPIRIT:DETAIL,MOTION_DETAIL:MOTION,MOTION_PIXEL:MOTION_DETAIL}[key]
+                source={MOTION:BASE,DETAIL:BASE,PIXEL_SOURCE:DETAIL,PIXEL_DETAIL:PIXEL_SOURCE,
+                        PIXEL:PIXEL_DETAIL if PIXEL_DETAIL in rows else DETAIL,SPIRIT:DETAIL,
+                        MOTION_DETAIL:MOTION,MOTION_PIXEL:MOTION_DETAIL}[key]
             r=rows[source]
             data=self.staging.bytes(oid,r['task_id'],source,r['result_ref'],index)
             return data,'image/apng' if source==MOTION_DETAIL else 'image/png'

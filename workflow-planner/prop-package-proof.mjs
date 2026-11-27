@@ -1,6 +1,6 @@
 /** Boundary contract for the trusted PDS/Filex prop publisher, never a worker-local file. */
 import {canonical,sha} from './envelope.mjs';
-import {exactProp,propHash,propGenerateType,propRegenerateType,propAnimationType,propValidator} from './prop-generate-envelope.mjs';
+import {exactProp,propHash,propGenerateType,propRegenerateType,propAnimationType,propValidator,propPresentationProfiles,pixelSourcePresentationProfile} from './prop-generate-envelope.mjs';
 import {checkPropPublishRows,propKeys,propRef,propTaskId} from './prop-generate-plan.mjs';
 const fail=()=>Error('PROP_PACKAGE_PROOF_INVALID');
 const need=x=>{if(!x)throw fail();};
@@ -77,7 +77,7 @@ function checkManifest(m,scope,members,prior){
  checkGeneralManifest(m);
  need(['officialRequestId','projectId','propId','requestSha256'].every(key=>scope[key]===m[key]));
  if(!scope.operation||scope.operation==='regenerate')
-  need(Object.hasOwn(m.media,'spirit')===(scope.presentationProfile==='spirit-v1'));
+  need(Object.hasOwn(m.media,'spirit')===propPresentationProfiles.includes(scope.presentationProfile));
  if(!scope.operation){
   need(prior===undefined&&m.designContextSha256===scope.designContextSha256&&m.revision===1&&m.parentSha256===null&&
    m.animations.length===(scope.motion==='subtle'?1:0));
@@ -109,6 +109,8 @@ function checkManifest(m,scope,members,prior){
    checkClip(clip,m.media,members);
   }
  }
+ if(scope.presentationProfile===pixelSourcePresentationProfile)
+  need([propKeys.pixelSource,propKeys.pixelDetail].every(key=>members.some(row=>row.key===key)));
  const text=canonical(m);need(Buffer.byteLength(text)<=512*1024);return sha(text);
 }
 

@@ -231,3 +231,23 @@ The package remains `ngs.prop-package.v1`; static `media` carries
 `detail` and `pixel` only. Animation append/remove preserves the entire
 static media object. Filex asset lookup and replica enumeration include
 `spirit` via the same immutable media descriptors as the original lanes.
+
+### Pixel reference generation (`spirit-v2`)
+
+New `prop.generate` and `prop.regenerate` requests can opt into
+`presentationProfile: "spirit-v2"`. Earlier requests are unaffected.
+
+- `prop_detail` remains the cinematic original with transparency.
+- `prop_pixel_source` uses that exact PNG through the existing claim-bound
+  image-stage asset port. It renders a pixel-art source on the same canvas.
+- `prop_pixel_detail` normalizes transparency on the pixel-art source.
+- `prop_pixel` resizes and corrects that normalized pixel art at dimensions
+  rounded to one-fifth of the cinematic canvas. It is not a downsample of
+  the cinematic image. `prop_spirit` independently uses the cinematic original
+  at the same reduced dimensions.
+
+The two intermediate images stay in staging, not in the canonical package.
+The existing immutable publication receipt names all stage outputs, and the
+publisher verifies the intermediate bytes and their lineage before exposing
+the final detail, pixel, and spirit files. Neither the package schema nor the
+two-lane animation output contract changes.

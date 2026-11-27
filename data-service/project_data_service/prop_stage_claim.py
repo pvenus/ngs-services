@@ -14,10 +14,11 @@ APPEND='prop.animation.generate'
 CANDLE_CHROMA_PROFILE='candle-chroma-headroom-v1'
 CANDLE_CHROMA_PROP='candle-brass-petal-unlit-clean'
 FAMILIES={GENERATE:'ngs.prop-generate.v1',REGENERATE:'ngs.prop-regenerate.v1',APPEND:'ngs.prop-animation-generate.v1'}
-DESIGN='prop_design';BASE='prop_base';MOTION='prop_motion';DETAIL='prop_detail';PIXEL='prop_pixel';SPIRIT='prop_spirit'
+DESIGN='prop_design';BASE='prop_base';MOTION='prop_motion';DETAIL='prop_detail';PIXEL='prop_pixel';PIXEL_SOURCE='prop_pixel_source';PIXEL_DETAIL='prop_pixel_detail';SPIRIT='prop_spirit'
 MOTION_DETAIL='prop_animation_detail';MOTION_PIXEL='prop_animation_pixel';PUBLISH='prop_pack_publish'
 ROLES={DESIGN:('design','document','design-spec'),BASE:('base','image','base-png'),
        MOTION:('motion','animation','i2v-rgb'),DETAIL:('detail','postprocess','detail-rgba'),
+       PIXEL_SOURCE:('pixel-source','image','pixel-source-png'),PIXEL_DETAIL:('pixel-detail','postprocess','pixel-detail-rgba'),
        PIXEL:('pixel','postprocess','pixel-rgba'),SPIRIT:('spirit','postprocess','spirit-rgba'),MOTION_DETAIL:('motion-detail','postprocess','animation-detail-rgba'),
        MOTION_PIXEL:('motion-pixel','postprocess','animation-pixel-rgba'),PUBLISH:('publish','postprocess','package')}
 CLAIM=('officialRequestId','taskId','projectId','payloadSha256','claimStamp')
@@ -43,7 +44,7 @@ def payload_valid(p,kind):
         if 'renderProfile' in p:required.add('renderProfile')
     else:required.update(('intent','designContextSha256'))
     if kind!=APPEND and 'presentationProfile' in p:
-        required.add('presentationProfile');need(p['presentationProfile']=='spirit-v1')
+        required.add('presentationProfile');need(p['presentationProfile'] in ('spirit-v1','spirit-v2'))
     if kind!=APPEND and 'motion' in p:required.add('motion')
     if kind==GENERATE and 'reference' in p:required.add('reference')
     need(keys(p,required) and p['schemaVersion']==FAMILIES[kind] and p['projectId']==P and prop_id(p['propId']))
@@ -76,7 +77,12 @@ def build_graph(oid,kind,p):
         add(DESIGN,None,{'intent':p['intent'],'motion':m})
         add(BASE,DESIGN,{'designTaskId':design,**({'reference':p['reference']} if kind==GENERATE and 'reference' in p else {})})
         add(DETAIL,BASE,{'designTaskId':design,'baseTaskId':base,'sourceTaskId':base})
-        add(PIXEL,DETAIL,{'designTaskId':design,'detailTaskId':make_id(DETAIL)})
+        v2=p.get('presentationProfile')=='spirit-v2'
+        if v2:
+            add(PIXEL_SOURCE,DETAIL,{'designTaskId':design,'detailTaskId':make_id(DETAIL)})
+            add(PIXEL_DETAIL,PIXEL_SOURCE,{'designTaskId':design,'sourceTaskId':make_id(PIXEL_SOURCE)})
+        add(PIXEL,PIXEL_DETAIL if v2 else DETAIL,{'designTaskId':design,'detailTaskId':make_id(PIXEL_DETAIL if v2 else DETAIL),
+            **({'geometryTaskId':make_id(DETAIL)} if v2 else {})})
         if 'presentationProfile' in p:add(SPIRIT,DETAIL,{'designTaskId':design,'detailTaskId':make_id(DETAIL)})
         if m=='subtle':
             add(MOTION,BASE,{'designTaskId':design,'baseTaskId':base})
@@ -93,7 +99,7 @@ def from_run(db,run):
          run['project_id']==P and run['request_type'] in FAMILIES and run['schema_version']==FAMILIES[run['request_type']])
     p=strict_json(run['payload'].encode());need(type(p)is dict and run['payload']==canonical(p).decode() and digest(p)==run['payload_sha256'])
     expected=build_graph(run['official_request_id'],run['request_type'],p)
-    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 10',(run['official_request_id'],)).fetchall()
+    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 12',(run['official_request_id'],)).fetchall()
     need(len(rows)==len(expected))
     exact_rows={r['task_key']:dict(r) for r in rows}
     need(len(exact_rows)==len(expected) and all(k in exact_rows and

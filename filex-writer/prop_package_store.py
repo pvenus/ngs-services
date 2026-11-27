@@ -43,6 +43,8 @@ def refs(m,scope,members):
         check('prop_motion','i2v-rgb')
     if 'prop_design' in members:check('prop_design','design-spec')
     if 'prop_base' in members:check('prop_base','base-png')
+    if scope.get('presentationProfile')=='spirit-v2':
+        check('prop_pixel_source','pixel-source-png');check('prop_pixel_detail','pixel-detail-rgba')
 
 def validate_candidate(c,m):
     need(keys(c,CANDIDATE_KEYS) and c['manifestSha256']==sha(manifest(m)) and
@@ -50,7 +52,7 @@ def validate_candidate(c,m):
     scope=c['scope'];op=scope.get('operation') if type(scope) is dict else False
     base=('officialRequestId','projectId','propId','requestSha256')
     profile=type(scope)is dict and 'presentationProfile' in scope
-    if profile:need(op in (None,'regenerate') and scope['presentationProfile']=='spirit-v1')
+    if profile:need(op in (None,'regenerate') and scope['presentationProfile'] in ('spirit-v1','spirit-v2'))
     need(op in (None,'regenerate','append-animation','remove-animation') and keys(scope,base+(('presentationProfile',) if profile else ())+(
         ('designContextSha256','motion') if op is None else
         ('operation','source','motion','designContextSha256') if op=='regenerate' else
@@ -78,6 +80,8 @@ def validate_candidate(c,m):
             expected=[];initial=False
     if op not in ('append-animation','remove-animation'):
         need(scope['designContextSha256']==m['designContextSha256'] and profile==('spirit' in m['media']))
+        if scope.get('presentationProfile')=='spirit-v2':
+            expected[3:3]=['prop_pixel_source','prop_pixel_detail']
         if profile:expected.append('prop_spirit')
     if initial:
         expected+=['prop_motion','prop_animation_detail','prop_animation_pixel']
@@ -231,7 +235,7 @@ class PropPackageStore(Store):
         need(keys(command,('candidate','manifest','media')));c,m,body=[command[k] for k in ('candidate','manifest','media')]
         validate_candidate(c,m)
         prop=m['propId'];n=m['revision'];scope=c['scope']; expected=scope.get('source')
-        need(type(body) is dict and len(body)<=(5 if scope.get('presentationProfile')=='spirit-v1' else 4))
+        need(type(body) is dict and len(body)<=(5 if scope.get('presentationProfile') in ('spirit-v1','spirit-v2') else 4))
         all_next=all_media(m)
         decoded={}
         for key,text in body.items():

@@ -6,7 +6,7 @@ from .filex_read import canonical,digest
 from .media_validation import png
 from .prop_package_contract import sha,verify_media
 from .prop_stage_claim import (
-    BASE,DESIGN,DETAIL,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,SPIRIT,OFFICIAL,TASK,HASH,ref_name,text,valid_ref,
+    BASE,DESIGN,DETAIL,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PIXEL_SOURCE,PIXEL_DETAIL,SPIRIT,OFFICIAL,TASK,HASH,ref_name,text,valid_ref,
 )
 from .workflow_motion_2d import strict_json
 from .workflow_prop_package import keys,match,need
@@ -14,7 +14,7 @@ from .workflow_prop_package import keys,match,need
 MAX_MEDIA=16*1024*1024
 MAX_SEQUENCE=40*1024*1024
 MAX_METADATA=256*1024
-STAGES=(DESIGN,BASE,MOTION,DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL)
+STAGES=(DESIGN,BASE,MOTION,DETAIL,PIXEL_SOURCE,PIXEL_DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL)
 
 def _fsync(path):
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_DIRECTORY)
@@ -108,7 +108,7 @@ class PropStageStore:
         self._root();need(match(oid,OFFICIAL) and match(task,TASK))
         target=self.root/oid/task
         if ref is not None:
-            need(valid_ref(BASE,ref))
+            need(any(valid_ref(k,ref) for k in (BASE,PIXEL_SOURCE)))
             target=target/ref
         for parent in ((target.parent.parent,target.parent,target) if ref is not None else (target.parent,target)):
             if not parent.exists():
@@ -124,11 +124,11 @@ class PropStageStore:
             content,files=raw_artifact(artifact,{'officialRequestId':oid,'taskId':task,'propId':source['propId']})
             ref=ref_name(key,digest(content))
         else:
-            content,raw=base_artifact(artifact) if key==BASE else derivative_artifact(artifact,key in (MOTION_DETAIL,MOTION_PIXEL),small=small)
+            content,raw=base_artifact(artifact) if key in (BASE,PIXEL_SOURCE) else derivative_artifact(artifact,key in (MOTION_DETAIL,MOTION_PIXEL),small=small)
             files={'asset.png':raw};ref=ref_name(key,sha(raw))
         record={'officialRequestId':oid,'taskId':task,'key':key,'resultRef':ref,'artifact':content,'lineage':lineage}
-        target=self._closed_path(oid,task,ref if key==BASE else None)
-        if key==BASE:
+        target=self._closed_path(oid,task,ref if key in (BASE,PIXEL_SOURCE) else None)
+        if key in (BASE,PIXEL_SOURCE):
             # A saved image whose ACK was lost must not block a fresh result.
             # The database still binds downstream readers to exactly one hash.
             target.parent.parent.mkdir(mode=0o700,exist_ok=True)
@@ -143,13 +143,13 @@ class PropStageStore:
                 if not target.exists():raise
                 need(self.get(oid,task,key,ref)==record)
             _fsync(target.parent)
-            if key==BASE:_fsync(target.parent.parent)
+            if key in (BASE,PIXEL_SOURCE):_fsync(target.parent.parent)
             _fsync(self.root)
         finally:
             if stage.exists():shutil.rmtree(stage)
         return {'ok':True,'resultRef':ref}
     def _result_path(self,oid,task,key,ref):
-        if key==BASE:
+        if key in (BASE,PIXEL_SOURCE):
             target=self._closed_path(oid,task,ref)
             if target.exists():return target
         # Previously completed base results may still use the original layout.

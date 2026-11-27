@@ -49,7 +49,7 @@ class StageFixture(PropFixture,TestCase):
         blob={
           'schemaVersion':'ngs.prop-generate.v1','projectId':'binari','propId':PROP,
           'intent':'테스트 등롱','designContextSha256':DESIGN_HASH}
-        if profile:blob['presentationProfile']='spirit-v1'
+        if profile:blob['presentationProfile']=profile
         self.oid='request.official.'+('c' if profile else 'b')*64
         subprocess.run(['node','--input-type=module','-e',"""import {PlannerStore} from './workflow-planner/planner.mjs';
 import {canonical,sha} from './workflow-planner/envelope.mjs';
@@ -105,6 +105,8 @@ console.log(JSON.stringify(await runPropDesignFromPath({dbPath:db,officialReques
         for kind,extra,schema in (
             ('prop.generate',{'motion':'subtle'},'ngs.prop-generate.v1'),
             ('prop.generate',{'presentationProfile':'spirit-v1'},'ngs.prop-generate.v1'),
+            ('prop.generate',{'presentationProfile':'spirit-v2'},'ngs.prop-generate.v1'),
+            ('prop.regenerate',{'source':source,'motion':'subtle','presentationProfile':'spirit-v2'},'ngs.prop-regenerate.v1'),
             ('prop.regenerate',{'source':source,'motion':'subtle','presentationProfile':'spirit-v1'},'ngs.prop-regenerate.v1'),
             ('prop.regenerate',{'source':source,'motion':'subtle'},'ngs.prop-regenerate.v1'),
             ('prop.animation.generate',{'source':source,'motionId':'gentle-sway','prompt':'one motion'},'ngs.prop-animation-generate.v1')):
@@ -189,10 +191,16 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
             db.execute("UPDATE workflow_tasks SET task_input='{}' WHERE task_key='prop_base'")
         self.api('/read',self.pin(pack),expected=403)
 
-    def test_profile_three_static_assets_round_fifth_and_pin_all_hashes(self):
-        self.register_generate(self.db,profile=True)
+    def test_spirit_v1_static_assets(self):
+        self.exercise_three_static_assets('spirit-v1')
+
+    def test_spirit_v2_pixel_source_and_detail_assets(self):
+        self.exercise_three_static_assets('spirit-v2')
+
+    def exercise_three_static_assets(self,profile):
+        self.register_generate(self.db,profile=profile)
         d=self.mark('prop_design',2)
-        self.assertEqual(self.stage(DESIGN_ROUTE,'/read',{'claim':d})['input']['presentationProfile'],'spirit-v1')
+        self.assertEqual(self.stage(DESIGN_ROUTE,'/read',{'claim':d})['input']['presentationProfile'],profile)
         doc={'schemaVersion':'ngs.prop-design-spec.v1','propId':PROP,'designContextSha256':DESIGN_HASH,
              'title':'등롱','appearancePrompt':'종이 등롱','motion':'still','motionPrompt':None,
              'interaction':{'pixelOpen':None,'detailTrigger':None}}
@@ -203,26 +211,50 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
         r=self.stage(STAGE,'',{'claim':img,'artifact':{'media':{k:original[k] for k in
             ('sha256','bytes','width','height','mediaType')},'base64':base64.b64encode(raw).decode()}})
         self.mark('prop_base',3,r['resultRef'])
-        for i,key,w,h in ((4,'prop_detail',31,29),(5,'prop_pixel',6,6),(6,'prop_spirit',6,6)):
+        v2=profile=='spirit-v2'
+        stages=[('prop_detail',31,29)]
+        if v2:stages.extend([('prop_pixel_source',31,29),('prop_pixel_detail',31,29)])
+        stages.extend([('prop_pixel',6,6),('prop_spirit',6,6)])
+        parent={'prop_pixel_source':'prop_detail','prop_pixel_detail':'prop_pixel_source','prop_spirit':'prop_detail',
+                'prop_pixel':'prop_pixel_detail' if v2 else 'prop_detail'}
+        refs={};assets={};next_stamp=len(stages)+4
+        for i,(key,w,h) in enumerate(stages,4):
             claim=self.mark(key,i)
             stage=self.stage(STAGE,'/read',{'claim':claim})
             self.assertEqual(stage['canvas'],{'width':w,'height':h})
-            if key=='prop_spirit':
+            if key in parent:
+                self.assertEqual(stage['source'],{'taskId':task_id(self.oid,parent[key]),'resultRef':refs[parent[key]]})
                 asset=self.stage(STAGE,'/asset',{'claim':claim,'purpose':'input','index':None},raw=True)
+                self.assertEqual(asset,assets[parent[key]])
                 self.assertEqual(sha(asset),stage['media']['sha256'])
-                self.api('/prepare',{'claim':self.mark('prop_pack_publish',7)},expected=403)
             media,raw=artifact_store(w,h,i+35)
+            if key=='prop_pixel_source':
+                self.assertEqual(set(stage),{'design','context','source','media','canvas'})
+                self.assertEqual(set(stage['media']),{'sha256','bytes','width','height','mediaType'})
+                self.assertEqual(stage['design']['artifact'],doc)
+                bad,b=artifact_store(30,29,i+35)
+                bad={k:bad[k] for k in ('sha256','bytes','width','height','mediaType')}
+                self.stage(STAGE,'',{'claim':claim,'artifact':{'media':bad,'base64':base64.b64encode(b).decode()}},403)
+                media={k:media[k] for k in ('sha256','bytes','width','height','mediaType')}
+            if key=='prop_spirit':
+                self.api('/prepare',{'claim':self.mark('prop_pack_publish',next_stamp)},expected=403)
             r=self.stage(STAGE,'',{'claim':claim,'artifact':{'media':media,'base64':base64.b64encode(raw).decode()}})
-            self.mark(key,i,r['resultRef'])
+            self.mark(key,i,r['resultRef']);refs[key]=r['resultRef'];assets[key]=raw
         self.assertTrue(r['resultRef'].startswith('prop.spirit-rgba.'))
-        final=self.mark('prop_pack_publish',7)
+        final=self.mark('prop_pack_publish',next_stamp)
         pack=self.api('/prepare',{'claim':final})['manifest']
+        if v2:
+            key='prop_pixel_source'
+            path=self.actual.staging.root/self.oid/task_id(self.oid,key)/refs[key]/'asset.png'
+            path.write_bytes(assets['prop_detail'])
+            self.api('',{'claim':final,'manifest':pack},expected=403)
+            path.write_bytes(assets[key])
         self.assertEqual(set(pack['media']),{'detail','pixel','spirit'})
         self.assertEqual(pack['media']['spirit'],media)
         invalid={**pack,'media':{**pack['media'],'spirit':pack['media']['pixel']}}
         self.api('',{'claim':final,'manifest':invalid},expected=403)
         published=self.api('',{'claim':final,'manifest':pack})
-        self.mark('prop_pack_publish',7,published['resultRef'])
+        self.mark('prop_pack_publish',next_stamp,published['resultRef'])
         self.assertEqual(self.api('/read',self.pin(pack))['manifest'],pack)
         actual=self.api('/asset',{'pin':self.pin(pack),'assetId':media['assetId']})
         self.assertEqual(base64.b64decode(actual['base64']),raw)

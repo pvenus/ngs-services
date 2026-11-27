@@ -75,10 +75,10 @@ test('formal one request: still and subtle exact topology, one base and exact so
  }
 });
 
-for(const profile of [false,true])
+for(const profile of [null,'spirit-v1','spirit-v2'])
 test('real MCP ingress/Planner: one pack only after same-run complete proof and independent Filex receipt readback (profile='+profile+')',async t=>{
  const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propGenerateMotionEnabled:true});
- const payload={...p,motion:'subtle',...(profile?{presentationProfile:'spirit-v1'}:{})};
+ const payload={...p,motion:'subtle',...(profile?{presentationProfile:profile}:{})};
  const small=profile?102:128;
  if(profile)await assert.rejects(rs.call('request_submit',command({...payload,presentationProfile:'unknown'})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
  const {officialRequestId}=await rs.call('request_submit',command(payload));
@@ -94,7 +94,13 @@ test('real MCP ingress/Planner: one pack only after same-run complete proof and 
   assert.equal(by[propKeys.spirit].type,'prop.generate.spirit');
   assert.equal(by[propKeys.spirit].dependsOn,by[propKeys.detail].id);
   assert.deepEqual(final.additionalDependencies,[by[propKeys.pixel].id,by[propKeys.spirit].id]);
-  assert.ok(tasks.every(t=>t.input.presentationProfile==='spirit-v1'));
+  assert.ok(tasks.every(t=>t.input.presentationProfile===profile));
+  if(profile==='spirit-v2'){
+   assert.deepEqual([by[propKeys.pixelSource].dependsOn,by[propKeys.pixelDetail].dependsOn,by[propKeys.pixel].dependsOn],
+    [by[propKeys.detail].id,by[propKeys.pixelSource].id,by[propKeys.pixelDetail].id]);
+   assert.equal(by[propKeys.pixel].input.geometryTaskId,by[propKeys.detail].id);
+   assert.equal(tasks.length,11);
+  }
  }
  const rows=()=>store.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=?').all(officialRequestId);
  const evidence=Object.fromEntries(tasks.slice(0,-1).map((x,i)=>[x.key,(i+1).toString(16).repeat(64)]));
