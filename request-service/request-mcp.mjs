@@ -156,7 +156,7 @@ const tool={
   {properties:{requestType:{const:audioSeparateType},payload:audioSeparatePayload}},
   {properties:{requestType:{const:motion2DRequestType},payload:motion2DPayload}},
   {properties:{requestType:{const:npcAnimationRegenerateType},payload:npcAnimationRegeneratePayload}},
-  ...assemblyTypes.map((type,i)=>({properties:{requestType:{const:type},payload:assemblyPayloadSchemas[i]}})),
+  ...[...assemblyTypes,assemblyTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:assemblyPayloadSchemas[i]}})),
   ...[...mapTypes,mapTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:mapPayloadSchemas[i]}}))]},
  outputSchema:{type:'object',properties:{officialRequestId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
   status:{const:'registered'}},required:['officialRequestId','status'],additionalProperties:false},

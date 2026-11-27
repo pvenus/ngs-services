@@ -6,6 +6,9 @@ On generation, the worker reads the PDS-authorized input and calls Codex CLI
 once to produce station and attachment positions. It posts the generated
 coordinates under the same claim. PDS rechecks the fixed title, puzzle IDs,
 puzzle type, map and prop pins, and return reachability before committing.
+Version 2 generates one to eight ordered puzzle IDs in the same official
+request and CLI call. It takes overall instructions and a short instruction
+for each puzzle, which are authoring inputs and not persisted as layout metadata.
 An invalid or failed CLI output does not publish the input suggestion.
 A manually edited update remains exact and does not invoke the CLI.
 

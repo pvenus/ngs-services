@@ -3,7 +3,7 @@ from .filex_read import canonical,digest
 from .filex_writer_binding import writer as connect
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json
-from .assembly_contract import KINDS,OID,keys,match,payload,state,graph_reaches,playable
+from .assembly_contract import KINDS,V2,OID,keys,match,payload,state,graph_reaches,playable
 
 PATH='/v1/assemblies/ownership/workflow-assembly'
 CAP='workflow.assembly.v1'
@@ -14,7 +14,7 @@ TASK='assembly_metadata'
 def graph(db,oid):
     need(match(oid,OID))
     r=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
-    need(r is not None and r['request_type'] in KINDS and r['schema_version']==KINDS[r['request_type']] and
+    need(r is not None and r['request_type'] in KINDS and r['schema_version'] in KINDS[r['request_type']] and
          r['state']=='planned' and r['reason'] in (None,'RS_COMPLETED') and r['project_id']=='binari')
     p=strict_json(r['payload'].encode())
     need(payload(p,r['request_type']) and canonical(p).decode()==r['payload'] and digest(p)==r['payload_sha256'])
@@ -28,14 +28,18 @@ def graph(db,oid):
 def identity(oid,p):return p.get('assemblyId',oid),p.get('expectedRevision',0)+1
 def ref(aid,rev):return f'binari/cinematics/assemblies/{aid}/{rev}.json'
 
-def default_puzzle(graph,bindings,puzzle_type):
+def default_puzzle(graph,bindings,puzzle):
     reach=graph_reaches(graph,graph['startRegionId'])
     altar='zone-2' if 'zone-2' in reach else graph['startRegionId']
     well='zone-4'
     if not (well in graph_reaches(graph,altar) and altar in graph_reaches(graph,well)):well=altar
-    return {'id':'ritual-well-water','type':puzzle_type,
+    return {'id':puzzle['id'],'type':puzzle['type'],
             'layout':{'altar':{'regionId':altar,'x':45,'y':73},'well':{'regionId':well,'x':75,'y':68}},
             'attachments':{'bowl':{'x':5,'y':-10},'lid':{'x':5,'y':-10}},'bindings':bindings}
+
+def expected_puzzles(p):
+    if p['schemaVersion']==V2:return p['puzzles']
+    return [{'id':'ritual-well-water','type':p['puzzleType']}]
 
 class WorkflowAssembly(WorkflowCinematic):
     def __init__(self,planner,*,writer_factory=None,prop_factory=None):
@@ -63,20 +67,20 @@ class WorkflowAssembly(WorkflowCinematic):
         aid,rev=identity(oid,p)
         need(state(existing) and existing['officialRequestId']==oid and existing['updatedAt']==stamp and
              existing['assemblyId']==aid and existing['revision']==rev)
-        if 'puzzles' in p:need(existing['puzzles']==p['puzzles'])
+        if 'assemblyId' in p:need(existing['puzzles']==p['puzzles'])
         else:
             need(existing['title']==p['title'] and existing['map']['mapId']==p['mapId'] and
-                 len(existing['puzzles'])==1 and existing['puzzles'][0]['type']==p['puzzleType'])
+                 [(x['id'],x['type']) for x in existing['puzzles']]==[(x['id'],x['type']) for x in expected_puzzles(p)])
         return existing
     def candidate(self,oid,stamp,p):
         aid,rev=identity(oid,p)
         existing=self.cine('revision',{'assemblyId':aid,'revision':rev},missing=True)
         if existing is not None:
             if existing['officialRequestId']!=oid:raise CinematicConflict('ASSEMBLY_REVISION_CONFLICT')
-            context=self.model_context(self.cine('map',existing['map'])) if 'puzzles' not in p else None
+            context=self.model_context(self.cine('map',existing['map'])) if 'assemblyId' not in p else None
             need(existing['updatedAt']<=stamp)
             return self.check(oid,existing['updatedAt'],p,existing),context,True
-        if 'puzzles' in p:
+        if 'assemblyId' in p:
             prior=self.cine('head',{'assemblyId':aid},missing=True)
             if prior is None or prior['revision']!=p['expectedRevision']:raise CinematicConflict('ASSEMBLY_REVISION_CONFLICT')
             title=prior['title'];mapping=prior['map'];rows=p['puzzles']
@@ -88,11 +92,11 @@ class WorkflowAssembly(WorkflowCinematic):
             m=self.cine('map',{'mapId':p['mapId']});title=p['title']
             mapping={k:m[k] for k in ('mapId','revision','officialRequestId')}
             out=self.prop({});need(keys(out,('bindings',)))
-            rows=[default_puzzle(m['graph'],out['bindings'],p['puzzleType'])]
+            rows=[default_puzzle(m['graph'],out['bindings'],x) for x in expected_puzzles(p)]
             need(playable(m['graph'],rows))
         result=self.check(oid,stamp,p,{'schemaVersion':'ngs.assembly.v1','projectId':'binari','assemblyId':aid,
             'revision':rev,'updatedAt':stamp,'officialRequestId':oid,'title':title,'map':mapping,'puzzles':rows})
-        return result,self.model_context(m) if 'puzzles' not in p else None,False
+        return result,self.model_context(m) if 'assemblyId' not in p else None,False
     @staticmethod
     def model_context(m):
         return {k:m['graph'][k] for k in ('regions','connections','startRegionId')}

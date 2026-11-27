@@ -1,6 +1,7 @@
 """Exact Binari assembly metadata; mirrored by the PDS and Request Service."""
 import json,re
-KINDS={'assembly.generate':'ngs.assembly-generate.v1','assembly.update':'ngs.assembly-update.v1'}
+V2='ngs.assembly-generate.v2'
+KINDS={'assembly.generate':('ngs.assembly-generate.v1',V2),'assembly.update':('ngs.assembly-update.v1',)}
 TYPE='binari.ritual-well-water-demo'
 STATE='ngs.assembly.v1'
 ROLES=('table','bowl','well','lid')
@@ -40,13 +41,24 @@ def state(v):
             int_range(v['updatedAt'],1,2**53-1) and clean(v['title'],100) and
             keys(v['map'],('mapId','revision','officialRequestId')) and
             all(match(v['map'][k],OID) for k in ('mapId','officialRequestId')) and int_range(v['map']['revision'],1,MAX_REV) and puzzles(v['puzzles']))
+def puzzle_plan(v):
+    if type(v)is not list or not 1<=len(v)<=8:return False
+    ids=set()
+    for p in v:
+        if not (keys(p,('id','type','intent')) and slug(p['id']) and p['id'] not in ids and p['type']==TYPE and
+                (p['intent']=='' or clean(p['intent'],1000))):return False
+        ids.add(p['id'])
+    return True
 def payload(v,kind):
-    base=('schemaVersion','projectId')
-    if kind not in KINDS:return False
+    if type(v)is not dict or kind not in KINDS:return False
     gen=kind=='assembly.generate'
-    return (keys(v,base+(('title','mapId','puzzleType','intent') if gen else ('assemblyId','expectedRevision','puzzles'))) and
-            v['schemaVersion']==KINDS[kind] and v['projectId']=='binari' and
-            ((clean(v['title'],100) and match(v['mapId'],OID) and v['puzzleType']==TYPE and clean(v['intent'],2000)) if gen else
+    base=('schemaVersion','projectId')
+    v2=v.get('schemaVersion')==V2
+    return (keys(v,base+(('title','mapId','intent','puzzles' if v2 else 'puzzleType') if gen else
+                         ('assemblyId','expectedRevision','puzzles'))) and
+            v['schemaVersion'] in KINDS[kind] and v['projectId']=='binari' and
+            ((clean(v['title'],100) and match(v['mapId'],OID) and clean(v['intent'],2000) and
+              (puzzle_plan(v['puzzles']) if v2 else v['puzzleType']==TYPE)) if gen else
             (match(v['assemblyId'],OID) and int_range(v['expectedRevision'],1,MAX_REV-1) and puzzles(v['puzzles']))))
 def graph_reaches(graph,start):
     seen={start};pending=[start]

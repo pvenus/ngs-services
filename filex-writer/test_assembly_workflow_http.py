@@ -97,6 +97,21 @@ s.close();"""
         complete(gen,first)
         self.assertEqual(call('/result',{'officialRequestId':aid}),first)
 
+        # The v2 request retains ordered IDs and receives one shared map context.
+        multi_gen=stage('8',{**{k:v for k,v in g.items() if k!='puzzleType'},'schemaVersion':'ngs.assembly-generate.v2',
+            'puzzles':[{'id':'first-water','type':g['puzzleType'],'intent':'왼쪽 제상'},
+                       {'id':'second-water','type':g['puzzleType'],'intent':''}]},'assembly.generate',12)
+        md=call('/read',{'claim':multi_gen})
+        self.assertEqual(md['context'],generated['context'])
+        batch=md['state'];self.assertEqual([x['id'] for x in batch['puzzles']],['first-water','second-water'])
+        self.assertEqual(call('',{'claim':multi_gen,'state':{**batch,'puzzles':list(reversed(batch['puzzles']))}},409),
+            {'error':'ASSEMBLY_INPUT_CHANGED'})
+        batch={**batch,'puzzles':[{**p,'layout':{**p['layout'],'altar':{**p['layout']['altar'],'x':41+i*6}}}
+            for i,p in enumerate(batch['puzzles'])]}
+        second_assembly=call('',{'claim':multi_gen,'state':batch})
+        complete(multi_gen,second_assembly)
+        self.assertEqual(call('/result',{'officialRequestId':batch['assemblyId']}),second_assembly)
+
         # Published prop head may advance, but the exact older pin remains usable.
         bowl=live_props['bowl']['manifest']
         v2=make('5','regenerate',bowl,70,prop_id=bowl['propId'])
@@ -121,4 +136,4 @@ s.close();"""
         clear=stage('f',{**u,'expectedRevision':2,'puzzles':[]},'assembly.update',17)
         empty=call('/read',{'claim':clear})['state'];self.assertEqual(empty['puzzles'],[])
         call('',{'claim':clear,'state':empty})
-        self.assertEqual(call('/list',{}),{'assemblies':[empty]})
+        self.assertEqual(call('/list',{}),{'assemblies':[empty,batch]})

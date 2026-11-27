@@ -2088,7 +2088,7 @@
 {
   "candidateCount": 1,
   "dependsOn": [],
-  "description": "이미 게시된 맵과 프랍을 고정하고, Codex CLI가 요청에 맞춰 양방향 이동이 가능한 퍼즐 배치와 부착 좌표를 생성한다. 생성 실패 시 기본안으로 게시하지 않는다.",
+  "description": "이미 게시된 맵과 프랍을 고정하고, Codex CLI가 전체 요청 사항과 퍼즐별 요청 사항을 한 번에 읽어 각 퍼즐의 양방향 이동이 가능한 배치와 부착 좌표를 생성한다. 생성 실패 시 기본안으로 게시하지 않는다.",
   "generationKind": "structure",
   "id": "assembly.generate",
   "inputs": [
@@ -2116,7 +2116,7 @@
   "requestRequirements": {
     "schemaVersion": {
       "type": "string",
-      "const": "ngs.assembly-generate.v1"
+      "enum": ["ngs.assembly-generate.v1", "ngs.assembly-generate.v2"]
     },
     "projectId": {
       "type": "string",

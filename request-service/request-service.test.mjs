@@ -951,6 +951,17 @@ test('assembly official request families advertise exact schemas and accept remo
  const update={sourceId:'local',requestType:'assembly.update',idempotencyKey:'assembly-edit',
   payload:{schemaVersion:'ngs.assembly-update.v1',projectId:'binari',assemblyId,expectedRevision:1,puzzles:[]}};
  assert.equal((await api.submit(update)).result.structuredContent.status,'registered');
+ const {puzzleType,...lower}=generate.payload;
+ const entry={id:'ritual-well-water',type:puzzleType,intent:'성공 가능한 배치'};
+ const batch={...generate,idempotencyKey:'assembly-v2',payload:{...lower,schemaVersion:'ngs.assembly-generate.v2',
+  puzzles:[entry,{...entry,id:'ritual-well-water-2',intent:''}]}};
+ const v2=schema.oneOf.find(r=>r.properties?.payload?.properties?.schemaVersion?.const===batch.payload.schemaVersion);
+ assert.equal(v2.properties.payload.properties.puzzles.maxItems,8);
+ for(const puzzles of [[],[entry,entry],[{...entry,intent:'a'.repeat(1001)}],Array.from({length:9},(_,i)=>({...entry,id:'puzzle-'+i}))]){
+  const bad=(await api.submit({...batch,payload:{...batch.payload,puzzles}})).result.structuredContent;
+  assert.equal(bad.error,'NGS_ASSEMBLY_PAYLOAD_INVALID');
+ }
+ assert.equal((await api.submit(batch)).result.structuredContent.status,'registered');
  const rows=(await api.workflow({limit:10})).result.structuredContent.requests;
  assert.deepEqual(new Set(rows.map(x=>x.requestType)),new Set(['assembly.generate','assembly.update']));
 });
