@@ -893,3 +893,31 @@ test('local map request contracts are discoverable and the valid queued payload 
  assert.equal(row.targetName,graph.title);
  assert.ok((await api.workflow({limit:10})).result.structuredContent.requests.some(x=>x.officialRequestId===out.officialRequestId));
 });
+
+test('map folder deletion advertises only its dedicated capability and pins a single published revision', async t=>{
+ const {directory,path}=folder(t),root='canonical-files/binari/cinematics/maps';
+ let ready=false;
+ const service=createRequestService({directory,fileDeleteReadiness:async r=>ready&&r===root});
+ await new Promise(resolve=>service.listen(0,host,resolve));
+ t.after(()=>new Promise(resolve=>service.close(resolve)));
+ const rpc=async(method,params={})=>await (await fetch('http://'+host+':'+service.address().port+'/mcp',{
+  method:'POST',headers:{Accept:'application/json, text/event-stream','Content-Type':'application/json'},
+  body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})})).json();
+ const target={root,path:'request.official.'+'1'.repeat(64),kind:'directory'};
+ const expected={revision:2,officialRequestId:'request.official.'+'2'.repeat(64)};
+ const payload={schemaVersion:'ngs.file-delete.v1',projectId:'binari',target,expected};
+ const submit=payload=>rpc('tools/call',{name:'request_submit',arguments:{sourceId:'local',requestType:'file.delete',idempotencyKey:'one-map',payload}});
+ assert.doesNotMatch(JSON.stringify((await rpc('tools/list')).result),/canonical-files\/binari\/cinematics\/maps/);
+ assert.match(JSON.stringify(await submit(payload)),/NGS_FILE_DELETE_UNAVAILABLE/);
+ ready=true;
+ const shapes=(await rpc('tools/list')).result.tools[0].inputSchema.oneOf;
+ const schema=shapes.find(x=>x.properties.requestType.const==='file.delete').properties.payload;
+ assert.deepEqual(schema.properties.target.properties.root,{const:root});
+ assert.deepEqual(schema.properties.expected.required,['officialRequestId','revision']);
+ for(const bad of [{...payload,target:{...target,kind:'file'}},{...payload,target:{...target,path:'../maps/'+target.path}},
+  {...payload,expected:{...expected,revision:0}},{...payload,expected:{...expected,officialRequestId:'map-id'}},
+  {...payload,expected:{...expected,sha256:'a'.repeat(64)}},{...payload,target:[target]}])
+  assert.match(JSON.stringify(await submit(bad)),/NGS_FILE_DELETE_PAYLOAD_INVALID/);
+ assert.equal((await submit(payload)).result.structuredContent.status,'registered');
+ assert.equal(read(path).length,1);
+});

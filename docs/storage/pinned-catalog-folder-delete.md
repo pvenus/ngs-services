@@ -94,3 +94,24 @@ a safe partial outcome (remaining source or animation still present); it
 cannot silently detach a concurrently committed animation. Retry from fresh
 authoritative membership, not visible-only UI copies. Recovery remains the
 common writer quarantine for each exact target.
+
+## Map folders
+
+The existing `file.delete` request handles exactly one map folder using
+`target.root="canonical-files/binari/cinematics/maps"`, `target.path=<mapId>`,
+`target.kind="directory"`, and `expected:{revision,officialRequestId}` from the
+latest published map row selected by the user. The map identifier and latest
+publisher are distinct after the first edit. No source background is deleted.
+
+Owner-local deployments with the existing map workflow default to support this
+scope; set `PDS_WORKFLOW_MAP_DELETE=0` to disable it. Intake and the existing
+file worker require `GET /v1/storage/delete-target/map` to report the exact
+root and schema `workflow.single-target-delete.v1`. The exact Planner resolves
+one `file_delete` task on the existing worker, with no model or separate runtime.
+
+The Filex writer compares the latest revision and latest publisher under the
+same lock as map publication. A stale or wrong pin fails before mutation.
+The writer installs a per-map retirement marker and moves the map folder,
+including immutable revisions, to the existing private recovery quarantine.
+The exact operation can recover an interrupted move; unrelated requests cannot
+reuse its marker, and a late map publication cannot recreate a retired map.

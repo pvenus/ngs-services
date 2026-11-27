@@ -252,6 +252,10 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                                 return self.reply(200,deleter.inventory(command['sourceSha256']))
                             return self.reply(200,deleter.remove(command))
                         except PinnedDeleteRejected:return self.reply(409,{'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'})
+                    if cinematic and type(target) is dict and target.get('root')=='canonical-files/binari/cinematics/maps':
+                        from map_store import remove_map_folder
+                        try:return self.reply(200,remove_map_folder(store,command))
+                        except PinnedDeleteRejected:return self.reply(409,{'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'})
                     if workflow_props is store:
                         try:return self.reply(200,workflow_props.remove_package(command))
                         except PinnedDeleteRejected:return self.reply(409,{'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'})

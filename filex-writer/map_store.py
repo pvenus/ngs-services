@@ -4,6 +4,9 @@ import re
 from hashlib import sha256
 
 MAP_ROUTE='/v1/workflow/maps'
+MAP_DELETE_ROOT='canonical-files/binari/cinematics/maps'
+TASK=re.compile(r'workflow\.task\.[a-f0-9]{64}\Z')
+REVISION=re.compile(r'[1-9][0-9]{0,15}\.json\Z')
 OID=re.compile(r'request\.official\.[a-f0-9]{64}\Z')
 HASH=re.compile(r'[a-f0-9]{64}\Z')
 KEY=re.compile(r'[a-z][a-z0-9-]{0,31}\Z')
@@ -16,6 +19,45 @@ def map_base(store,mid):
     root=store.root/'maps'; target=root/mid
     need(not root.is_symlink() and not target.is_symlink())
     return target
+def deletion_marker(store,mid):
+    root=store.root/'.map-deleted'
+    marker=root/(mid+'.json')
+    need(not root.is_symlink() and not marker.is_symlink())
+    return marker
+
+def remove_map_folder(store,command):
+    from types import SimpleNamespace
+    from single_target_delete import PinnedDeleteRejected,SingleTargetDelete,validate_target
+    try:
+        need(type(command)is dict and set(command)=={'operationId','target','expected'})
+        target=validate_target(command['target']);expected=command['expected'];operation=command['operationId']
+        need(target['root']==MAP_DELETE_ROOT and target['kind']=='directory' and match(target['path'],OID) and
+             match(operation,TASK) and type(expected)is dict and set(expected)=={'revision','officialRequestId'} and
+             type(expected['revision'])is int and 1<=expected['revision']<2**53 and match(expected['officialRequestId'],OID))
+    except (ValueError,KeyError) as exc:raise PinnedDeleteRejected('map delete binding') from exc
+    mid=target['path']; pin=(json.dumps(command,sort_keys=True,separators=(',',':'))+'\n').encode()
+    with store.lock():
+        try:
+            base=map_base(store,mid); marker=deletion_marker(store,mid)
+            try:frozen=store._read(marker,4096)
+            except FileNotFoundError:frozen=None
+            if frozen is not None:need(frozen==pin)
+            if base.exists():
+                need(base.is_dir())
+                revisions=[int(p.stem) for p in base.iterdir() if match(p.name,REVISION)]
+                need(revisions and max(revisions)==expected['revision'])
+                state=read_revision(store,base,expected['revision'])
+                need(state.get('officialRequestId')==expected['officialRequestId'] and
+                     state.get('schemaVersion')=='ngs.map-metadata.v1' and state.get('projectId')=='binari')
+            else:need(frozen is not None)
+        except (FileNotFoundError,NotADirectoryError,ValueError) as exc:
+            raise PinnedDeleteRejected('stale map before moving') from exc
+        # Same cinematic lock as map publication. A durable fenced marker prevents
+        # delayed create/update from recreating a retired (or mid-move) map.
+        if frozen is None:store.write(marker,pin)
+        return SingleTargetDelete(SimpleNamespace(root=base.parent),MAP_DELETE_ROOT).remove_locked(
+            {'operationId':operation,'target':target})
+
 def validate_colliders(graph):
     need(type(graph)is dict)
     if 'colliders' not in graph:return
@@ -74,6 +116,8 @@ def map_revision(store,p,write=False):
     raw=(json.dumps(p,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()
     need(len(raw)<65536)
     with store.lock():
+        base=map_base(store,p['mapId'])
+        if deletion_marker(store,p['mapId']).exists():raise Conflict('map retired')
         target=base/(str(n)+'.json')
         need(not target.is_symlink())
         if target.exists():

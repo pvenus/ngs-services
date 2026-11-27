@@ -10,6 +10,7 @@ from .filex_cas_transport import PinnedDeleteRejected
 PATH='/v1/storage/delete-target'
 NPC_STANDALONE_CAPABILITY=PATH+'/npc-standalone'
 BACKGROUND_CAPABILITY=PATH+'/background'
+MAP_CAPABILITY=PATH+'/map'
 CINEMATIC_CAPABILITY=PATH+'/cinematic'
 CINEMATIC_INVENTORY=PATH+'/cinematic-inventory'
 SCHEMA='workflow.single-target-delete.v1'
@@ -76,9 +77,10 @@ def serve(handler):
     if not isinstance(svc,SingleTargetDelete):return handler.respond(404,{'error':'STORAGE_DELETE_DISABLED'})
     npc_only=handler.path==NPC_STANDALONE_CAPABILITY and handler.command=='GET'
     background_only=handler.path==BACKGROUND_CAPABILITY and handler.command=='GET'
+    map_only=handler.path==MAP_CAPABILITY and handler.command=='GET'
     cinematic_only=handler.path==CINEMATIC_CAPABILITY and handler.command=='GET'
     inventory=urlsplit(handler.path).path==CINEMATIC_INVENTORY and handler.command=='GET'
-    if (not (npc_only or background_only or cinematic_only or inventory) and (handler.path!=PATH or handler.command not in ('GET','POST')) or
+    if (not (npc_only or background_only or map_only or cinematic_only or inventory) and (handler.path!=PATH or handler.command not in ('GET','POST')) or
         handler.server.server_address[0]!='127.0.0.1' or handler.client_address[0]!='127.0.0.1' or
         handler.headers.get_all('Host')!=['127.0.0.1:'+str(handler.server.server_port)] or
         handler.headers.get('Origin') is not None or handler.headers.get('Transfer-Encoding') is not None or
@@ -86,10 +88,11 @@ def serve(handler):
         return handler.respond(403,{'error':'STORAGE_DELETE_INTERNAL_ONLY'})
     started=[]
     try:
-        if background_only:
-            from .workflow_file_delete import BACKGROUND_ROOT
-            enabled=BACKGROUND_ROOT in svc.roots and svc.roots[BACKGROUND_ROOT].ready() is True
-            return handler.respond(200,{'enabled':enabled,'schemaVersion':SCHEMA,'roots':[BACKGROUND_ROOT] if enabled else []})
+        if background_only or map_only:
+            from .workflow_file_delete import BACKGROUND_ROOT,MAP_ROOT
+            root=MAP_ROOT if map_only else BACKGROUND_ROOT
+            enabled=root in svc.roots and svc.roots[root].ready() is True
+            return handler.respond(200,{'enabled':enabled,'schemaVersion':SCHEMA,'roots':[root] if enabled else []})
         if inventory or cinematic_only:
             from .workflow_file_delete import CINEMATIC_ROOT
             provider=svc.roots.get(CINEMATIC_ROOT)

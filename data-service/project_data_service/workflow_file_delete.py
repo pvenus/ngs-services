@@ -16,6 +16,8 @@ PROP_ROOT='canonical-files/binari/props'
 CINEMATIC_ROOT='canonical-files/binari/cinematics'
 NPC_ROOT='canonical-files/binari/npcs'
 BACKGROUND_ROOT='canonical-files/binari/cinematics/backgrounds'
+MAP_ROOT='canonical-files/binari/cinematics/maps'
+MAP_ID=r'request\.official\.[a-f0-9]{64}'
 NPC_ID=r'(?:character|npc|entity|enemy)\.[a-z0-9._-]{2,80}'
 TASK_ID=r'workflow\.task\.[a-f0-9]{64}'
 
@@ -79,6 +81,11 @@ def authorize_for(planner,root):
         elif root==BACKGROUND_ROOT:
             need(target['kind']=='file' and re.fullmatch(r'[a-f0-9]{64}\.(?:png|json)',target['path']) and keys(expected,('sourceRequestId',))
                  and type(expected['sourceRequestId']) is str and re.fullmatch(r'request\.official\.[a-f0-9]{64}',expected['sourceRequestId']))
+        elif root==MAP_ROOT:
+            need(target['kind']=='directory' and re.fullmatch(MAP_ID,target['path']) and
+                 keys(expected,('revision','officialRequestId')) and type(expected['revision']) is int and
+                 1<=expected['revision']<2**53 and type(expected['officialRequestId']) is str and
+                 re.fullmatch(MAP_ID,expected['officialRequestId']))
         elif root==CINEMATIC_ROOT:
             need(cinematic_binding(target,expected))
             sequence_ids=[target['path'].split('/')[1]] if target['kind']=='directory' else []
