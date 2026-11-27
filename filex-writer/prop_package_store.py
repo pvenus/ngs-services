@@ -11,7 +11,7 @@ from prop_package_contract import (
 WRITER='/v1/workflow/props'
 WRITER_ROUTES=(WRITER,WRITER+'/read',WRITER+'/asset',WRITER+'/head')
 RECEIPT_SCHEMA='ngs.prop-package-publication-receipt.v1'
-MAX_BODY=4*((MAX_MEDIA+2)//3)*4+MAX_MANIFEST+64*1024
+MAX_BODY=5*((MAX_MEDIA+2)//3)*4+MAX_MANIFEST+64*1024
 PIN_KEYS=('propId','revision','sha256')
 CANDIDATE_KEYS=('scope','members','manifestSha256','resultRef')
 HEAD_SCHEMA='ngs.prop-pointer.v1'
@@ -35,6 +35,7 @@ def refs(m,scope,members):
         if media:need(x['ref']=='prop.'+prefix+'.'+media['sha256'])
     if scope.get('operation') is None or scope.get('operation')=='regenerate':
         check('prop_detail','detail-rgba',m['media']['detail']);check('prop_pixel','pixel-rgba',m['media']['pixel'])
+        if 'spirit' in m['media']:check('prop_spirit','spirit-rgba',m['media']['spirit'])
     if scope.get('motion')=='subtle' or scope.get('operation')=='append-animation':
         clip=m['animations'][-1]
         check('prop_animation_detail','animation-detail-rgba',clip['media']['detail'])
@@ -48,7 +49,9 @@ def validate_candidate(c,m):
          c['resultRef']=='prop.package.'+c['manifestSha256'])
     scope=c['scope'];op=scope.get('operation') if type(scope) is dict else False
     base=('officialRequestId','projectId','propId','requestSha256')
-    need(op in (None,'regenerate','append-animation','remove-animation') and keys(scope,base+(
+    profile=type(scope)is dict and 'presentationProfile' in scope
+    if profile:need(op in (None,'regenerate') and scope['presentationProfile']=='spirit-v1')
+    need(op in (None,'regenerate','append-animation','remove-animation') and keys(scope,base+(('presentationProfile',) if profile else ())+(
         ('designContextSha256','motion') if op is None else
         ('operation','source','motion','designContextSha256') if op=='regenerate' else
         ('operation','source','motionIds') if op=='remove-animation' else ('operation','source','animationId'))) and
@@ -73,7 +76,9 @@ def validate_candidate(c,m):
             ids=scope['motionIds']
             need(type(ids)is list and 1<=len(ids)<=30 and all(prop_id(i) for i in ids) and len(set(ids))==len(ids))
             expected=[];initial=False
-    if op not in ('append-animation','remove-animation'):need(scope['designContextSha256']==m['designContextSha256'])
+    if op not in ('append-animation','remove-animation'):
+        need(scope['designContextSha256']==m['designContextSha256'] and profile==('spirit' in m['media']))
+        if profile:expected.append('prop_spirit')
     if initial:
         expected+=['prop_motion','prop_animation_detail','prop_animation_pixel']
         clip=m['animations'][-1]
@@ -187,7 +192,7 @@ class PropPackageStore(Store):
         need(keys(command,('candidate','manifest','media')));c,m,body=[command[k] for k in ('candidate','manifest','media')]
         validate_candidate(c,m)
         prop=m['propId'];n=m['revision'];scope=c['scope']; expected=scope.get('source')
-        need(type(body) is dict and len(body)<=4)
+        need(type(body) is dict and len(body)<=(5 if scope.get('presentationProfile')=='spirit-v1' else 4))
         all_next=all_media(m)
         decoded={}
         for key,text in body.items():

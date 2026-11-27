@@ -75,9 +75,12 @@ test('formal one request: still and subtle exact topology, one base and exact so
  }
 });
 
-test('real MCP ingress/Planner: one pack only after same-run complete proof and independent Filex receipt readback',async t=>{
+for(const profile of [false,true])
+test('real MCP ingress/Planner: one pack only after same-run complete proof and independent Filex receipt readback (profile='+profile+')',async t=>{
  const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propGenerateMotionEnabled:true});
- const payload={...p,motion:'subtle'};
+ const payload={...p,motion:'subtle',...(profile?{presentationProfile:'spirit-v1'}:{})};
+ const small=profile?102:128;
+ if(profile)await assert.rejects(rs.call('request_submit',command({...payload,presentationProfile:'unknown'})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
  const {officialRequestId}=await rs.call('request_submit',command(payload));
  let proof=null,reads=0;
  const store=new PlannerStore(join(temp,'planner.sqlite'),{propGenerateEnabled:true,propGenerateMotionEnabled:true,
@@ -86,6 +89,13 @@ test('real MCP ingress/Planner: one pack only after same-run complete proof and 
  assert.equal((await pollOnce(store,rs)).acknowledged,1);
  assert.equal((await pollOnce(store,rs)).staged,0);
  const row={...makeRow(payload),officialRequestId},run={...row,state:'planned',reason:null},tasks=buildPlan(row).tasks,final=tasks.at(-1);
+ if(profile){
+  const by=Object.fromEntries(tasks.map(t=>[t.key,t]));
+  assert.equal(by[propKeys.spirit].type,'prop.generate.spirit');
+  assert.equal(by[propKeys.spirit].dependsOn,by[propKeys.detail].id);
+  assert.deepEqual(final.additionalDependencies,[by[propKeys.pixel].id,by[propKeys.spirit].id]);
+  assert.ok(tasks.every(t=>t.input.presentationProfile==='spirit-v1'));
+ }
  const rows=()=>store.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=?').all(officialRequestId);
  const evidence=Object.fromEntries(tasks.slice(0,-1).map((x,i)=>[x.key,(i+1).toString(16).repeat(64)]));
  const put=store.db.prepare('UPDATE workflow_tasks SET status=?,result_ref=?,updated_at=9 WHERE task_id=?');
@@ -94,9 +104,9 @@ test('real MCP ingress/Planner: one pack only after same-run complete proof and 
   mediaType:animated?'image/apng':'image/png',frameDurationsMs:animated?[100,100]:[]});
  const manifest={schemaVersion:'ngs.prop-package.v1',officialRequestId,projectId:'binari',propId:p.propId,
   requestSha256:run.payloadSha256,designContextSha256:p.designContextSha256,revision:1,title:'등롱',parentSha256:null,
-  media:{detail:media(propKeys.detail,512,512),pixel:media(propKeys.pixel,128,128)},
+  media:{detail:media(propKeys.detail,512,512),pixel:media(propKeys.pixel,small,small),...(profile?{spirit:media(propKeys.spirit,small,small)}:{})},
   animations:[{id:'initial',title:'미세 움직임',officialRequestId,requestSha256:run.payloadSha256,media:{
-   detail:media(propKeys.animDetail,512,512,true),pixel:media(propKeys.animPixel,128,128,true)}}],
+   detail:media(propKeys.animDetail,512,512,true),pixel:media(propKeys.animPixel,small,small,true)}}],
   interaction:{pixelOpen:{action:'open',x:1,y:2,width:15,height:15},detailTrigger:{action:'activate',x:2,y:3,width:80,height:80}}};
  put.run('running',null,final.id);
  for(const task of tasks.slice(0,-2))put.run('completed',propRef(task.key,evidence[task.key]),task.id);
@@ -106,6 +116,10 @@ test('real MCP ingress/Planner: one pack only after same-run complete proof and 
  assert.throws(()=>preparePropPublication(run,rows(),{...claim,claimStamp:8},manifest,{head:null}),/PROP_PACKAGE_PROOF_INVALID/);
  const wrongMedia={...manifest,animations:manifest.animations.map(clip=>({...clip,media:{...clip.media,pixel:{...clip.media.pixel,frameDurationsMs:[80,120]}}}))};
  assert.throws(()=>preparePropPublication(run,rows(),claim,wrongMedia,{head:null}),/PROP_PACKAGE_PROOF_INVALID/);
+ if(profile){
+  const wrong={...manifest,media:{...manifest.media,spirit:media(propKeys.pixel,small,small)}};
+  assert.throws(()=>preparePropPublication(run,rows(),claim,wrong,{head:null}),/PROP_PACKAGE_PROOF_INVALID/);
+ }
  const candidate=preparePropPublication(run,rows(),claim,manifest,{head:null});
  put.run('completed',candidate.resultRef,final.id);
  assert.equal((await pollOnce(store,rs)).completed,0);assert.equal(reads,1);
@@ -126,7 +140,7 @@ test('exhausted root design failure settles blocked descendants without declarin
  const {officialRequestId}=await rs.call('request_submit',command());
  const store=new PlannerStore(':memory:',{propGenerateEnabled:true,readPropPublication:async()=>null});t.after(()=>store.close());
  assert.equal((await pollOnce(store,rs)).acknowledged,1);
- store.db.prepare("UPDATE workflow_tasks SET status='failed',retry_count=3 WHERE task_key=? AND official_request_id=?").run(propKeys.design,officialRequestId);
+ store.db.prepare("UPDATE workflow_tasks SET status='failed',retry_count=retry_limit WHERE task_key=? AND official_request_id=?").run(propKeys.design,officialRequestId);
  assert.equal((await pollOnce(store,rs)).failed,1);
  assert.equal((await rs.call('request_list',{})).requests[0].status,'failed');
  assert.equal(store.db.prepare("SELECT count(*) AS n FROM workflow_tasks WHERE status='pending'").get().n,4);

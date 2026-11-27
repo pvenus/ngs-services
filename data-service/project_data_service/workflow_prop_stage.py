@@ -7,7 +7,7 @@ from .filex_read import digest
 from .prop_package_contract import sha
 from .prop_design_context import PropDesignContext
 from .prop_stage_claim import (
-    APPEND,BASE,DESIGN,DETAIL,GENERATE,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PUBLISH,REGENERATE,
+    APPEND,BASE,DESIGN,DETAIL,GENERATE,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,SPIRIT,PUBLISH,REGENERATE,
     PropClaimAuthority,ref_name,task_id,valid_ref,
 )
 from .prop_stage_store import PropStageStore,STAGES
@@ -41,6 +41,9 @@ def half_canvas(m):
     # Same integer half-size policy as the staged postprocess port (max 512).
     w,h=m['width'],m['height'];den=max(2,max(w,h)/512)
     return {'width':max(12,int(w/den+0.5)),'height':max(12,int(h/den+0.5))}
+
+def fifth_canvas(m):
+    return {k:(m[k]+2)//5 for k in ('width','height')}
 
 class RealPropAuthority:
     """Private Planner authority injected into WorkflowPropPackage and every stage."""
@@ -109,7 +112,7 @@ class RealPropAuthority:
                     line=record['lineage']
                     if k==DESIGN:need(line is None)
                     elif k==BASE:need(line=={'design':source(DESIGN)})
-                    elif k in (DETAIL,PIXEL):need(line=={'source':source(BASE if k==DETAIL else DETAIL)})
+                    elif k in (DETAIL,PIXEL,SPIRIT):need(line=={'source':source(BASE if k==DETAIL else DETAIL)})
                     elif k==MOTION:
                         need(line==({'package':p['source']} if kind==APPEND else {'source':source(BASE)}))
                     elif k in (MOTION_DETAIL,MOTION_PIXEL):
@@ -133,6 +136,7 @@ class RealPropAuthority:
                     scope.update(designContextSha256=p['designContextSha256'],motion=mode)
                     design=self.stored(run,rows,DESIGN)['artifact']
                     need(m['title']==design['title'] and m['interaction']==expected_interaction(design,m['media']))
+                    if 'presentationProfile' in p:scope['presentationProfile']=p['presentationProfile']
                     if kind==REGENERATE:scope.update(operation='regenerate',source=p['source'])
                 d=digest(m);return {'scope':scope,'members':members,'manifestSha256':d,'resultRef':ref_name(PUBLISH,d)}
             yield prepare
@@ -162,9 +166,10 @@ class RealPropAuthority:
                     need(existing==prepared)
                 return prepared
             prior=self.current_source(p,kind)
-            # Read the exact two static stage artifacts; the full publish path
+            # Read every exact static stage artifact; the full publish path
             # independently revalidates all lineage and raw hashes under CAS.
-            media={lane:self.stored(run,rows,k)['artifact'] for lane,k in (('detail',DETAIL),('pixel',PIXEL))}
+            media={lane:self.stored(run,rows,k)['artifact'] for lane,k in
+                   (('detail',DETAIL),('pixel',PIXEL),('spirit',SPIRIT)) if k in rows}
             design=self.stored(run,rows,DESIGN)['artifact']
             return {'schemaVersion':'ngs.prop-package.v1','projectId':'binari','propId':p['propId'],
                 'revision':prior['revision']+1 if prior else 1,'officialRequestId':run['official_request_id'],
@@ -176,12 +181,13 @@ class RealPropAuthority:
         # Caller still holds a verified snapshot; read only exact final member
         # bytes, never a process-global cache or caller filesystem path.
         oid=claim['officialRequestId'];op=c['scope'].get('operation');groups=[]
-        if op!='append-animation':groups.append((m['media'],(DETAIL,PIXEL)))
+        if op!='append-animation':
+            groups.append((m['media'],[(lane,k) for lane,k in (('detail',DETAIL),('pixel',PIXEL),('spirit',SPIRIT)) if lane in m['media']]))
         if op=='append-animation' or c['scope'].get('motion')=='subtle':
-            groups.append((m['animations'][-1]['media'],(MOTION_DETAIL,MOTION_PIXEL)))
+            groups.append((m['animations'][-1]['media'],(('detail',MOTION_DETAIL),('pixel',MOTION_PIXEL))))
         members={r['key']:r for r in c['members']};media={}
-        for group,(dk,pk) in groups:
-            for lane,k in (('detail',dk),('pixel',pk)):
+        for group,lanes in groups:
+            for lane,k in lanes:
                 r=members[k];v=self.staging.get(oid,r['taskId'],k,r['ref'])
                 need(v['artifact']==group[lane])
                 if op=='append-animation':
@@ -238,9 +244,10 @@ class RealPropAuthority:
             if kind==APPEND:
                 return {'package':p['source'],'media':prior['media']['detail'],'motionPrompt':p['prompt'],**profile}
             return {'source':_source(get(BASE)),'media':get(BASE)['artifact'],'motionPrompt':get(DESIGN)['artifact']['motionPrompt']}
-        if key in (DETAIL,PIXEL):
+        if key in (DETAIL,PIXEL,SPIRIT):
             src=get(BASE if key==DETAIL else DETAIL);media=src['artifact']
-            return {'source':_source(src),'canvas':canvas_of(media) if key==DETAIL else half_canvas(media),'media':media}
+            canvas=canvas_of(media) if key==DETAIL else fifth_canvas(media) if 'presentationProfile' in p else half_canvas(media)
+            return {'source':_source(src),'canvas':canvas,'media':media}
         src=get(MOTION if key==MOTION_DETAIL else MOTION_DETAIL)
         lane='detail' if key==MOTION_DETAIL else 'pixel'
         if kind==APPEND:
@@ -259,7 +266,7 @@ class RealPropAuthority:
 
     def stage(self,claim,artifact,design_only):
         with self.planner.selected(claim,(DESIGN,) if design_only else tuple(k for k in STAGES if k!=DESIGN)) as (run,p,rows,key):
-            self.require_mode(run,p)
+            self.require_mode(run,p);small=False
             input=strict_json(rows[key]['task_input'].encode())
             if key==DESIGN:
                 self.context(p,run['request_type']);lineage=None
@@ -267,16 +274,17 @@ class RealPropAuthority:
                 line=self.details(run,p,rows,key)
                 lineage={k:line[k] for k in ('source','geometry','package') if k in line}
                 if key==BASE:lineage={'design':_source(line['design'])}
-                if key in (DETAIL,PIXEL,MOTION_DETAIL,MOTION_PIXEL):
+                if key in (DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL):
                     need(type(artifact)is dict and type(artifact.get('media'))is dict and
                          all(artifact['media'].get(k)==line['canvas'][k] for k in ('width','height')))
                     times=line['manifest']['frameDurationsMs'] if key==MOTION_DETAIL else line['media'].get('frameDurationsMs',[]) if key==MOTION_PIXEL else []
                     need(artifact['media'].get('frameDurationsMs')==times)
-            return self.staging.put(run['official_request_id'],claim['taskId'],key,artifact,input,lineage=lineage)
+                    small=key in (PIXEL,SPIRIT,MOTION_PIXEL) and min(line['canvas'].values())<12
+            return self.staging.put(run['official_request_id'],claim['taskId'],key,artifact,input,lineage=lineage,small=small)
 
     def stage_asset(self,claim,purpose,index):
         need(purpose in ('input','geometry'))
-        with self.planner.selected(claim,(MOTION,DETAIL,PIXEL,MOTION_DETAIL,MOTION_PIXEL)) as (run,p,rows,key):
+        with self.planner.selected(claim,(MOTION,DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL)) as (run,p,rows,key):
             self.require_mode(run,p)
             info=self.details(run,p,rows,key);kind=run['request_type'];oid=run['official_request_id']
             if purpose=='geometry':
@@ -292,7 +300,7 @@ class RealPropAuthority:
                 raw=base64.b64decode(file['base64'],validate=True);need(file['sha256']==m['sha256'] and len(raw)==m['bytes'])
                 need(sha(raw)==m['sha256']);return raw,m['mediaType']
             else:
-                source={MOTION:BASE,DETAIL:BASE,PIXEL:DETAIL,MOTION_DETAIL:MOTION,MOTION_PIXEL:MOTION_DETAIL}[key]
+                source={MOTION:BASE,DETAIL:BASE,PIXEL:DETAIL,SPIRIT:DETAIL,MOTION_DETAIL:MOTION,MOTION_PIXEL:MOTION_DETAIL}[key]
             r=rows[source]
             data=self.staging.bytes(oid,r['task_id'],source,r['result_ref'],index)
             return data,'image/apng' if source==MOTION_DETAIL else 'image/png'

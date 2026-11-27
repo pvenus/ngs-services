@@ -14,11 +14,11 @@ APPEND='prop.animation.generate'
 CANDLE_CHROMA_PROFILE='candle-chroma-headroom-v1'
 CANDLE_CHROMA_PROP='candle-brass-petal-unlit-clean'
 FAMILIES={GENERATE:'ngs.prop-generate.v1',REGENERATE:'ngs.prop-regenerate.v1',APPEND:'ngs.prop-animation-generate.v1'}
-DESIGN='prop_design';BASE='prop_base';MOTION='prop_motion';DETAIL='prop_detail';PIXEL='prop_pixel'
+DESIGN='prop_design';BASE='prop_base';MOTION='prop_motion';DETAIL='prop_detail';PIXEL='prop_pixel';SPIRIT='prop_spirit'
 MOTION_DETAIL='prop_animation_detail';MOTION_PIXEL='prop_animation_pixel';PUBLISH='prop_pack_publish'
 ROLES={DESIGN:('design','document','design-spec'),BASE:('base','image','base-png'),
        MOTION:('motion','animation','i2v-rgb'),DETAIL:('detail','postprocess','detail-rgba'),
-       PIXEL:('pixel','postprocess','pixel-rgba'),MOTION_DETAIL:('motion-detail','postprocess','animation-detail-rgba'),
+       PIXEL:('pixel','postprocess','pixel-rgba'),SPIRIT:('spirit','postprocess','spirit-rgba'),MOTION_DETAIL:('motion-detail','postprocess','animation-detail-rgba'),
        MOTION_PIXEL:('motion-pixel','postprocess','animation-pixel-rgba'),PUBLISH:('publish','postprocess','package')}
 CLAIM=('officialRequestId','taskId','projectId','payloadSha256','claimStamp')
 OFFICIAL=r'request\.official\.[a-f0-9]{64}'
@@ -42,6 +42,8 @@ def payload_valid(p,kind):
         required.update(('motionId','prompt'))
         if 'renderProfile' in p:required.add('renderProfile')
     else:required.update(('intent','designContextSha256'))
+    if kind!=APPEND and 'presentationProfile' in p:
+        required.add('presentationProfile');need(p['presentationProfile']=='spirit-v1')
     if kind!=APPEND and 'motion' in p:required.add('motion')
     if kind==GENERATE and 'reference' in p:required.add('reference')
     need(keys(p,required) and p['schemaVersion']==FAMILIES[kind] and p['projectId']==P and prop_id(p['propId']))
@@ -56,6 +58,7 @@ def build_graph(oid,kind,p):
     payload_valid(p,kind);rows={}
     make_id=lambda key:task_id(oid,key)
     scope={'propId':p['propId']}
+    if 'presentationProfile' in p:scope['presentationProfile']=p['presentationProfile']
     if 'source' in p:scope['source']=p['source']
     if kind!=APPEND:scope['designContextSha256']=p['designContextSha256']
     def add(key,parent,extra,role=None):
@@ -74,11 +77,15 @@ def build_graph(oid,kind,p):
         add(BASE,DESIGN,{'designTaskId':design,**({'reference':p['reference']} if kind==GENERATE and 'reference' in p else {})})
         add(DETAIL,BASE,{'designTaskId':design,'baseTaskId':base,'sourceTaskId':base})
         add(PIXEL,DETAIL,{'designTaskId':design,'detailTaskId':make_id(DETAIL)})
+        if 'presentationProfile' in p:add(SPIRIT,DETAIL,{'designTaskId':design,'detailTaskId':make_id(DETAIL)})
         if m=='subtle':
             add(MOTION,BASE,{'designTaskId':design,'baseTaskId':base})
             add(MOTION_DETAIL,MOTION,{'designTaskId':design,'baseTaskId':base,'sourceTaskId':make_id(MOTION)})
             add(MOTION_PIXEL,MOTION_DETAIL,{'designTaskId':design,'detailTaskId':make_id(MOTION_DETAIL)})
         add(PUBLISH,MOTION_PIXEL if m=='subtle' else PIXEL,{'dependsOnTaskIds':[x['task_id'] for x in rows.values()]})
+        if 'presentationProfile' in p:
+            parents=([make_id(PIXEL)] if m=='subtle' else [])+[make_id(SPIRIT)]
+            rows[PUBLISH].update({f'depends_on_task_id_{i+2}':dep for i,dep in enumerate(parents)})
     return rows
 
 def from_run(db,run):
@@ -86,11 +93,12 @@ def from_run(db,run):
          run['project_id']==P and run['request_type'] in FAMILIES and run['schema_version']==FAMILIES[run['request_type']])
     p=strict_json(run['payload'].encode());need(type(p)is dict and run['payload']==canonical(p).decode() and digest(p)==run['payload_sha256'])
     expected=build_graph(run['official_request_id'],run['request_type'],p)
-    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 9',(run['official_request_id'],)).fetchall()
+    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 10',(run['official_request_id'],)).fetchall()
     need(len(rows)==len(expected))
     exact_rows={r['task_key']:dict(r) for r in rows}
     need(len(exact_rows)==len(expected) and all(k in exact_rows and
-         all(exact_rows[k][f]==v for f,v in want.items()) for k,want in expected.items()))
+         all(exact_rows[k].get(f)==v for f,v in want.items()) and
+         all(exact_rows[k].get(f'depends_on_task_id_{i}')==want.get(f'depends_on_task_id_{i}') for i in range(2,6)) for k,want in expected.items()))
     return p,{k:exact_rows[k] for k in expected}
 
 class PropClaimAuthority:

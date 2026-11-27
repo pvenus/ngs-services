@@ -6,7 +6,7 @@ from .filex_read import canonical,digest
 from .media_validation import png
 from .prop_package_contract import sha,verify_media
 from .prop_stage_claim import (
-    BASE,DESIGN,DETAIL,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,OFFICIAL,TASK,HASH,ref_name,text,valid_ref,
+    BASE,DESIGN,DETAIL,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,SPIRIT,OFFICIAL,TASK,HASH,ref_name,text,valid_ref,
 )
 from .workflow_motion_2d import strict_json
 from .workflow_prop_package import keys,match,need
@@ -14,7 +14,7 @@ from .workflow_prop_package import keys,match,need
 MAX_MEDIA=16*1024*1024
 MAX_SEQUENCE=40*1024*1024
 MAX_METADATA=256*1024
-STAGES=(DESIGN,BASE,MOTION,DETAIL,PIXEL,MOTION_DETAIL,MOTION_PIXEL)
+STAGES=(DESIGN,BASE,MOTION,DETAIL,PIXEL,SPIRIT,MOTION_DETAIL,MOTION_PIXEL)
 
 def _fsync(path):
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_DIRECTORY)
@@ -67,10 +67,11 @@ def base_artifact(v):
     need(m['sha256']==sha(b) and m['bytes']==len(b) and m['mediaType']=='image/png' and (m['width'],m['height'])==png_fields(b))
     return m,b
 
-def derivative_artifact(v,animated):
+def derivative_artifact(v,animated,small=False):
     need(keys(v,('media','base64')) and keys(v['media'],('assetId','sha256','bytes','width','height','mediaType','frameDurationsMs')))
     m=v['media'];b=decode(v['base64'],MAX_MEDIA);times=m['frameDurationsMs']
-    need(type(m['width'])is int and 12<=m['width']<=2048 and type(m['height'])is int and 12<=m['height']<=2048 and
+    lo=2 if small else 12
+    need(type(m['width'])is int and lo<=m['width']<=2048 and type(m['height'])is int and lo<=m['height']<=2048 and
       type(times)is list and m['assetId']==sha(b)+'.png' and (m['mediaType']=='image/apng' if animated else m['mediaType']=='image/png') and
       (2<=len(times)<=96 and all(type(n)is int and 10<=n<=1000 for n in times) and 100<=sum(times)<=10000 if animated else not times) and
       m['width']*m['height']*max(1,len(times))<=30_000_000)
@@ -115,7 +116,7 @@ class PropStageStore:
             st=parent.lstat()
             need(stat.S_ISDIR(st.st_mode) and st.st_uid==os.getuid() and stat.S_IMODE(st.st_mode)==0o700 and parent.resolve()==parent)
         return target
-    def put(self,oid,task,key,artifact,source,*,lineage=None):
+    def put(self,oid,task,key,artifact,source,*,lineage=None,small=False):
         need(key in STAGES)
         if key==DESIGN:
             content=design_artifact(artifact,source);files={};ref=ref_name(key,digest(content))
@@ -123,7 +124,7 @@ class PropStageStore:
             content,files=raw_artifact(artifact,{'officialRequestId':oid,'taskId':task,'propId':source['propId']})
             ref=ref_name(key,digest(content))
         else:
-            content,raw=base_artifact(artifact) if key==BASE else derivative_artifact(artifact,key in (MOTION_DETAIL,MOTION_PIXEL))
+            content,raw=base_artifact(artifact) if key==BASE else derivative_artifact(artifact,key in (MOTION_DETAIL,MOTION_PIXEL),small=small)
             files={'asset.png':raw};ref=ref_name(key,sha(raw))
         record={'officialRequestId':oid,'taskId':task,'key':key,'resultRef':ref,'artifact':content,'lineage':lineage}
         target=self._closed_path(oid,task,ref if key==BASE else None)

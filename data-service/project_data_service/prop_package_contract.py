@@ -22,18 +22,22 @@ def prop_id(v): return type(v) is str and 2<=len(v)<=80 and match(v,r'[a-z0-9]+(
 def number(v,lo,hi):return type(v) is int and lo<=v<=hi
 def title(v):return type(v) is str and 1<=len(v)<=160 and v==v.strip().strip('\ufeff').strip() and not any(unicodedata.category(c) in ('Cc','Cs','Zl','Zp') for c in v)
 
-def pair(v,animated):
-    need(keys(v,LANES))
+def pair(v,animated,small=False):
+    has_spirit=not animated and keys(v,(*LANES,'spirit'))
+    need(has_spirit or keys(v,LANES))
     for lane,m in v.items():
         limit=2048 if lane=='detail' else 512
+        lo=2 if lane!='detail' and (small or has_spirit) else 12
         need(keys(m,('assetId','sha256','bytes','width','height','mediaType','frameDurationsMs')) and
              hex64(m['sha256']) and m['assetId']==m['sha256']+'.png' and number(m['bytes'],57,MAX_MEDIA) and
-             number(m['width'],12,limit) and number(m['height'],12,limit) and type(m['frameDurationsMs']) is list)
+             number(m['width'],lo,limit) and number(m['height'],lo,limit) and type(m['frameDurationsMs']) is list)
         t=m['frameDurationsMs']
         need((m['mediaType']=='image/apng' and 2<=len(t)<=96 and all(number(n,10,1000) for n in t) and 100<=sum(t)<=10000)
              if animated else (m['mediaType']=='image/png' and not t))
         need(m['width']*m['height']*max(1,len(t))<=30_000_000)
     a,b=v['detail'],v['pixel']
+    if has_spirit:
+        need(all(v[lane][d]==(a[d]+2)//5 for lane in ('pixel','spirit') for d in ('width','height')))
     aw,ah,bw,bh=a['width'],a['height'],b['width'],b['height']
     need(bw<=aw and bh<=ah and bw*bh<aw*ah and abs(bw*ah-bh*aw)<=max(aw,ah) and a['frameDurationsMs']==b['frameDurationsMs'])
 
@@ -54,7 +58,7 @@ def manifest(v):
     for clip in v['animations']:
         need(keys(clip,('id','title','officialRequestId','requestSha256','media')) and prop_id(clip['id']) and
              clip['id'] not in ids and title(clip['title']) and official(clip['officialRequestId']) and hex64(clip['requestSha256']))
-        ids.add(clip['id']);pair(clip['media'],True)
+        ids.add(clip['id']);pair(clip['media'],True,'spirit' in media)
         for lane in LANES:
             need(all(clip['media'][lane][dimension]==media[lane][dimension] for dimension in ('width','height')))
     result=wire(v);need(len(result)<=MAX_MANIFEST);return result

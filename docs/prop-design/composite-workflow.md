@@ -213,3 +213,21 @@ a new immutable revision with just those clips omitted, retaining the base
 images, design, and interactions. A conflicting revision returns a conflict
 instead of overwriting newer work. Prior revisions and their files are not
 deleted. Further prop work must use the newly published head and its pin.
+
+### Spirit presentation
+
+`prop.generate` and `prop.regenerate` may include the exact optional field
+`presentationProfile: "spirit-v1"`. Without it, the historical workflow and
+pixel canvas policy are unchanged. With it, `prop_pixel` and `prop_spirit`
+both read the pinned RGBA detail asset and use the canvas
+`round(detailWidth / 5) × round(detailHeight / 5)`. The spirit stage is an
+existing postprocess-worker operation (`prop.generate.spirit` or
+`prop.regenerate.spirit`) with a static `prop.spirit-rgba.<sha256>` receipt.
+Publication waits for all required lanes and verifies each descriptor against
+the corresponding completed task and actual file bytes.
+
+The package remains `ngs.prop-package.v1`; static `media` carries
+`detail`, `pixel`, and `spirit`, while animation clips still carry
+`detail` and `pixel` only. Animation append/remove preserves the entire
+static media object. Filex asset lookup and replica enumeration include
+`spirit` via the same immutable media descriptors as the original lanes.

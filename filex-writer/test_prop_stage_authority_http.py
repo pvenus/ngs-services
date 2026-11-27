@@ -36,10 +36,21 @@ class StageFixture(PropFixture,TestCase):
         super().setUp()
         parent=Path(self.temp.name).resolve()
         db=parent/'planner.sqlite'
+        self.register_generate(db)
+        stat=db.stat()
+        stage=parent/'prop-stage';stage.mkdir(mode=0o700)
+        actual=RealPropAuthority(PropClaimAuthority(PrivatePlannerClaim(str(db),stat.st_dev,stat.st_ino)),
+                                 PropStageStore(stage),Context(),self.filex_writer)
+        self.pds=self.launch(self.handler,workflow_prop_package=WorkflowPropPackage(actual,self.filex_writer),
+                             workflow_prop_stage=actual)
+        self.actual=actual
+
+    def register_generate(self,db,profile=False):
         blob={
           'schemaVersion':'ngs.prop-generate.v1','projectId':'binari','propId':PROP,
           'intent':'테스트 등롱','designContextSha256':DESIGN_HASH}
-        self.oid='request.official.'+'b'*64
+        if profile:blob['presentationProfile']='spirit-v1'
+        self.oid='request.official.'+('c' if profile else 'b')*64
         subprocess.run(['node','--input-type=module','-e',"""import {PlannerStore} from './workflow-planner/planner.mjs';
 import {canonical,sha} from './workflow-planner/envelope.mjs';
 const [db,id,raw]=process.argv.slice(1),payload=JSON.parse(raw);
@@ -50,14 +61,7 @@ s.acknowledge(id);
 s.close();
 """,str(db),self.oid,json.dumps(blob,ensure_ascii=False)],cwd=REPO,check=True,capture_output=True)
         os.chmod(db,0o600)
-        stat=db.stat()
         self.db=db;self.payload=blob;self.payload_sha=digest(blob)
-        stage=parent/'prop-stage';stage.mkdir(mode=0o700)
-        actual=RealPropAuthority(PropClaimAuthority(PrivatePlannerClaim(str(db),stat.st_dev,stat.st_ino)),
-                                 PropStageStore(stage),Context(),self.filex_writer)
-        self.pds=self.launch(self.handler,workflow_prop_package=WorkflowPropPackage(actual,self.filex_writer),
-                             workflow_prop_stage=actual)
-        self.actual=actual
 
     def mark(self,key,stamp,ref=None):
         t=task_id(self.oid,key)
@@ -100,6 +104,8 @@ console.log(JSON.stringify(await runPropDesignFromPath({dbPath:db,officialReques
         source={'revision':1,'sha256':'c'*64};all_rows=[]
         for kind,extra,schema in (
             ('prop.generate',{'motion':'subtle'},'ngs.prop-generate.v1'),
+            ('prop.generate',{'presentationProfile':'spirit-v1'},'ngs.prop-generate.v1'),
+            ('prop.regenerate',{'source':source,'motion':'subtle','presentationProfile':'spirit-v1'},'ngs.prop-regenerate.v1'),
             ('prop.regenerate',{'source':source,'motion':'subtle'},'ngs.prop-regenerate.v1'),
             ('prop.animation.generate',{'source':source,'motionId':'gentle-sway','prompt':'one motion'},'ngs.prop-animation-generate.v1')):
             p={**self.payload,**extra,'schemaVersion':schema}
@@ -120,6 +126,7 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
             for t in tasks:
                 key=t['key'];expected={'task_id':t['id'],'task_key':key,'task_type':t['type'],'worker_type':t['workerType'],
                     'task_input':wire(t['input']).decode(),'depends_on_task_id':t['dependsOn']}
+                expected.update({f'depends_on_task_id_{i+2}':dep for i,dep in enumerate(t.get('additionalDependencies',[]))})
                 self.assertEqual(graph[key],expected)
     def test_exact_claim_design_and_image_bytes_link_to_published_artifacts(self):
         # Actual Filex authenticated capability, Planner inode and stage-root
@@ -181,6 +188,44 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
         with sqlite3.connect(self.db) as db:
             db.execute("UPDATE workflow_tasks SET task_input='{}' WHERE task_key='prop_base'")
         self.api('/read',self.pin(pack),expected=403)
+
+    def test_profile_three_static_assets_round_fifth_and_pin_all_hashes(self):
+        self.register_generate(self.db,profile=True)
+        d=self.mark('prop_design',2)
+        self.assertEqual(self.stage(DESIGN_ROUTE,'/read',{'claim':d})['input']['presentationProfile'],'spirit-v1')
+        doc={'schemaVersion':'ngs.prop-design-spec.v1','propId':PROP,'designContextSha256':DESIGN_HASH,
+             'title':'등롱','appearancePrompt':'종이 등롱','motion':'still','motionPrompt':None,
+             'interaction':{'pixelOpen':None,'detailTrigger':None}}
+        r=self.stage(DESIGN_ROUTE,'',{'claim':d,'artifact':doc})
+        self.mark('prop_design',2,r['resultRef'])
+        original,raw=artifact_store(31,29,8)
+        img=self.mark('prop_base',3)
+        r=self.stage(STAGE,'',{'claim':img,'artifact':{'media':{k:original[k] for k in
+            ('sha256','bytes','width','height','mediaType')},'base64':base64.b64encode(raw).decode()}})
+        self.mark('prop_base',3,r['resultRef'])
+        for i,key,w,h in ((4,'prop_detail',31,29),(5,'prop_pixel',6,6),(6,'prop_spirit',6,6)):
+            claim=self.mark(key,i)
+            stage=self.stage(STAGE,'/read',{'claim':claim})
+            self.assertEqual(stage['canvas'],{'width':w,'height':h})
+            if key=='prop_spirit':
+                asset=self.stage(STAGE,'/asset',{'claim':claim,'purpose':'input','index':None},raw=True)
+                self.assertEqual(sha(asset),stage['media']['sha256'])
+                self.api('/prepare',{'claim':self.mark('prop_pack_publish',7)},expected=403)
+            media,raw=artifact_store(w,h,i+35)
+            r=self.stage(STAGE,'',{'claim':claim,'artifact':{'media':media,'base64':base64.b64encode(raw).decode()}})
+            self.mark(key,i,r['resultRef'])
+        self.assertTrue(r['resultRef'].startswith('prop.spirit-rgba.'))
+        final=self.mark('prop_pack_publish',7)
+        pack=self.api('/prepare',{'claim':final})['manifest']
+        self.assertEqual(set(pack['media']),{'detail','pixel','spirit'})
+        self.assertEqual(pack['media']['spirit'],media)
+        invalid={**pack,'media':{**pack['media'],'spirit':pack['media']['pixel']}}
+        self.api('',{'claim':final,'manifest':invalid},expected=403)
+        published=self.api('',{'claim':final,'manifest':pack})
+        self.mark('prop_pack_publish',7,published['resultRef'])
+        self.assertEqual(self.api('/read',self.pin(pack))['manifest'],pack)
+        actual=self.api('/asset',{'pin':self.pin(pack),'assetId':media['assetId']})
+        self.assertEqual(base64.b64decode(actual['base64']),raw)
 
     def test_live_lease_and_append_uses_exact_original_preserves_static_metadata_and_reconciles(self):
         self.exercise_append(PROP)

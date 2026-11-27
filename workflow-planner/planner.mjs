@@ -332,8 +332,9 @@ function hasExhaustedPropGraph(run,readTasks){
  return plan.tasks.every(task=>{
   const row=byId.get(task.id);
   if(!exactPropTask(row,task))return false;
-  if(row.status==='completed')return !blocked.has(task.dependsOn)&&isPropRef(task.key,row.result_ref);
-  if(row.result_ref!==null||!(exhausted(row)||row.status==='pending'&&blocked.has(task.dependsOn)))return false;
+  const blockedParent=[task.dependsOn,...(task.additionalDependencies??[])].some(id=>blocked.has(id));
+  if(row.status==='completed')return !blockedParent&&isPropRef(task.key,row.result_ref);
+  if(row.result_ref!==null||!(exhausted(row)||row.status==='pending'&&blockedParent))return false;
   blocked.add(row.task_id);return true;
  });
 }

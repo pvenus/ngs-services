@@ -13,15 +13,16 @@ function binding(run){
  const body=propValidator[requestType](payload,projectId);
  need(sha(body)===payloadSha256);
  return {officialRequestId,projectId,propId:payload.propId,requestSha256:payloadSha256,
+  ...(payload.presentationProfile?{presentationProfile:payload.presentationProfile}:{}),
   ...(requestType===propGenerateType?{designContextSha256:payload.designContextSha256,motion:payload.motion==='subtle'?'subtle':'still'}:
    requestType===propRegenerateType?{operation:'regenerate',source:payload.source,designContextSha256:payload.designContextSha256,motion:payload.motion==='subtle'?'subtle':'still'}:
    {operation:'append-animation',source:payload.source,animationId:payload.motionId})};
 }
-function checkMedia(v,motion,lane){
- const max=lane==='detail'?2048:512;
+function checkMedia(v,motion,lane,small=false){
+ const max=lane==='detail'?2048:512,min=small&&lane!=='detail'?2:12;
  need(exactProp(v,['assetId','sha256','bytes','width','height','mediaType','frameDurationsMs'])&&
   propHash(v.sha256)&&v.assetId===v.sha256+'.png'&&positive(v.bytes,16*1024*1024)&&v.bytes>=57&&
-  positive(v.width,max)&&v.width>=12&&positive(v.height,max)&&v.height>=12&&Array.isArray(v.frameDurationsMs));
+  positive(v.width,max)&&v.width>=min&&positive(v.height,max)&&v.height>=min&&Array.isArray(v.frameDurationsMs));
  if(motion==='still')need(v.mediaType==='image/png'&&v.frameDurationsMs.length===0);
  else need(v.mediaType==='image/apng'&&v.frameDurationsMs.length>=2&&v.frameDurationsMs.length<=96&&
   v.frameDurationsMs.every(d=>positive(d,1000)&&d>=10)&&
@@ -34,15 +35,21 @@ function checkRegion(v,action,media){
   Number.isSafeInteger(v.y)&&v.y>=0&&positive(v.width,media.width)&&positive(v.height,media.height)&&
   v.x+v.width<=media.width&&v.y+v.height<=media.height);
 }
-function checkPair(media,motion,members,detailKey,pixelKey){
- need(exactProp(media,['detail','pixel']));
+function checkPair(media,motion,members,detailKey,pixelKey,small=false){
+ const spirit=motion==='still'&&exactProp(media,['detail','pixel','spirit']);
+ need(spirit||exactProp(media,['detail','pixel']));
  const {detail,pixel}=media;
- checkMedia(detail,motion,'detail');checkMedia(pixel,motion,'pixel');
+ checkMedia(detail,motion,'detail');checkMedia(pixel,motion,'pixel',small||spirit);
+ if(spirit){
+  checkMedia(media.spirit,'still','spirit',true);
+  for(const lane of [pixel,media.spirit])for(const d of ['width','height'])need(lane[d]===Math.round(detail[d]/5));
+ }
  need(pixel.width<=detail.width&&pixel.height<=detail.height&&pixel.width*pixel.height<detail.width*detail.height&&
   Math.abs(pixel.width*detail.height-pixel.height*detail.width)<=Math.max(detail.width,detail.height));
  need(matches(detail.frameDurationsMs,pixel.frameDurationsMs));
  if(members)need(members.some(x=>x.key===detailKey&&x.ref===propRef(detailKey,detail.sha256))&&
-  members.some(x=>x.key===pixelKey&&x.ref===propRef(pixelKey,pixel.sha256)));
+  members.some(x=>x.key===pixelKey&&x.ref===propRef(pixelKey,pixel.sha256))&&
+  (!spirit||members.some(x=>x.key===propKeys.spirit&&x.ref===propRef(propKeys.spirit,media.spirit.sha256))));
 }
 const cleanTitle=s=>typeof s==='string'&&s.isWellFormed()&&s.trim()===s&&s.length>0&&
  [...s].length<=160&&!/[\p{Cc}\u2028\u2029]/u.test(s);
@@ -51,7 +58,7 @@ const validId=s=>typeof s==='string'&&s.length===81&&/^request\.official\.[a-f0-
 function checkClip(clip,base,members){
  need(exactProp(clip,['id','title','officialRequestId','requestSha256','media'])&&clipId(clip.id)&&
   cleanTitle(clip.title)&&validId(clip.officialRequestId)&&propHash(clip.requestSha256));
- checkPair(clip.media,'subtle',members,propKeys.animDetail,propKeys.animPixel);
+ checkPair(clip.media,'subtle',members,propKeys.animDetail,propKeys.animPixel,Object.hasOwn(base,'spirit'));
  for(const lane of ['detail','pixel'])need(clip.media[lane].width===base[lane].width&&clip.media[lane].height===base[lane].height);
 }
 function checkGeneralManifest(m){
@@ -69,6 +76,8 @@ function checkGeneralManifest(m){
 function checkManifest(m,scope,members,prior){
  checkGeneralManifest(m);
  need(['officialRequestId','projectId','propId','requestSha256'].every(key=>scope[key]===m[key]));
+ if(!scope.operation||scope.operation==='regenerate')
+  need(Object.hasOwn(m.media,'spirit')===(scope.presentationProfile==='spirit-v1'));
  if(!scope.operation){
   need(prior===undefined&&m.designContextSha256===scope.designContextSha256&&m.revision===1&&m.parentSha256===null&&
    m.animations.length===(scope.motion==='subtle'?1:0));
