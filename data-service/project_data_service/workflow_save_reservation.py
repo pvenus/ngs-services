@@ -1,10 +1,13 @@
 """A short, exact SQLite reservation for a document publication."""
 from contextlib import closing
 from http.client import HTTPException
+import logging
 import sqlite3
 import time
 
 from .workflow_delete_claim import require
+
+LOG=logging.getLogger(__name__)
 
 class SaveReservation:
     def __init__(self, verifier, claim):
@@ -67,6 +70,7 @@ def expire_document_saves(verifier, *, now_ms=None):
             return []
         pending=[dict(r) for r in db.execute("""SELECT task_id,official_request_id,updated_at,save_started_at
             FROM workflow_tasks WHERE worker_type='document' AND status='running' AND result_ref IS NULL
+              AND task_key IN ('planning_overview','planning_portrait_art','planning_representative','planning_idle','planning_combat')
               AND save_started_at<=? ORDER BY save_started_at LIMIT 10""",(now-DOCUMENT_SAVE_TIMEOUT_MS,))]
     released=[]
     for row in pending:
@@ -77,7 +81,10 @@ def expire_document_saves(verifier, *, now_ms=None):
                  AND worker_type='document' AND status='running' AND result_ref IS NULL""",
                 (max(now,row['updated_at']+1),row['task_id'],row['official_request_id'],row['updated_at'],row['save_started_at']))
             if changed:released.append(row['task_id'])
-        except (OSError,ValueError,sqlite3.Error):
-            # A busy DB can be checked again on the next sweep.
-            continue
+        except sqlite3.Error as error:
+            code=getattr(error,'sqlite_errorcode',0) or 0
+            LOG.warning('document save expiry state write deferred reason=%s',
+                        'SQLITE_BUSY' if code&255==sqlite3.SQLITE_BUSY else 'SQLITE_ERROR')
+        except (OSError,ValueError):
+            LOG.warning('document save expiry state write deferred reason=WORKFLOW_DB_UNAVAILABLE')
     return released
