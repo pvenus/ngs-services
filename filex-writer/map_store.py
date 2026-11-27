@@ -100,8 +100,10 @@ def validate_decorations(graph):
     need(type(d)is list and len(d)<=48 and type(regions)is list)
     ids={r.get('id') for r in regions if type(r)is dict}
     found=set()
+    fields={'id','regionId','prop','anchor','scale','visibility'}
     for row in d:
-        need(type(row)is dict and set(row)=={'id','regionId','prop','anchor','scale','visibility'} and
+        need(type(row)is dict and (set(row)==fields or (set(row)==fields|{'rotation'} and
+             type(row['rotation'])is int and 0<=row['rotation']<360)) and
              match(row['id'],KEY) and row['id'] not in found and match(row['regionId'],KEY) and row['regionId'] in ids and
              prop_pin(row['prop']) and type(row['scale'])is int and 10<=row['scale']<=300 and
              row['visibility'] in ('both','pixel','cinematic'))

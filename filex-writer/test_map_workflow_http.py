@@ -235,10 +235,11 @@ s.close();"""
         changed_visibility=move_decor('2',1,decor_id,{**valid,'decorations':[{**decoration,'visibility':'both'}]})
         self.assertEqual(call(packet={'claim':changed_visibility},prefix=UPDATE,status=409),
             {'error':'FILE_UPDATE_MAP_DECORATION_PROP_UNAVAILABLE'})
-        omission=move_decor('3',1,decor_id,valid)
+        rotated={**decoration,'rotation':75}
+        omission=move_decor('3',1,decor_id,{**valid,'decorations':[rotated]})
         output=call(packet={'claim':omission},prefix=UPDATE)
         self.assertEqual(call(packet={'claim':omission},prefix=UPDATE),output)
-        self.assertEqual(map_revision(store,{'mapId':decor_id,'revision':2})['graph']['decorations'],[decoration])
+        self.assertEqual(map_revision(store,{'mapId':decor_id,'revision':2})['graph']['decorations'],[rotated])
         orphan=move_decor('4',2,omission['officialRequestId'],{**valid,
             'regions':[row for row in valid['regions'] if row['id']!='zone-2'],
             'connections':[edge for edge in valid['connections'] if not ('zone-2' in (edge['from'],edge['to']))]})

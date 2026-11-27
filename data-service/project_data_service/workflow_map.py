@@ -28,8 +28,10 @@ def rect(v):
 def validate_decorations(v,regions):
     need(type(v)is list and len(v)<=48)
     found=set()
+    fields=('id','regionId','prop','anchor','scale','visibility')
     for d in v:
-        need(keys(d,('id','regionId','prop','anchor','scale','visibility')) and
+        need((keys(d,fields) or (keys(d,fields+('rotation',)) and
+                                type(d['rotation'])is int and 0<=d['rotation']<360)) and
              match(d['id'],r'[a-z][a-z0-9-]{0,31}') and d['id'] not in found and
              type(d['regionId'])is str and d['regionId'] in regions and prop_pin(d['prop']) and
              point(d['anchor']) and type(d['scale'])is int and 10<=d['scale']<=300 and d['visibility'] in VISIBILITY)
