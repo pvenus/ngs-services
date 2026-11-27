@@ -123,11 +123,19 @@ s.close();"""
         bad={**puzzle,'layout':{**puzzle['layout'],'well':{**puzzle['layout']['well'],'regionId':'zone-4'}}}
         bad_claim=stage('b',{**u,'puzzles':[bad]},'assembly.update',13)
         self.assertEqual(call('/read',{'claim':bad_claim},409),{'error':'ASSEMBLY_ROUTE_NOT_PLAYABLE'})
-        good={**puzzle,'scale':scale,'layout':{**puzzle['layout'],'well':{**puzzle['layout']['well'],'x':71}}}
+        # The same cross-room edit becomes valid as soon as the map publishes its return path.
+        map_revision(c,{'schemaVersion':'ngs.map-metadata.v1','projectId':'binari','mapId':map_id,
+                        'officialRequestId':'request.official.'+'7'*64,'updatedAt':13,'revision':2,
+                        'graph':{**graph,'connections':graph['connections']+[
+                            {'from':'zone-4','to':'zone-3'},{'from':'zone-3','to':'zone-2'}]}},True)
+        good={**bad,'scale':scale,'layout':{**bad['layout'],'well':{**bad['layout']['well'],'x':71}}}
         edit=stage('c',{**u,'puzzles':[good]},'assembly.update',14)
         prepared=call('/read',{'claim':edit})['state'];second=call('',{'claim':edit,'state':prepared})
         complete(edit,second)
-        self.assertEqual(json.loads((root/'2.json').read_text())['puzzles'][0]['scale'],scale)
+        saved=json.loads((root/'2.json').read_text())
+        self.assertEqual(saved['puzzles'][0]['scale'],scale)
+        self.assertEqual(saved['puzzles'][0]['layout']['well']['regionId'],'zone-4')
+        self.assertEqual(saved['map'],st1['map'])  # immutable provenance; no rebind or rewrite
         self.assertNotIn('scale',json.loads((root/'1.json').read_text())['puzzles'][0])
         self.assertEqual(call('/result',{'officialRequestId':edit['officialRequestId']}),second)
         self.assertEqual((root/'1.json').read_bytes(),initial)

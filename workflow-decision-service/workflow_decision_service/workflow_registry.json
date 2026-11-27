@@ -2127,7 +2127,7 @@
 {
   "candidateCount": 1,
   "dependsOn": [],
-  "description": "공식 요청에서 확정한 퍼즐 배치를 기존 맵 리비전에 그대로 반영한다. 모델을 호출하지 않는다.",
+  "description": "공식 요청의 퍼즐 배치를 같은 맵 ID의 최신 게시 동선으로 검증하고 저장한다. 모델을 호출하지 않는다.",
   "generationKind": "structure",
   "id": "assembly.update",
   "inputs": [

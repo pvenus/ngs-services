@@ -84,7 +84,8 @@ class WorkflowAssembly(WorkflowCinematic):
             prior=self.cine('head',{'assemblyId':aid},missing=True)
             if prior is None or prior['revision']!=p['expectedRevision']:raise CinematicConflict('ASSEMBLY_REVISION_CONFLICT')
             title=prior['title'];mapping=prior['map'];rows=p['puzzles']
-            m=self.cine('map',mapping)
+            # The stored revision is publication provenance, not the live map dependency.
+            m=self.cine('map',{'mapId':mapping['mapId']})
             if not playable(m['graph'],rows):raise CinematicConflict('ASSEMBLY_ROUTE_NOT_PLAYABLE')
             unique={tuple(sorted(v.items())):v for x in rows for v in x['bindings'].values()}
             need(self.prop({'pins':list(unique.values())})=={'ok':True})

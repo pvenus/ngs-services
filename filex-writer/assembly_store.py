@@ -73,7 +73,8 @@ def call(store,operation,body):
         if h:
             previous=revision(store,p,h['revision'])
             need(previous['officialRequestId']==h['officialRequestId'] and previous['title']==body['title'] and previous['map']==body['map'])
-            m=map_state(store,body['map'])
+            # Check the current map while holding the same storage lock as publication.
+            m=map_state(store,{'mapId':body['map']['mapId']})
         else:
             need(body['assemblyId']==body['officialRequestId'])
             m=map_state(store,{'mapId':body['map']['mapId']})

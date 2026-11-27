@@ -37,3 +37,5 @@ The PDS loopback workflow uses
 `/v1/assemblies/ownership/workflow-assembly`, with readiness
 `workflow.assembly.v1`. The browser reads the replica rather than acquiring
 worker claims or direct Filex permissions.
+
+Map revisions in older or new assembly metadata record publication provenance. Editing an existing assembly validates placement against the latest complete published graph for its map ID. Play clients resolve by map ID, not by that recorded revision, so a portal update does not rewrite assembly data.
