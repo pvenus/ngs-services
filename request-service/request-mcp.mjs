@@ -1,3 +1,4 @@
+import {assemblyTypes,assemblyPayloadSchemas} from './assembly-contract.mjs';
 import {mapTypes,mapPayloadSchemas} from './map-contract.mjs';
 import {fileDeleteType,fileDeleteSchema,propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot,cinematicDeleteRoot,mapDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
@@ -27,7 +28,7 @@ const maxBody=96*1024;
 const known={
  [cinematicInvalid]:400,[cinematicUnavailable]:503,[cinematicSourceMissing]:404,[cinematicLegacyRetired]:422,[cinematicPlaybackStale]:409,
  [propGenerateInvalid]:400,[propGenerateUnavailable]:503,[propGenerateMotionUnavailable]:503,[propMutationUnavailable]:503,
- NGS_FILE_DELETE_PAYLOAD_INVALID:400,NGS_FILE_DELETE_UNAVAILABLE:503,NGS_MAP_PAYLOAD_INVALID:400,
+ NGS_FILE_DELETE_PAYLOAD_INVALID:400,NGS_FILE_DELETE_UNAVAILABLE:503,NGS_MAP_PAYLOAD_INVALID:400,NGS_ASSEMBLY_PAYLOAD_INVALID:400,
  [propImageInvalid]:400,[propImageUnavailable]:503,
  REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
  NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID:400,NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID:400,NGS_AUDIO_GENERATE_PAYLOAD_INVALID:400,NGS_AUDIO_DELETE_PAYLOAD_INVALID:400,
@@ -141,9 +142,9 @@ const motion2DPayload={type:'object',properties:{
  label:{type:'string',minLength:1,maxLength:motion2DLabelLimit},
  },required:['schemaVersion','projectId','sourcePresetId','variantPresetId','label'],additionalProperties:false};
 const tool={
- name:submitTool,description:'Register an exact typed NPC, NPC document add/update, concept category, BGM generation, BGM removal, BGM separation, 2D motion-preset conversion, selected NPC animation, or local map workflow without executing it.',
+ name:submitTool,description:'Register an exact typed NPC, NPC document add/update, concept category, BGM generation, BGM removal, BGM separation, 2D motion-preset conversion, selected NPC animation, or local map/assembly workflow without executing it.',
  inputSchema:{type:'object',properties:{
-  sourceId:{const:'local'},requestType:{enum:['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,...mapTypes]},
+  sourceId:{const:'local'},requestType:{enum:['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,...mapTypes,...assemblyTypes]},
   idempotencyKey:{type:'string',minLength:1,maxLength:200},payload:{type:'object'},
  },required:['sourceId','requestType','idempotencyKey','payload'],additionalProperties:false,
  oneOf:[{properties:{requestType:{const:'npc.workflow'},payload:{oneOf:[npcLegacyPayload,npcSelectionPayload,npcBasicPayload]}}},
@@ -155,6 +156,7 @@ const tool={
   {properties:{requestType:{const:audioSeparateType},payload:audioSeparatePayload}},
   {properties:{requestType:{const:motion2DRequestType},payload:motion2DPayload}},
   {properties:{requestType:{const:npcAnimationRegenerateType},payload:npcAnimationRegeneratePayload}},
+  ...assemblyTypes.map((type,i)=>({properties:{requestType:{const:type},payload:assemblyPayloadSchemas[i]}})),
   ...[...mapTypes,mapTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:mapPayloadSchemas[i]}}))]},
  outputSchema:{type:'object',properties:{officialRequestId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
   status:{const:'registered'}},required:['officialRequestId','status'],additionalProperties:false},

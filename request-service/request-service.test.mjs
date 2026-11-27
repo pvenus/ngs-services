@@ -455,7 +455,7 @@ const conceptExisting=(operation,categoryId='concept.test-fixture')=>({...legacy
 test('exact concept envelopes reject mismatched families, unsafe placement, legacy extras and malformed text',async t=>{
  const {directory,path}=folder(t),{submit,rpc}=await listener(t,directory);
  const schema=(await rpc('tools/list',{})).result.tools[0].inputSchema;
- assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','audio.separate','motion-preset.convert-2d','npc.animation.regenerate','map.generate','map.update']);
+ assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','audio.separate','motion-preset.convert-2d','npc.animation.regenerate','map.generate','map.update','assembly.generate','assembly.update']);
  assert.deepEqual(schema.oneOf[1].properties.payload.required,['schemaVersion','projectId','operation','categoryId','groupId','title','outline','requirements']);
  const expected={error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400};
  for(const bad of [
@@ -933,4 +933,24 @@ test('map folder deletion advertises only its dedicated capability and pins a si
   assert.match(JSON.stringify(await submit(bad)),/NGS_FILE_DELETE_PAYLOAD_INVALID/);
  assert.equal((await submit(payload)).result.structuredContent.status,'registered');
  assert.equal(read(path).length,1);
+});
+
+test('assembly official request families advertise exact schemas and accept removing the last puzzle',async t=>{
+ const {directory}=folder(t),api=await listener(t,directory);
+ const schema=(await api.rpc('tools/list',{})).result.tools[0].inputSchema;
+ const mapId='request.official.'+'a'.repeat(64);
+ const generate={sourceId:'local',requestType:'assembly.generate',idempotencyKey:'assembly-first',
+  payload:{schemaVersion:'ngs.assembly-generate.v1',projectId:'binari',title:'굿터',mapId,
+  puzzleType:'binari.ritual-well-water-demo',intent:'웰 테스트'}};
+ const gate=schema.oneOf.find(x=>x.properties.requestType.const==='assembly.generate');
+ assert.equal(gate.properties.payload.properties.schemaVersion.const,generate.payload.schemaVersion);
+ const {officialRequestId:assemblyId,status}= (await api.submit(generate)).result.structuredContent;
+ assert.equal(status,'registered');
+ const invalid=(await api.submit({...generate,idempotencyKey:'invalid',payload:{...generate.payload,title:' '}})).result.structuredContent;
+ assert.equal(invalid.error,'NGS_ASSEMBLY_PAYLOAD_INVALID');
+ const update={sourceId:'local',requestType:'assembly.update',idempotencyKey:'assembly-edit',
+  payload:{schemaVersion:'ngs.assembly-update.v1',projectId:'binari',assemblyId,expectedRevision:1,puzzles:[]}};
+ assert.equal((await api.submit(update)).result.structuredContent.status,'registered');
+ const rows=(await api.workflow({limit:10})).result.structuredContent.requests;
+ assert.deepEqual(new Set(rows.map(x=>x.requestType)),new Set(['assembly.generate','assembly.update']));
 });

@@ -42,7 +42,7 @@ _NPC_POST={'/v1/asset','/v1/batch','/v1/cas','/v1/create-character','/v1/restore
  '/v1/workflow/portrait-combat-direction','/v1/workflow/portrait-combat-reference'}
 _AUDIO_POST={'/v1/workflow/audio','/v1/workflow/audio/read','/v1/workflow/audio-separate',
  '/v1/workflow/audio-separate/read','/v1/workflow/audio-separate/asset','/v1/storage/delete-target'}
-_PROPS_POST={'/v1/workflow/props','/v1/workflow/props/read','/v1/workflow/props/head','/v1/workflow/props/asset','/v1/storage/delete-target'}
+_PROPS_POST={'/v1/workflow/props','/v1/workflow/props/read','/v1/workflow/props/head','/v1/workflow/props/asset','/v1/workflow/props/assembly-bindings','/v1/storage/delete-target'}
 _EXACT=frozenset()
 _ALLOW=MappingProxyType({
  'concept':(frozenset(_CONCEPT_GET),frozenset(_CONCEPT_POST)),
@@ -53,7 +53,7 @@ _ALLOW=MappingProxyType({
  'props':(_EXACT,frozenset(_PROPS_POST)),
  'cinematics':(_EXACT,frozenset('/v1/workflow/cinematics'+p for p in
   ('','/asset','/source-status','/result','-sequence','-sequence/frame','-sequence/result','-playback','-playback/target-status','-playback/result','-source','-source/result','-source/reconcile',
-   '-sequence-remove','-sequence-remove/result','-background','-background/result','-background/reconcile','-background/asset','-background/source-status','-background/identity'))|{'/v1/storage/delete-target','/v1/storage/delete-target/cinematic-inventory','/v1/workflow/maps','/v1/workflow/maps/context','/v1/workflow/maps/revision'}),
+   '-sequence-remove','-sequence-remove/result','-background','-background/result','-background/reconcile','-background/asset','-background/source-status','-background/identity'))|{'/v1/storage/delete-target','/v1/storage/delete-target/cinematic-inventory','/v1/workflow/maps','/v1/workflow/maps/context','/v1/workflow/maps/revision','/v1/workflow/assemblies','/v1/workflow/assemblies/head','/v1/workflow/assemblies/revision','/v1/workflow/assemblies/list','/v1/workflow/assemblies/map'}),
 })
 _DYNAMIC=MappingProxyType({
  'concept':(('GET',r'/v1/requests/'+RECEIPT_TOKEN),),
@@ -100,8 +100,8 @@ def _special_caps(profile,folder):
     entries={
        'media':{'mediaArtifactsV1':True},
        'audio':{'workflowAudioResultV1':True,'workflowAudioSeparateV1':True,'workflowAudioDeleteV1':True},
-       'props':{'workflowPropPackageV1':True,'workflowPinnedPropFolderDeleteV1':True,'workflowPropAnimationRemoveV1':True},
-       'cinematics':{'workflowMapMetadataV1':True,'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True,'workflowCinematicSourceV1':True,'workflowBackgroundSourceV1':True,'workflowBackgroundPixelV1':True,'workflowBackgroundAnimationV1':True,'workflowCinematicSequenceRemoveV1':True,'workflowPinnedCinematicTargetDeleteV1':True,'workflowPinnedBackgroundFileDeleteV1':True,'workflowPinnedMapFolderDeleteV1':True},
+       'props':{'workflowPropPackageV1':True,'workflowPropAssemblyBindingsV1':True,'workflowPinnedPropFolderDeleteV1':True,'workflowPropAnimationRemoveV1':True},
+       'cinematics':{'workflowMapMetadataV1':True,'workflowAssemblyV1':True,'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True,'workflowCinematicSourceV1':True,'workflowBackgroundSourceV1':True,'workflowBackgroundPixelV1':True,'workflowBackgroundAnimationV1':True,'workflowCinematicSequenceRemoveV1':True,'workflowPinnedCinematicTargetDeleteV1':True,'workflowPinnedBackgroundFileDeleteV1':True,'workflowPinnedMapFolderDeleteV1':True},
     }
     return {'namespace':CANONICAL_NAMESPACE+folder+'/',**entries[profile]} if profile in entries else None
 

@@ -155,6 +155,45 @@ class PropPackageStore(Store):
     def head(self,prop):
         need(prop_id(prop))
         with self.lock():return self.head_locked(prop)
+    def assembly_bindings(self,query):
+        from assembly_contract import ROLES,pin as assembly_pin
+        generate=keys(query,())
+        need(generate or keys(query,('pins',)) and type(query['pins']) is list and len(query['pins'])<=128 and
+             all(assembly_pin(q) for q in query['pins']))
+        with self.lock():
+            self.check_root()
+            def verified(q,head):
+                m=self.release_locked(q,head)
+                self.asset_locked(q['propId'],m,m['media']['pixel']['assetId'])
+                return q
+            if not generate:
+                for q in query['pins']:
+                    if not self.verify_managed(self.beneath(q['propId'])):raise FileNotFoundError('assembly prop missing')
+                    verified(q,self.head_locked(q['propId']))
+                return {'ok':True}
+            candidates={k:[] for k in ROLES}
+            for dir in self.root.iterdir():
+                name=dir.name
+                if not prop_id(name):continue
+                role='table' if name.startswith('ritual-seal-altar-') else 'well' if name.startswith('ritual-seal-well-v') else 'lid' if name.startswith('ritual-seal-well-cover-') else 'bowl' if 'water-bowl' in name or name.startswith('ritual-seal-ash-catcher-') else None
+                if role is None:continue
+                try:
+                    path=self.beneath(name)
+                    if not self.verify_managed(path):continue
+                    pointer=self.beneath(name,'metadata.json')
+                    h=self.head_locked(name)
+                    if h:candidates[role].append((int(role=='bowl' and 'water-bowl' in name),pointer.stat().st_mtime_ns,name,h))
+                except (FileNotFoundError,ValueError,Conflict):continue
+            out={}
+            for role in ROLES:
+                for _,_,name,h in sorted(candidates[role],reverse=True):
+                    try:
+                        out[role]=verified({k:h[k] for k in PIN_KEYS},h)
+                        break
+                    except (FileNotFoundError,ValueError,Conflict):continue
+                else:raise FileNotFoundError('assembly prop role missing: '+role)
+            return {'bindings':out}
+
     def release_locked(self,q,head):
         pin(q);prop=q['propId'];n=q['revision']
         if head is None or n>head['revision']:raise FileNotFoundError('prop unpublished')

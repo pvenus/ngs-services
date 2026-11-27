@@ -1,3 +1,4 @@
+import {assemblyTypes,assemblySchemas,validateAssembly} from './assembly-contract.mjs';
 import {mapTypes,mapSchemas,validMapRequest,mapCanonical} from './map-contract.mjs';
 import {fileDeleteType,fileDeleteSchema,validateFileDelete} from './file-delete-envelope.mjs';
 /** Known typed workflow families accepted by the Request Service MCP. */
@@ -22,6 +23,7 @@ import {cinematicType,cinematicSchema,validateCinematic,cinematicSequenceType,ci
 
 const fields=['sourceId','requestType','idempotencyKey','payload'];
 const workflowFamilies=new Map([
+ ...assemblyTypes.map((type,i)=>[type,{schemas:[assemblySchemas[i]],validate:v=>validateAssembly(v,type)}]),
  ...mapTypes.map((type,i)=>[type,{schemas:i===0?[mapSchemas[0],mapSchemas[2]]:[mapSchemas[1]],validate:(v)=>{if(!validMapRequest(v,type))throw Error('NGS_MAP_PAYLOAD_INVALID');return mapCanonical(v);}}]),
  [fileDeleteType,{schemas:[fileDeleteSchema],validate:validateFileDelete}],
  ...extraCinematicTypes.map(type=>[type,{schemas:[extraCinematicRequests[type].schema,...(type===backgroundAnimationType?[backgroundAnimationStageSchema]:[])],
@@ -73,4 +75,4 @@ function validateSubmit(value,sourceId,allowedType){
 }
 
 export const validateOfficialSubmit=value=>validateSubmit(value,'local',()=>true);
-export const validateVerifiedSpaceSubmit=value=>validateSubmit(value,'space',type=>!mapTypes.includes(type));
+export const validateVerifiedSpaceSubmit=value=>validateSubmit(value,'space',type=>![...mapTypes,...assemblyTypes].includes(type));

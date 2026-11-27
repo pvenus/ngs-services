@@ -2084,9 +2084,89 @@
       "const": "binari"
     }
   }
+},
+{
+  "candidateCount": 1,
+  "dependsOn": [],
+  "description": "이미 게시된 맵과 프랍을 고정해 양방향 이동이 가능한 우물 퍼즐을 결정적으로 조립한다. 모델을 호출하지 않는다.",
+  "generationKind": "structure",
+  "id": "assembly.generate",
+  "inputs": [
+    "authorized assembly request",
+    "published map revision",
+    "published prop asset digests"
+  ],
+  "modelCalls": 0,
+  "outputPolicy": {
+    "kind": "single-result",
+    "count": 1,
+    "selection": "none",
+    "apply": "authorized-mutation",
+    "authorization": "same-authorized-actor-target-and-action-or-fail"
+  },
+  "outputs": [
+    "immutable assembly metadata revision"
+  ],
+  "provides": [
+    "assembly.metadata"
+  ],
+  "requires": [],
+  "selectable": true,
+  "workerId": "document",
+  "requestRequirements": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "ngs.assembly-generate.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "const": "binari"
+    }
+  }
+},
+{
+  "candidateCount": 1,
+  "dependsOn": [],
+  "description": "공식 요청에서 확정한 퍼즐 배치를 기존 맵 리비전에 그대로 반영한다. 모델을 호출하지 않는다.",
+  "generationKind": "structure",
+  "id": "assembly.update",
+  "inputs": [
+    "authorized assembly request",
+    "published map revision",
+    "published prop asset digests"
+  ],
+  "modelCalls": 0,
+  "outputPolicy": {
+    "kind": "single-result",
+    "count": 1,
+    "selection": "none",
+    "apply": "authorized-mutation",
+    "authorization": "same-authorized-actor-target-and-action-or-fail"
+  },
+  "outputs": [
+    "immutable assembly metadata revision"
+  ],
+  "provides": [
+    "assembly.metadata"
+  ],
+  "requires": [],
+  "selectable": true,
+  "workerId": "document",
+  "requestRequirements": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "ngs.assembly-update.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "const": "binari"
+    }
+  }
 }
   ],
   "requestTypes": {
+    "assembly.generate":{"stageIds":["assembly.generate"],"eligibleStageIds":["assembly.generate"]},
+    "assembly.update":{"stageIds":["assembly.update"],"eligibleStageIds":["assembly.update"]},
     "map.generate":{"stageIds":["map.generate"],"eligibleStageIds":["map.generate"]},
     "map.update":{"stageIds":["map.update"],"eligibleStageIds":["map.update"]},
   "background.animation.workflow": {

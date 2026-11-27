@@ -165,14 +165,14 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                 return self.reply(401, {'error':'UNAUTHORIZED'})
             try:
                 url = urlsplit(self.path)
-                if url.path in ('/v1/workflow/props','/v1/workflow/props/read','/v1/workflow/props/asset','/v1/workflow/props/head'):
+                if url.path in ('/v1/workflow/props','/v1/workflow/props/read','/v1/workflow/props/asset','/v1/workflow/props/head','/v1/workflow/props/assembly-bindings'):
                     from prop_package_store import PropPackageStore,WRITER,MAX_BODY,keys
                     if not isinstance(workflow_props,PropPackageStore):
                         return self.reply(404,{'error':'NOT_FOUND'})
                     n=self.headers.get('Content-Length','')
                     if (self.command!='POST' or url.query or self.headers.get('Origin') is not None or
                        self.headers.get('Transfer-Encoding') is not None or self.headers.get('Content-Type')!='application/json' or
-                       not n.isdecimal() or len(n)>10 or not 0<int(n)<=(MAX_BODY if url.path==WRITER else 4096)):
+                       not n.isdecimal() or len(n)>10 or not 0<int(n)<=(MAX_BODY if url.path==WRITER else 64*1024 if url.path==WRITER+'/assembly-bindings' else 4096)):
                         raise ValueError('workflow props transport')
                     self.connection.settimeout(20)
                     raw=self.rfile.read(int(n))
@@ -183,6 +183,7 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         return result
                     body=json.loads(raw.decode('utf-8'),object_pairs_hook=distinct)
                     if url.path==WRITER:return self.reply(200,workflow_props.publish(body))
+                    if url.path==WRITER+'/assembly-bindings':return self.reply(200,workflow_props.assembly_bindings(body))
                     if url.path==WRITER+'/head':
                         if not keys(body,('propId',)):raise ValueError('prop head input')
                         return self.reply(200,{'pointer':workflow_props.head(body['propId'])})
@@ -473,12 +474,16 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         routes.update({MAP_ROUTE:lambda p:map_revision(store,p,True),
                           MAP_ROUTE+'/context':lambda p:map_context(store,p),
                           MAP_ROUTE+'/revision':lambda p:map_revision(store,p)})
+                    from assembly_store import ASSEMBLY,call as assembly_call
+                    if hasattr(store,'cinematic_source_generate'):
+                        routes.update({ASSEMBLY:lambda p:assembly_call(store,'publish',p),
+                         **{ASSEMBLY+'/'+op:(lambda p,op=op:assembly_call(store,op,p)) for op in ('head','revision','list','map')}})
                     action=routes.get(url.path)
                     if self.command!='POST' or action is None:return self.reply(404,{'error':'NOT_FOUND'})
                     n=self.headers.get('Content-Length','')
                     if (url.query or self.headers.get('Origin') is not None or self.headers.get('Transfer-Encoding') is not None or
                         self.headers.get('Content-Type')!='application/json' or not n.isascii() or not n.isdecimal() or
-                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path in (CINEMATIC_ROUTE,SOURCE_ROUTE,BACKGROUND_ROUTE) else 6*1024*1024 if url.path==SEQUENCE_ROUTE+'/frame' else 64*1024 if url.path in (SEQUENCE_ROUTE,PLAYBACK_ROUTE,PLAYBACK_ROUTE+'/result',MAP_ROUTE) else 4096)):
+                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path in (CINEMATIC_ROUTE,SOURCE_ROUTE,BACKGROUND_ROUTE) else 6*1024*1024 if url.path==SEQUENCE_ROUTE+'/frame' else 64*1024 if url.path in (SEQUENCE_ROUTE,PLAYBACK_ROUTE,PLAYBACK_ROUTE+'/result',MAP_ROUTE,ASSEMBLY) else 4096)):
                         raise ValueError('cinematic transport')
                     def distinct(values):
                         out=dict(values)

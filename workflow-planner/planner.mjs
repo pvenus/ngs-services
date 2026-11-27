@@ -1,3 +1,4 @@
+import {assemblyTypes,assemblyStage,assemblyRef,validateAssembly} from './assembly-contract.mjs';
 import {mapTypes,mapSchemas,mapGenerateStages,mapStage,validMapRequest,mapCanonical,mapRoot} from './map-contract.mjs';
 import {fileDeleteType,fileDeleteTaskKey,validateFileDelete} from './file-delete-envelope.mjs';
 import {DatabaseSync} from 'node:sqlite';
@@ -39,9 +40,14 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,fileDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,...allCinematicTypes,...propTypes,...mapTypes].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,fileDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,...allCinematicTypes,...propTypes,...mapTypes,...assemblyTypes].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
+ if(assemblyTypes.includes(row.requestType)){
+  const body=validateAssembly(row.payload,row.requestType);
+  ensure(row.payload.schemaVersion===row.schemaVersion&&sha(body)===row.payloadSha256,'NGS_ASSEMBLY_PAYLOAD_INVALID');
+  return body;
+ }
  if(mapTypes.includes(row.requestType)){
   const body=mapCanonical(row.payload);
   ensure(validMapRequest(row.payload,row.requestType)&&row.payload.schemaVersion===row.schemaVersion&&sha(body)===row.payloadSha256,'NGS_MAP_PAYLOAD_INVALID');
@@ -70,6 +76,10 @@ export function buildPlan(row,{pixelPortraits=true,multiDependencies=false}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false){
+ if(assemblyTypes.includes(row.requestType))return {payload,tasks:[{
+  id:'workflow.task.'+sha(canonical([row.officialRequestId,assemblyStage])),key:assemblyStage,type:row.requestType,
+  workerType:'document',dependsOn:null,input:row.payload,
+ }]};
  if(mapTypes.includes(row.requestType)){
   const stages=row.schemaVersion===mapSchemas[2]?mapGenerateStages:[mapStage];
   const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
@@ -365,6 +375,7 @@ const failurePolicies=new Map([
  [cinematicPlaybackType,hasExhaustedSingleTask],
  [fileDeleteType,hasExhaustedSingleTask],
  ...mapTypes.map(type=>[type,hasExhaustedMapGraph]),
+ ...assemblyTypes.map(type=>[type,hasExhaustedSingleTask]),
  ...extraCinematicTypes.map(type=>[type,hasExhaustedSingleTask]),
  [backgroundAnimationType,(run,readTasks)=>{
   const outputs=backgroundAnimationRows(run,restoreStoredPlan(run),readTasks.all(run.official_request_id,8));
@@ -470,6 +481,15 @@ export class PlannerStore{
     ORDER BY r.registered_at,r.official_request_id`).all();
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    for(const row of candidates){
+    if(assemblyTypes.includes(row.request_type)){
+     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,2);
+     if(!plan||rows.length!==1||!exactStoredTask(rows[0],plan.tasks[0]))continue;
+     const {assemblyId=row.official_request_id,expectedRevision=0}=plan.tasks[0].input;
+     const resultRef=assemblyRef(assemblyId,expectedRevision+1);
+     if(rows[0].result_ref===resultRef)result.push({official_request_id:row.official_request_id,
+      publication:{family:row.request_type,officialRequestId:row.official_request_id,resultRef}});
+     continue;
+    }
     if(mapTypes.includes(row.request_type)){
      const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,4);
      if(!plan||rows.length!==plan.tasks.length||!plan.tasks.every((t,i)=>rows.some(r=>
@@ -554,7 +574,7 @@ export class PlannerStore{
  }
  async verifyCompletion({publication}){
   if(!publication)return true;
-  if(mapTypes.includes(publication.family)){
+  if(mapTypes.includes(publication.family)||assemblyTypes.includes(publication.family)){
    if(typeof this.#readCinematicPublication!=='function')return false;
    try{const r=await this.#readCinematicPublication(publication);return exact(r,['ok','resultRef'])&&r.ok===true&&r.resultRef===publication.resultRef;}catch{return false;}
   }
