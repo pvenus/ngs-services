@@ -3,6 +3,7 @@ import json,re
 V2='ngs.assembly-generate.v2'
 KINDS={'assembly.generate':('ngs.assembly-generate.v1',V2),'assembly.update':('ngs.assembly-update.v1',)}
 TYPE='binari.ritual-well-water-demo'
+SPIRIT_TYPE='binari.ritual-spirit-manifestation'
 STATE='ngs.assembly.v1'
 ROLES=('table','bowl','well','lid')
 LIMIT=65536
@@ -42,19 +43,26 @@ def affected_conditions_exist(previous,current,graph):
     portals={e['id'] for e in graph['connections'] if 'id' in e}
     return all(c==prior.get(k) or c['portalId'] in portals for k,c in condition_index(current).items())
 
-def puzzles(v):
+def puzzles(v,well_only=False):
     if type(v)is not list or not 0<=len(v)<=32:return False
     ids=set()
     fields=('id','type','layout','attachments','bindings')
     for p in v:
         optional=tuple(k for k in ('scale','portalConditions') if type(p)is dict and k in p)
-        if 'scale' in optional and not (keys(p['scale'],ROLES) and all(int_range(x,10,300) for x in p['scale'].values())):return False
-        if 'portalConditions' in optional and not valid_conditions(p['portalConditions']):return False
-        if not (keys(p,fields+optional) and slug(p['id']) and p['id'] not in ids and p['type']==TYPE and
-                keys(p['layout'],('altar','well')) and all(station(x) for x in p['layout'].values()) and
-                keys(p['attachments'],('bowl','lid')) and all(offset(x) for x in p['attachments'].values()) and
-                keys(p['bindings'],ROLES) and all(pin(x) for x in p['bindings'].values()) and
-                len({x['propId'] for x in p['bindings'].values()})==4):return False
+        if not (keys(p,fields+optional) and slug(p['id']) and p['id'] not in ids):return False
+        if p['type']==SPIRIT_TYPE and not well_only:
+            if 'portalConditions' in optional:return False
+            if not (keys(p['layout'],('spirit',)) and station(p['layout']['spirit']) and
+                    keys(p['attachments'],()) and keys(p['bindings'],('spirit',)) and pin(p['bindings']['spirit']) and
+                    ('scale' not in optional or keys(p['scale'],('spirit',)) and int_range(p['scale']['spirit'],10,300))):return False
+        else:
+            if 'scale' in optional and not (keys(p['scale'],ROLES) and all(int_range(x,10,300) for x in p['scale'].values())):return False
+            if 'portalConditions' in optional and not valid_conditions(p['portalConditions']):return False
+            if not (p['type']==TYPE and
+                    keys(p['layout'],('altar','well')) and all(station(x) for x in p['layout'].values()) and
+                    keys(p['attachments'],('bowl','lid')) and all(offset(x) for x in p['attachments'].values()) and
+                    keys(p['bindings'],ROLES) and all(pin(x) for x in p['bindings'].values()) and
+                    len({x['propId'] for x in p['bindings'].values()})==4):return False
         ids.add(p['id'])
     return True
 def content(v):
@@ -83,7 +91,7 @@ def payload(v,kind):
             v['schemaVersion'] in KINDS[kind] and v['projectId']=='binari' and
             ((clean(v['title'],100) and match(v['mapId'],OID) and clean(v['intent'],2000) and
               (puzzle_plan(v['puzzles']) if v2 else v['puzzleType']==TYPE)) if gen else
-            (match(v['assemblyId'],OID) and int_range(v['expectedRevision'],1,MAX_REV-1) and puzzles(v['puzzles']))))
+            (match(v['assemblyId'],OID) and int_range(v['expectedRevision'],1,MAX_REV-1) and puzzles(v['puzzles'],well_only=True))))
 def graph_reaches(graph,start):
     seen={start};pending=[start]
     edges={}
@@ -96,6 +104,9 @@ def playable(graph,rows):
     ids={r['id'] for r in graph['regions']}
     visit=graph_reaches(graph,graph['startRegionId'])
     for p in rows:
+        if p['type']==SPIRIT_TYPE:
+            if p['layout']['spirit']['regionId'] not in ids & visit:return False
+            continue
         a,w=(p['layout'][k]['regionId'] for k in ('altar','well'))
         if a not in ids or w not in ids or a not in visit or w not in visit or w not in graph_reaches(graph,a) or a not in graph_reaches(graph,w):return False
     return True

@@ -48,3 +48,11 @@ assembly ID, and the expected pin is the currently published
 publication before quarantining that one folder. A durable retirement marker
 prevents delayed generation or updates from recreating it. Neither its
 linked map nor any pinned prop is deleted.
+
+Manual edits may also add a `binari.ritual-spirit-manifestation` puzzle
+through the existing `file.update` target. Each such puzzle has one reachable
+`layout.spirit` station, one exact `bindings.spirit` prop pin, empty
+`attachments`, and optionally `scale.spirit` (10–300%). A new or changed
+binding must have both its pixel and reduced spirit assets at the pinned
+revision. It cannot carry the well puzzle's portal conditions. Initial
+assembly generation and already-queued legacy well requests remain unchanged.

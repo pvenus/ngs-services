@@ -1,6 +1,6 @@
 """Atomic assembly publication on the existing cinematic store and lock."""
 import json
-from assembly_contract import LIMIT,OID,int_range,keys,match,playable,state,wire,MAX_REV,affected_conditions_exist,condition_index
+from assembly_contract import LIMIT,OID,int_range,keys,match,playable,state,wire,MAX_REV,puzzles,affected_conditions_exist,condition_index
 from map_store import map_base,read_revision,REVISION,deletion_marker
 from server import Conflict
 
@@ -126,12 +126,14 @@ def call(store,operation,body):
             # Check the current map while holding the same storage lock as publication.
             m=map_state(store,{'mapId':body['map']['mapId']})
             if expected is None:
+                if not puzzles(previous['puzzles'],well_only=True) or not puzzles(body['puzzles'],well_only=True):
+                    raise Conflict('assembly spirit edits require file.update')
                 if condition_index(previous['puzzles'])!=condition_index(body['puzzles']):
                     raise Conflict('assembly portal conditions require file.update')
             elif not affected_conditions_exist(previous['puzzles'],body['puzzles'],m['graph']):
                 raise Conflict('assembly portal condition target changed')
         else:
-            need(not condition_index(body['puzzles']))
+            need(puzzles(body['puzzles'],well_only=True) and not condition_index(body['puzzles']))
             need(body['assemblyId']==body['officialRequestId'])
             m=map_state(store,{'mapId':body['map']['mapId']})
             if any(m[k]!=body['map'][k] for k in ('mapId','revision','officialRequestId')):raise Conflict('assembly map pin stale')

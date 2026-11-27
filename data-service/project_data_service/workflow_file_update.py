@@ -4,7 +4,7 @@ from .filex_read import canonical,digest
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,keys,match,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json,OFFICIAL,SAFE_INT
 from .filex_writer_binding import writer as connect
-from .assembly_contract import content as assembly_content,MAX_REV as ASSEMBLY_MAX_REV,playable,affected_conditions_exist,state as assembly_state
+from .assembly_contract import content as assembly_content,MAX_REV as ASSEMBLY_MAX_REV,SPIRIT_TYPE,playable,affected_conditions_exist,state as assembly_state
 from .workflow_assembly import WRITER as ASSEMBLY_WRITER,ref as assembly_ref
 from .workflow_map import WRITER as MAP_WRITER,graph_valid,changed_decoration_pins,ref as map_ref
 
@@ -89,8 +89,13 @@ class AssemblyMetadata:
         if not affected_conditions_exist(prior['puzzles'],rows,graph):
             raise CinematicConflict('FILE_UPDATE_ASSEMBLY_PORTAL_MISSING')
         if not playable(graph,rows):raise CinematicConflict('FILE_UPDATE_ASSEMBLY_ROUTE_NOT_PLAYABLE')
-        unique={tuple(sorted(pin.items())):pin for x in rows for pin in x['bindings'].values()}
+        unique={tuple(sorted(pin.items())):pin for x in rows if x['type']!=SPIRIT_TYPE for pin in x['bindings'].values()}
         provider.verify_prop_pins(list(unique.values()))
+        prior_spirit={x['id']:x['bindings']['spirit'] for x in prior['puzzles'] if x['type']==SPIRIT_TYPE}
+        changed={tuple(sorted(x['bindings']['spirit'].items())):x['bindings']['spirit'] for x in rows
+                 if x['type']==SPIRIT_TYPE and prior_spirit.get(x['id'])!=x['bindings']['spirit']}
+        provider.verify_prop_pins([{'prop':pin,'visibility':'both'} for pin in changed.values()],
+                                 unavailable='FILE_UPDATE_ASSEMBLY_SPIRIT_PROP_UNAVAILABLE',decorations=True)
         next_state={**prior,'revision':rev,'updatedAt':int(time.time()*1000),'officialRequestId':oid,'puzzles':rows}
         return provider.storage(ASSEMBLY_WRITER+'/metadata-update',{'expected':expected,'state':next_state})
 

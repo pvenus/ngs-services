@@ -1017,7 +1017,7 @@ test('typed assembly file.update validates bowl portal conditions with the exist
   expected:{revision:1,officialRequestId:oid('b')},content:{title:'굿터',mapId:oid('d'),puzzles:[puzzle]}};
  const tool=(await api.rpc('tools/list',{})).result.tools.find(x=>x.name==='request_submit');
  const schema=tool.inputSchema.oneOf.find(x=>x.properties.requestType.const==='file.update').properties.payload.oneOf;
- assert.equal(schema.find(x=>x.properties.target.properties.root.const===root).properties.content.properties.puzzles.items
+ assert.equal(schema.find(x=>x.properties.target.properties.root.const===root).properties.content.properties.puzzles.items.oneOf[0]
   .properties.portalConditions.maxItems,16);
  const submit=(id,body)=>api.submit({sourceId:'local',requestType:'file.update',idempotencyKey:id,payload:body});
  for(const bad of [
@@ -1028,9 +1028,18 @@ test('typed assembly file.update validates bowl portal conditions with the exist
   assert.deepEqual(response,{error:'NGS_FILE_UPDATE_PAYLOAD_INVALID',status:400});
  }
  assert.equal((await submit('expected-type',payload)).result.structuredContent.status,'registered');
+ const spirit={id:'spirit-one',type:'binari.ritual-spirit-manifestation',layout:{spirit:{regionId:'yard',x:45,y:70}},
+  attachments:{},bindings:{spirit:binding('ghost','e')},scale:{spirit:140}};
+ const metadata=puzzles=>({...payload,content:{...payload.content,puzzles}});
+ for(const bad of [{...spirit,portalConditions:[]},{...spirit,attachments:{bowl:{x:2,y:0}}},{...spirit,scale:{spirit:301}},
+  {...spirit,bindings:{spirit:binding('ghost','e'),lid:binding('lid','d')}}])
+  assert.equal((await submit('bad-spirit',metadata([bad]))).result.structuredContent.error,'NGS_FILE_UPDATE_PAYLOAD_INVALID');
+ assert.equal((await submit('spirit',metadata([spirit,puzzle]))).result.structuredContent.status,'registered');
  const {requests}=(await api.workflow({limit:10})).result.structuredContent;
  const {buildPlan}=await import('../workflow-planner/planner.mjs');
- const plan=buildPlan(requests[0]);
+ const plan=buildPlan(requests.find(x=>x.payload.content.puzzles.length===1));
+ const spiritPlan=buildPlan(requests.find(x=>x.payload.content.puzzles.length===2));
  assert.equal(plan.tasks[0].type,'file.update');
  assert.deepEqual(plan.tasks[0].input.content,payload.content);
+ assert.deepEqual(spiritPlan.tasks[0].input.content.puzzles[0],spirit);
 });
