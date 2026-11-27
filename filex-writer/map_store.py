@@ -102,8 +102,9 @@ def validate_decorations(graph):
     found=set()
     fields={'id','regionId','prop','anchor','scale','visibility'}
     for row in d:
-        need(type(row)is dict and fields<=set(row)<=fields|{'rotation','flipX','flipY'} and
+        need(type(row)is dict and fields<=set(row)<=fields|{'rotation','flipX','flipY','zOrder'} and
              ('rotation' not in row or type(row['rotation'])is int and 0<=row['rotation']<360) and
+             ('zOrder' not in row or type(row['zOrder'])is int and -1000<=row['zOrder']<=1000) and
              all(k not in row or type(row[k])is bool for k in ('flipX','flipY')) and
              match(row['id'],KEY) and row['id'] not in found and match(row['regionId'],KEY) and row['regionId'] in ids and
              prop_pin(row['prop']) and type(row['scale'])is int and 10<=row['scale']<=300 and

@@ -235,7 +235,7 @@ s.close();"""
         changed_visibility=move_decor('2',1,decor_id,{**valid,'decorations':[{**decoration,'visibility':'both'}]})
         self.assertEqual(call(packet={'claim':changed_visibility},prefix=UPDATE,status=409),
             {'error':'FILE_UPDATE_MAP_DECORATION_PROP_UNAVAILABLE'})
-        rotated={**decoration,'rotation':75,'flipX':True,'flipY':True}
+        rotated={**decoration,'rotation':75,'flipX':True,'flipY':True,'zOrder':21}
         omission=move_decor('3',1,decor_id,{**valid,'decorations':[rotated]})
         output=call(packet={'claim':omission},prefix=UPDATE)
         self.assertEqual(call(packet={'claim':omission},prefix=UPDATE),output)

@@ -155,7 +155,7 @@ s.close();"""
         # Official full metadata update saves portal rules; no new public request type.
         batch_id=batch['assemblyId'];batch_ref=batch['map']
         cond={'portalId':'edge-1','propRole':'bowl','requiredState':'carried-filled'}
-        rows=[{**batch['puzzles'][0],'portalConditions':[cond]},batch['puzzles'][1]]
+        rows=[{**batch['puzzles'][0],'portalConditions':[cond],'zOrder':{'table':25,'lid':-4}},batch['puzzles'][1]]
         def file_update(key,pin,rows,title=None):
             payload={'schemaVersion':'ngs.file-update.v1','projectId':'binari',
                      'target':{'root':ASSEMBLY_ROOT,'path':batch_id,'kind':'metadata'},'expected':pin,

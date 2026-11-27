@@ -30,8 +30,9 @@ def validate_decorations(v,regions):
     found=set()
     fields={'id','regionId','prop','anchor','scale','visibility'}
     for d in v:
-        need(type(d)is dict and fields<=set(d)<=fields|{'rotation','flipX','flipY'} and
+        need(type(d)is dict and fields<=set(d)<=fields|{'rotation','flipX','flipY','zOrder'} and
              ('rotation' not in d or type(d['rotation'])is int and 0<=d['rotation']<360) and
+             ('zOrder' not in d or type(d['zOrder'])is int and -1000<=d['zOrder']<=1000) and
              all(k not in d or type(d[k])is bool for k in ('flipX','flipY')) and
              match(d['id'],r'[a-z][a-z0-9-]{0,31}') and d['id'] not in found and
              type(d['regionId'])is str and d['regionId'] in regions and prop_pin(d['prop']) and

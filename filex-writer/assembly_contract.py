@@ -97,12 +97,14 @@ def definitions_preserved(prior,next_puzzles):
     # A user may explicitly remove the entire row. Retained definitions cannot be rewritten or stripped.
     return all(p.get('definition')==before.get(p['id']) for p in next_puzzles)
 
+def valid_z_order(v,roles):
+    return type(v)is dict and bool(v) and all(k in roles and int_range(z,-1000,1000) for k,z in v.items())
 def puzzles(v,well_only=False):
     if type(v)is not list or not 0<=len(v)<=32:return False
     ids=set()
     fields=('id','type','layout','attachments','bindings')
     for p in v:
-        optional=tuple(k for k in ('scale','portalConditions','definition') if type(p)is dict and k in p)
+        optional=tuple(k for k in ('scale','portalConditions','definition','zOrder') if type(p)is dict and k in p)
         if not (keys(p,fields+optional) and slug(p['id']) and p['id'] not in ids):return False
         if p['type']==SPIRIT_TYPE and not well_only:
             if 'portalConditions' in optional or 'definition' in optional:return False
@@ -118,6 +120,7 @@ def puzzles(v,well_only=False):
                     keys(p['attachments'],('bowl','lid')) and all(offset(x) for x in p['attachments'].values()) and
                     keys(p['bindings'],ROLES) and all(pin(x) for x in p['bindings'].values()) and
                     len({x['propId'] for x in p['bindings'].values()})==4):return False
+        if 'zOrder' in optional and not valid_z_order(p['zOrder'],('spirit',) if p['type']==SPIRIT_TYPE else ROLES):return False
         ids.add(p['id'])
     return True
 def content(v):
