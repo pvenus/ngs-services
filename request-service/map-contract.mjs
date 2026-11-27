@@ -1,7 +1,8 @@
 // Map topology is independent of background render revisions. Coordinates are
 // integer thousandths of the natural canvas, with the origin at top left.
 export const mapTypes=['map.generate','map.update'];
-export const mapSchemas=['ngs.map-generate.v1','ngs.map-update.v1'];
+export const mapSchemas=['ngs.map-generate.v1','ngs.map-update.v1','ngs.map-generate.v2'];
+export const mapGenerateStages=['map_start','map_portals','map_collisions'];
 export const mapStage='map_metadata',mapRoot='cinematics/maps';
 export const mapPds='/v1/maps/ownership/workflow-map',mapCapability='workflow.map-metadata.v1';
 export const officialId=v=>typeof v==='string'&&/^request\.official\.[a-f0-9]{64}$/.test(v);
@@ -60,15 +61,20 @@ const graphSchema=(generate)=>obj({title,startRegionId:key,
   hit:generate?{type:'null'}:rectangleSchema,spawn:generate?{type:'null'}:pointSchema,label:title})},
  colliders:{type:'array',maxItems:generate?0:96,items:{oneOf:[obj({id:key,regionId:key,rect:rectangleSchema}),obj({id:key,regionId:key,rect:rectangleSchema,shape:{enum:['rect','ellipse']},rotation:count(0,359)})]}}},
  ['title','startRegionId','regions','connections']);
+const notesSchema={type:'string',maxLength:1000};
+const designSchema=obj({startNotes:notesSchema,portalNotes:notesSchema,collisionNotes:notesSchema,collisionMode:{enum:['suggest','none']}});
 export const mapPayloadSchemas=mapSchemas.map((id,i)=>obj({schemaVersion:{const:id},projectId:{const:'binari'},
- graph:graphSchema(i===0),...(i===0?{intent:{type:'string',minLength:1,maxLength:2000}}:{
+ graph:graphSchema(i!==1),...(i!==1?{intent:{type:'string',minLength:1,maxLength:2000},...(i===2?{design:designSchema}:{})}:{
   mapId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
   expectedRevision:count(1,Number.MAX_SAFE_INTEGER-1),
  })}));
 export function validMapRequest(v,type){
- const generate=type===mapTypes[0], i=generate?0:1;
- return (generate||type===mapTypes[1])&&mapFields(v,generate?['schemaVersion','projectId','graph','intent']:
+ const generate=type===mapTypes[0], v2=generate&&v?.schemaVersion===mapSchemas[2], i=generate?(v2?2:0):1;
+ const notes=v=>v===''||mapText(v,1000);
+ return (generate||type===mapTypes[1])&&mapFields(v,generate?['schemaVersion','projectId','graph','intent',...(v2?['design']:[])]:
  ['schemaVersion','projectId','graph','mapId','expectedRevision'])&&v.schemaVersion===mapSchemas[i]&&v.projectId==='binari'&&
+ (!v2||(mapFields(v.design,['startNotes','portalNotes','collisionNotes','collisionMode'])&&
+  [v.design.startNotes,v.design.portalNotes,v.design.collisionNotes].every(notes)&&['suggest','none'].includes(v.design.collisionMode)))&&
  validMapGraph(v.graph,{partial:generate})&&(generate?(v.graph.regions.length>=2&&v.graph.regions.length<=12&&v.graph.connections.length>0&&(v.graph.colliders?.length??0)===0&&v.graph.connections.every(e=>e.hit===null&&e.spawn===null)&&mapText(v.intent,2000)):officialId(v.mapId)&&
  Number.isSafeInteger(v.expectedRevision)&&v.expectedRevision>=1&&v.expectedRevision<Number.MAX_SAFE_INTEGER);
 }

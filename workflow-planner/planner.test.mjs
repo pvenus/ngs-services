@@ -162,7 +162,7 @@ test('retry count migrates existing tasks without replacing status, times or dep
  const id=tasks(s).find(x=>x.task_key==='animation_walk_s').task_id;
  s.db.prepare("UPDATE workflow_tasks SET status='failed',updated_at=123456789 WHERE task_id=?").run(id);
  const before=tasks(s).map(({retry_count,...x})=>x);
- s.db.exec('DROP TRIGGER workflow_dependency_insert; DROP TRIGGER workflow_dependency_update; DROP TRIGGER workflow_dependency_delete; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_5; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_4; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_3; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_2; ALTER TABLE workflow_tasks DROP COLUMN portrait_read_owner_pid; ALTER TABLE workflow_tasks DROP COLUMN retry_count; ALTER TABLE workflow_tasks DROP COLUMN retry_limit');
+ s.db.exec('DROP TRIGGER workflow_dependency_insert; DROP TRIGGER workflow_dependency_update; DROP TRIGGER workflow_dependency_delete; ALTER TABLE workflow_tasks DROP COLUMN map_part_json; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_5; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_4; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_3; ALTER TABLE workflow_tasks DROP COLUMN depends_on_task_id_2; ALTER TABLE workflow_tasks DROP COLUMN portrait_read_owner_pid; ALTER TABLE workflow_tasks DROP COLUMN retry_count; ALTER TABLE workflow_tasks DROP COLUMN retry_limit');
  s.close();
  const next=f.open();
  assert.deepEqual(tasks(next).map(({retry_count,...x})=>x),before);
@@ -290,4 +290,38 @@ test('new document and image have 30 retries; other lanes remain capped at three
   s.db.prepare('UPDATE workflow_tasks SET retry_count=? WHERE task_id=?').run(cap,task.task_id);
   assert.throws(()=>s.db.prepare('UPDATE workflow_tasks SET retry_count=? WHERE task_id=?').run(cap+1,task.task_id),/CHECK constraint/);
  }
+});
+
+test('map generation v2 keeps a deterministic three-task DAG, proof and failure settlement in two tables',t=>{
+ const f=fixture(t); let s=f.open();
+ const schemaVersion='ngs.map-generate.v2';
+ const payload={schemaVersion,projectId:'binari',intent:'Keep links',
+  design:{startNotes:'',portalNotes:'Find door',collisionNotes:'',collisionMode:'none'},
+  graph:{title:'Map',startRegionId:'one',regions:['one','two'].map((id,i)=>({id,name:id,description:id,
+   backgroundId:'background.'+String(i+1).repeat(64),imageSha256:'a'.repeat(64)})),
+   connections:[{id:'entrance',from:'one',to:'two',label:'Door',hit:null,spawn:null}]}};
+ const row={officialRequestId:'request.official.'+'e'.repeat(64),projectId:'binari',
+  requestType:'map.generate',schemaVersion,payload,payloadSha256:sha(canonical(payload)),registeredAt:1,status:'registered'};
+ assert.equal(s.stage(row),true);s.acknowledge(row.officialRequestId);
+ const keys=['map_start','map_portals','map_collisions'],ids=keys.map(k=>'workflow.task.'+sha(canonical([row.officialRequestId,k])));
+ assert.deepEqual(tasks(s).map(x=>[x.task_key,x.task_id,x.depends_on_task_id,x.worker_type,x.map_part_json]),
+  keys.map((k,i)=>[k,ids[i],i?ids[i-1]:null,'document',null]));
+ s.close();s=f.open();assert.equal(s.stage(row),false);
+ assert.deepEqual(s.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map(x=>x.name),
+  ['workflow_runs','workflow_tasks']);
+ s.db.prepare("UPDATE workflow_tasks SET status='failed',retry_count=retry_limit WHERE task_id=?").run(ids[0]);
+ assert.equal(s.terminalFailures().length,1);
+ assert.equal(s.terminalReady().length,0);
+ function complete(id,value){
+  const packed=canonical(value);
+  s.db.prepare("UPDATE workflow_tasks SET status='completed',map_part_json=?,result_ref=? WHERE task_id=?")
+   .run(packed,'workflow.map-stage.'+sha(packed),id);
+ }
+ complete(ids[0],{startRegionId:'one'});complete(ids[1],{coordinates:[{id:'entrance',hit:{x:1,y:2,width:10,height:20},spawn:{x:4,y:5}}]});
+ const ref='binari/cinematics/maps/'+row.officialRequestId+'/1.json';
+ s.db.prepare("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?").run(ref,ids[2]);
+ assert.deepEqual(s.terminalFailures(),[]);
+ assert.equal(s.terminalReady()[0].publication.resultRef,ref);
+ s.db.prepare("UPDATE workflow_tasks SET map_part_json='{}' WHERE task_id=?").run(ids[1]);
+ assert.deepEqual(s.terminalReady(),[]);
 });

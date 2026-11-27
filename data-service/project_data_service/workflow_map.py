@@ -8,10 +8,13 @@ PATH='/v1/maps/ownership/workflow-map'
 WRITER='/v1/workflow/maps'
 CAP='workflow.map-metadata.v1'
 ROUTES=(PATH,PATH+'/read',PATH+'/image',PATH+'/result')
-TYPES={'map.generate':'ngs.map-generate.v1','map.update':'ngs.map-update.v1'}
+V2='ngs.map-generate.v2'
+STAGES=('map_start','map_portals','map_collisions')
+TYPES={'map.generate':('ngs.map-generate.v1',V2),'map.update':('ngs.map-update.v1',)}
 BG=r'background\.[a-f0-9]{64}'
 
 def text(v,n):return type(v)is str and 0<len(v)<=n and v==v.strip() and not any(ord(c)<32 and c not in '\n\r\t' or ord(c)==127 for c in v)
+def notes(v):return v=='' or text(v,1000) and len(v.encode('utf-16-le'))<=2000
 def point(v):
     return keys(v,('x','y')) and all(type(x)is int and 0<=x<=1000 for x in v.values())
 def rect(v):
@@ -46,33 +49,71 @@ def graph_valid(v,partial=False):
              c['id'] not in collider_ids and type(c['regionId'])is str and c['regionId'] in bg and rect(c['rect']))
         collider_ids.add(c['id'])
     return v
-def graph(db,oid):
+def graph(db,oid,task_id=None):
     need(match(oid,OFFICIAL))
     r=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
-    need(r is not None and r['request_type'] in TYPES and r['schema_version']==TYPES[r['request_type']] and
+    need(r is not None and r['request_type'] in TYPES and r['schema_version'] in TYPES[r['request_type']] and
          r['project_id']=='binari' and r['state']=='planned' and r['reason'] in (None,'RS_COMPLETED'))
     p=strict_json(r['payload'].encode()); gen=r['request_type']=='map.generate'
-    need(keys(p,('schemaVersion','projectId','graph',*(('intent',) if gen else ('mapId','expectedRevision')))) and
+    staged=r['schema_version']==V2
+    need(keys(p,('schemaVersion','projectId','graph',*(('intent',) if gen else ('mapId','expectedRevision')),
+                 *(('design',) if staged else ()))) and
          p['schemaVersion']==r['schema_version'] and p['projectId']=='binari' and digest(p)==r['payload_sha256'])
     graph_valid(p['graph'],gen)
     need((2<=len(p['graph']['regions'])<=12 and p['graph']['connections'] and not p['graph'].get('colliders') and
           all(e['hit'] is None and e['spawn'] is None for e in p['graph']['connections']) and text(p['intent'],2000)) if gen else match(p['mapId'],OFFICIAL) and
          type(p['expectedRevision'])is int and 1<=p['expectedRevision']<SAFE_INT)
-    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 2',(oid,)).fetchall();need(len(rows)==1)
-    t=rows[0]
-    need(t['task_id']=='workflow.task.'+digest([oid,'map_metadata']) and t['task_key']=='map_metadata' and
-         t['task_type']==r['request_type'] and t['worker_type']=='document' and t['depends_on_task_id'] is None and
-         strict_json(t['task_input'].encode())==p)
-    return r,t,p
-def graph_matches(source,value,generate=False):
+    if staged:
+        design=p['design']
+        need(keys(design,('startNotes','portalNotes','collisionNotes','collisionMode')) and
+             design['collisionMode'] in ('suggest','none') and
+             all(notes(design[k]) for k in ('startNotes','portalNotes','collisionNotes')))
+    stages=STAGES if staged else ('map_metadata',)
+    ids=['workflow.task.'+digest([oid,key]) for key in stages]
+    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 4',(oid,)).fetchall()
+    by_id={t['task_id']:t for t in rows}
+    need(len(rows)==len(ids) and set(by_id)==set(ids) and (task_id is None or task_id in by_id))
+    idx=ids.index(task_id) if task_id else len(ids)-1
+    prior={}
+    for i,key in enumerate(stages):
+        t=by_id[ids[i]]
+        need(t['task_key']==key and t['task_type']==r['request_type'] and t['worker_type']=='document' and
+             t['depends_on_task_id']==(ids[i-1] if i else None) and
+             all(t[col] is None for col in t.keys() if col.startswith('depends_on_task_id_')) and
+             strict_json(t['task_input'].encode())==p)
+        if i<idx:
+            need(t['status']=='completed' and type(t['map_part_json']) is str)
+            raw=t['map_part_json'];v=strict_json(raw.encode())
+            need(canonical(v).decode()==raw and t['result_ref']=='workflow.map-stage.'+digest(v))
+            if key=='map_start':need(keys(v,('startRegionId',)) and v['startRegionId']==p['graph']['startRegionId'])
+            if key=='map_portals':match_coordinates(p['graph'],v)
+            prior.update(v)
+    return r,by_id[ids[idx]],(p,stages[idx],prior)
+def match_coordinates(source,value):
+    need(keys(value,('coordinates',)) and type(value['coordinates']) is list and len(value['coordinates'])==len(source['connections']))
+    points={}
+    for e in value['coordinates']:
+        need(keys(e,('id','hit','spawn')) and type(e['id']) is str and e['id'] not in points and rect(e['hit']) and point(e['spawn']))
+        points[e['id']]=e
+    need(set(points)=={e['id'] for e in source['connections']})
+    return points
+def graph_matches(basis,value,prior):
     graph_valid(value)
-    if not generate:
+    source=basis['graph']
+    if 'intent' not in basis:
         need(source==value)
         return
     need(len(source['connections'])==len(value['connections']))
     masked={**value,'connections':[{**e,'hit':None,'spawn':None} for e in value['connections']]}
+    if basis['schemaVersion']!=V2:
+        need(masked==source)
+        return
     need({k:v for k,v in masked.items() if k!='colliders'}==
-         {k:v for k,v in source.items() if k!='colliders'})
+         {k:v for k,v in source.items() if k!='colliders'} and
+         'colliders' in value and (basis['design']['collisionMode']!='none' or not value['colliders']) and
+         value['startRegionId']==prior['startRegionId'])
+    points=match_coordinates(source,{'coordinates':prior['coordinates']})
+    need(all({k:e[k] for k in ('id','hit','spawn')}==points[e['id']] for e in value['connections']))
 def identity(oid,p):return p.get('mapId',oid),p.get('expectedRevision',0)+1
 def ref(mid,rev):return f'binari/cinematics/maps/{mid}/{rev}.json'
 
@@ -91,15 +132,15 @@ class WorkflowMap(WorkflowCinematic):
             need(keys(p,('officialRequestId',)))
             oid=p['officialRequestId']
             with self.planner.snapshot() as db:
-                _,t,b=graph(db,oid)
+                _,t,(b,_,prior)=graph(db,oid)
                 mid,rev=identity(oid,b)
                 need(t['status']=='completed' and t['result_ref']==ref(mid,rev))
             result=self.call_map('/revision',{'mapId':mid,'revision':rev})
             need(result.get('officialRequestId')==oid)
-            graph_matches(b['graph'],result['graph'],'intent' in b)
+            graph_matches(b,result['graph'],prior)
             return {'ok':True,'resultRef':ref(mid,rev)}
         need(op in ('read','publish','image') and keys(p,('claim',) if op=='read' else ('claim','imageSha256') if op=='image' else ('claim','graph')))
-        with exact_claim(self.planner,p['claim'],graph) as (oid,b):
+        with exact_claim(self.planner,p['claim'],lambda db,oid:graph(db,oid,p['claim']['taskId'])) as (oid,(b,stage,prior)):
             if op=='image':
                 need('intent' in b and match(p['imageSha256'],r'[a-f0-9]{64}') and
                      p['imageSha256'] in {r['imageSha256'] for r in b['graph']['regions']})
@@ -110,7 +151,8 @@ class WorkflowMap(WorkflowCinematic):
             by_id={r['id']:r['sha256'] for r in refs['backgrounds']}
             need(all(by_id.get(r['backgroundId'])==r['imageSha256'] for r in b['graph']['regions']))
             if op=='read':return refs
-            graph_matches(b['graph'],p['graph'],'intent' in b)
+            need(stage in ('map_metadata','map_collisions'))
+            graph_matches(b,p['graph'],prior)
             mid,rev=identity(oid,b)
             result=self.call_map('',{'schemaVersion':'ngs.map-metadata.v1','projectId':'binari','mapId':mid,
                    'revision':rev,'updatedAt':int(time.time()*1000),'officialRequestId':oid,'graph':p['graph']})

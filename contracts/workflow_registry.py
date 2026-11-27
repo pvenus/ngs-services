@@ -103,6 +103,7 @@ def validate_request_fields(request,registry,action_ids):
   for field,rule in action.get('requestRequirements',{}).items():
    value=request.get(field);kind=rule.get('type')
    valid=(isinstance(value,str) and bool(value.strip())) if kind=='string' else (type(value)is int) if kind=='integer' else (isinstance(value,list) and all(isinstance(x,str) and x.strip() for x in value)) if kind=='string-array' else False
+   if valid and 'enum'in rule:valid=value in rule['enum']
    if valid and 'const'in rule:valid=value==rule['const']
    if valid and 'pattern'in rule:valid=re.fullmatch(rule['pattern'],value)is not None
    if valid and 'minimum'in rule:valid=value>=rule['minimum']

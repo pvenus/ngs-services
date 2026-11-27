@@ -76,10 +76,6 @@ s.close();"""
         h=regions[0]['imageSha256']
         self.assertEqual(sha(base64.b64decode(call('/image',{'claim':claim,'imageSha256':h})['base64'])),h)
         posted={**graph,'connections':[{**link,'hit':{'x':20,'y':750,'width':90,'height':120},'spawn':{'x':450,'y':850}} for link in links]}
-        generated_wall={'id':'wall-gen','regionId':'zone-1','shape':'rect','rotation':5,
-                        'rect':{'x':0,'y':15,'width':10,'height':90}}
-        posted={**posted,'colliders':[generated_wall]}
-        call('',{'claim':claim,'graph':{**posted,'colliders':[{**generated_wall,'regionId':'missing'}]}},403)
         mutated={**posted,'connections':[{**posted['connections'][0],'from':'zone-5'},*posted['connections'][1:]]}
         call('',{'claim':claim,'graph':mutated},403)
         result=call('',{'claim':claim,'graph':posted})
@@ -89,7 +85,7 @@ s.close();"""
         self.assertEqual(manifest['schemaVersion'],'ngs.map-group.v1')
         self.assertEqual(set(manifest),{'schemaVersion','projectId','mapId','revision','updatedAt','officialRequestId','title','regions','parts'})
         for name,value in {'start':{'startRegionId':'zone-1'},'portals':{'connections':posted['connections']},
-                           'collisions':{'colliders':[generated_wall]}}.items():
+                           'collisions':{}}.items():
             raw=f.with_name(f'1.{name}.json').read_bytes()
             self.assertEqual(raw,encode(value))
             self.assertEqual(manifest['parts'][name],sha(raw))
@@ -117,6 +113,48 @@ s.close();"""
             conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE official_request_id=?",
                 (update_result['resultRef'],update_id))
         self.assertEqual(call('/result',{'officialRequestId':update_id}),update_result)
+
+        # v2 is a separate three-job DAG and not a synonym for legacy v1.
+        split_id='request.official.'+'9'*64
+        staged={**body,'schemaVersion':'ngs.map-generate.v2','design':{'startNotes':'Match the gate',
+                'portalNotes':'','collisionNotes':'','collisionMode':'none'}}
+        claim2=stage(split_id,staged,'map.generate')
+        from project_data_service.filex_read import canonical,digest
+        with sqlite3.connect(db) as conn:
+            rows=conn.execute("SELECT task_key,task_id,depends_on_task_id FROM workflow_tasks WHERE official_request_id=?",
+                (split_id,)).fetchall()
+        dag={k:(tid,dep) for k,tid,dep in rows}
+        self.assertEqual(set(dag),{'map_start','map_portals','map_collisions'})
+        a,b,c=[dag[k][0] for k in ('map_start','map_portals','map_collisions')]
+        self.assertEqual([dag[k][1] for k in ('map_start','map_portals','map_collisions')],[None,a,b])
+        def claim_at(tid):
+            return {**claim2,'taskId':tid}
+        def complete(tid,out):
+            with sqlite3.connect(db) as conn:
+                conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=?,map_part_json=? WHERE task_id=?",
+                    ('workflow.map-stage.'+digest(out),canonical(out).decode(),tid))
+        call('/read',{'claim':claim_at(a)})
+        call('',{'claim':claim_at(a),'graph':{**posted,'colliders':[]}},403)
+        call('/read',{'claim':claim_at(b)},403)
+        complete(a,{'startRegionId':'zone-1'})
+        call('/read',{'claim':claim_at(b)})
+        call('/read',{'claim':claim_at(c)},403)
+        coordinates={'coordinates':[{k:e[k] for k in ('id','hit','spawn')} for e in posted['connections']]}
+        complete(b,coordinates)
+        call('/read',{'claim':claim_at(c)})
+        call('',{'claim':claim_at(c),'graph':changed},403) # collisionMode none
+        wrong_portal={**posted,'colliders':[],'connections':[{**posted['connections'][0],'spawn':{'x':3,'y':4}},*posted['connections'][1:]]}
+        call('',{'claim':claim_at(c),'graph':wrong_portal},403)
+        valid={**posted,'colliders':[]}
+        expected_split=call('',{'claim':claim_at(c),'graph':valid})
+        self.assertEqual(expected_split,{'ok':True,'resultRef':f'binari/cinematics/maps/{split_id}/1.json'})
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?",
+                (expected_split['resultRef'],c))
+        self.assertEqual(call('/result',{'officialRequestId':split_id}),expected_split)
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE workflow_tasks SET map_part_json='{}' WHERE task_id=?",(b,))
+        call('/result',{'officialRequestId':split_id},403)
 
         self.assertEqual(call(prefix=MAP_CAPABILITY),{'enabled':True,'schemaVersion':SCHEMA,'roots':[MAP_ROOT]})
         self.assertEqual(call(prefix=DELETE)['roots'],[],'dedicated map root is absent from generic readiness')

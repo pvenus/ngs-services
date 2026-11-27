@@ -69,7 +69,9 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
    mode=action['id']
    if (mode not in ('map.generate','map.update') or action.get('modelCalls')!=(3 if mode=='map.generate' else 0) or
        action.get('dependsOn')!=[] or registry['requestTypes'].get(mode,{}).get('stageIds')!=[mode] or
-       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.map-'+mode.split('.')[1]+'.v1' or
+       action.get('requestRequirements',{}).get('schemaVersion')!=(
+        {'type':'string','enum':['ngs.map-generate.v1','ngs.map-generate.v2']} if mode=='map.generate' else
+        {'type':'string','const':'ngs.map-update.v1'}) or
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or policy.get('apply')!='authorized-mutation'):
     raise ValueError('LAYA_MAP_DOCUMENT_ADAPTER_CONTRACT')
   elif worker=='animation':

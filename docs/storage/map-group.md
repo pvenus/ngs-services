@@ -30,3 +30,15 @@ Generated map geometry can include validated colliders, in addition to portal
 hit areas and arrival points. The submitted title, regions, selected start
 region, and portal topology remain fixed. Updates must match the request
 exactly.
+
+The current `ngs.map-generate.v2` request requires a `design` object:
+`startNotes`, `portalNotes`, and `collisionNotes` (trimmed strings of up
+to 1,000 UTF-16 code units, and allowed to be empty), and `collisionMode`
+(`suggest` or `none`). Its existing document worker has three observable jobs,
+`map_start` → `map_portals` → `map_collisions`. The first two record exact
+canonical JSON (without a trailing LF) in nullable `workflow_tasks.map_part_json`
+alongside a digest-bound receipt in `result_ref`. The third task alone
+publishes the group; the PDS checks the saved predecessor bytes, receipts,
+and task dependencies before publication and again on completion readback.
+A collision mode of `none` requires an explicit empty collider array.
+Legacy `ngs.map-generate.v1` and manual `ngs.map-update.v1` remain single-task.

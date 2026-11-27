@@ -1,4 +1,4 @@
-import {mapTypes,mapStage,validMapRequest,mapCanonical,mapRoot} from './map-contract.mjs';
+import {mapTypes,mapSchemas,mapGenerateStages,mapStage,validMapRequest,mapCanonical,mapRoot} from './map-contract.mjs';
 import {fileDeleteType,fileDeleteTaskKey,validateFileDelete} from './file-delete-envelope.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {canonical,sha,validateOneStop,isReplaceSchema,isSelectionSchema,isPoseSelectionSchema,isBasicSchema,motionSelectionSlot,motionPoseRegistry,motionSelectionPoses} from './envelope.mjs';
@@ -70,10 +70,13 @@ export function buildPlan(row,{pixelPortraits=true,multiDependencies=false}={}){
 }
 
 function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false){
- if(mapTypes.includes(row.requestType))return {payload,tasks:[{
-  id:'workflow.task.'+sha(canonical([row.officialRequestId,mapStage])),key:mapStage,type:row.requestType,
-  workerType:'document',dependsOn:null,input:row.payload,
- }]};
+ if(mapTypes.includes(row.requestType)){
+  const stages=row.schemaVersion===mapSchemas[2]?mapGenerateStages:[mapStage];
+  const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
+  return {payload,tasks:stages.map((key,i)=>({
+   id:id(key),key,type:row.requestType,workerType:'document',dependsOn:i?id(stages[i-1]):null,input:row.payload,
+  }))};
+ }
  if(row.requestType===fileDeleteType){
   const {target,expected}=JSON.parse(payload);
   ensure(target.path.split('/').at(-1)!==row.officialRequestId,'NGS_FILE_DELETE_PAYLOAD_INVALID');
@@ -302,6 +305,24 @@ function hasExhaustedSingleTask(run,readTasks){
   exhausted(rows[0])&&rows[0].result_ref===null;
 }
 
+function mapStageProof(row){
+ try{return typeof row?.map_part_json==='string'&&canonical(JSON.parse(row.map_part_json))===row.map_part_json&&
+  row.result_ref==='workflow.map-stage.'+sha(row.map_part_json);}catch{return false;}
+}
+function hasExhaustedMapGraph(run,readTasks){
+ if(run.schema_version!==mapSchemas[2])return hasExhaustedSingleTask(run,readTasks);
+ const plan=restoreStoredPlan(run),rows=readTasks.all(run.official_request_id,4);
+ if(!plan||rows.length!==plan.tasks.length||!rows.some(exhausted))return false;
+ let blocked=false;
+ return plan.tasks.every((task,i)=>{
+  const row=rows.find(r=>exactStoredTask(r,task));
+  if(!row)return false;
+  if(blocked)return row.status==='pending'&&row.result_ref===null&&row.map_part_json===null;
+  if(exhausted(row)&&row.result_ref===null&&row.map_part_json===null){blocked=true;return true;}
+  return i<plan.tasks.length-1&&row.status==='completed'&&mapStageProof(row);
+ });
+}
+
 function hasExhaustedPropGraph(run,readTasks){
  const plan=restoreStoredPlan(run);
  if(!plan)return false;
@@ -342,7 +363,7 @@ const failurePolicies=new Map([
  [cinematicSequenceType,hasExhaustedSingleTask],
  [cinematicPlaybackType,hasExhaustedSingleTask],
  [fileDeleteType,hasExhaustedSingleTask],
- ...mapTypes.map(type=>[type,hasExhaustedSingleTask]),
+ ...mapTypes.map(type=>[type,hasExhaustedMapGraph]),
  ...extraCinematicTypes.map(type=>[type,hasExhaustedSingleTask]),
  [backgroundAnimationType,(run,readTasks)=>{
   const outputs=backgroundAnimationRows(run,restoreStoredPlan(run),readTasks.all(run.official_request_id,8));
@@ -449,11 +470,12 @@ export class PlannerStore{
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    for(const row of candidates){
     if(mapTypes.includes(row.request_type)){
-     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,2);
-     if(!plan||rows.length!==1||!exactStoredTask(rows[0],plan.tasks[0]))continue;
+     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,4);
+     if(!plan||rows.length!==plan.tasks.length||!plan.tasks.every((t,i)=>rows.some(r=>
+      exactStoredTask(r,t)&&(i===plan.tasks.length-1||mapStageProof(r)))))continue;
      const {mapId=row.official_request_id,expectedRevision=0}=plan.tasks[0].input;
      const resultRef='binari/'+mapRoot+'/'+mapId+'/'+(expectedRevision+1)+'.json';
-     if(rows[0].result_ref===resultRef)result.push({official_request_id:row.official_request_id,
+     if(rows.find(r=>r.task_id===plan.tasks.at(-1).id)?.result_ref===resultRef)result.push({official_request_id:row.official_request_id,
       publication:{family:row.request_type,officialRequestId:row.official_request_id,resultRef}});
      continue;
     }
@@ -480,8 +502,8 @@ export class PlannerStore{
     }
     if(row.request_type===cinematicPlaybackType){
      if(!this.#cinematicEnabled)continue;
-     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,2);
-     if(!plan||rows.length!==1||!exactStoredTask(rows[0],plan.tasks[0]))continue;
+     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,4);
+     if(!plan||rows.length!==plan.tasks.length||!plan.tasks.every(t=>rows.some(r=>exactStoredTask(r,t))))continue;
      const resultRef=cinematicPlaybackResultRef(plan.tasks[0].input.sequenceId);
      if(rows[0].result_ref!==resultRef)continue;
      result.push({official_request_id:row.official_request_id,publication:{

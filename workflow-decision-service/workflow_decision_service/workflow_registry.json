@@ -2010,7 +2010,7 @@
 {
   "candidateCount": 1,
   "dependsOn": [],
-  "description": "문서 워커에서 시작 위치, 이동 포털·도착점, 충돌 영역을 각각 별도 CLI 호출로 생성하고 검증한다. 사용자가 확정한 시작 맵과 방향 연결은 유지하며, 검증된 세 파트를 하나의 맵 그룹 매니페스트로 게시한다.",
+  "description": "v2는 문서 워커에서 시작 위치, 이동 포털·도착점, 충돌 영역을 각각 별도 CLI 호출로 생성하고 검증한다. 사용자가 확정한 시작 맵과 방향 연결은 유지하며, 검증된 세 파트를 하나의 맵 그룹 매니페스트로 게시한다. 기존 v1 요청은 포털 좌표만 한 작업에서 생성한다.",
   "generationKind": "structure",
   "id": "map.generate",
   "inputs": [
@@ -2038,7 +2038,7 @@
   "requestRequirements": {
     "schemaVersion": {
       "type": "string",
-      "const": "ngs.map-generate.v1"
+      "enum": ["ngs.map-generate.v1", "ngs.map-generate.v2"]
     },
     "projectId": {
       "type": "string",

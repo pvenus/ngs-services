@@ -892,6 +892,19 @@ test('local map request contracts are discoverable and the valid queued payload 
  assert.equal(row.targetNpcId,out.officialRequestId);
  assert.equal(row.targetName,graph.title);
  assert.ok((await api.workflow({limit:10})).result.structuredContent.requests.some(x=>x.officialRequestId===out.officialRequestId));
+ const v2Schema=advertised.oneOf.find(x=>x.properties?.payload?.properties?.schemaVersion?.const==='ngs.map-generate.v2');
+ assert.deepEqual(v2Schema.properties.payload.properties.design.properties.collisionMode.enum,['suggest','none']);
+ const v2={...map,idempotencyKey:'map-v2-fixture',payload:{...map.payload,schemaVersion:'ngs.map-generate.v2',
+  design:{startNotes:'Follow gate',portalNotes:'',collisionNotes:'',collisionMode:'suggest'}}};
+ const v2Registered=(await api.submit(v2)).result.structuredContent;
+ assert.equal(v2Registered.status,'registered');
+ assert.ok((await api.workflow({limit:10})).result.structuredContent.requests.some(x=>
+  x.officialRequestId===v2Registered.officialRequestId&&x.schemaVersion===v2.payload.schemaVersion));
+ for(const design of [{...v2.payload.design,startNotes:' trailing '},{...v2.payload.design,collisionMode:'bad'},
+                      {...v2.payload.design,portalNotes:'a'.repeat(1001)},{...v2.payload.design,extra:''}]){
+  const bad=(await api.submit({...v2,payload:{...v2.payload,design}})).result.structuredContent;
+  assert.equal(bad.error,'NGS_MAP_PAYLOAD_INVALID');
+ }
 });
 
 test('map folder deletion advertises only its dedicated capability and pins a single published revision', async t=>{
