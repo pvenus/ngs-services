@@ -1,5 +1,5 @@
-import {fileUpdateType,fileUpdateSchema,mapUpdateRoot} from './file-update-envelope.mjs';
-import {assemblyTypes,assemblyPayloadSchemas} from './assembly-contract.mjs';
+import {fileUpdateType,fileUpdateSchema,mapUpdateRoot,assemblyUpdateRoot} from './file-update-envelope.mjs';
+import {assemblyTypes,assemblyPayloadSchemas,assemblyContentSchema} from './assembly-contract.mjs';
 import {mapTypes,mapPayloadSchemas} from './map-contract.mjs';
 import {fileDeleteType,fileDeleteSchema,propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot,cinematicDeleteRoot,mapDeleteRoot,assemblyDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
@@ -29,7 +29,7 @@ const maxBody=96*1024;
 const known={
  [cinematicInvalid]:400,[cinematicUnavailable]:503,[cinematicSourceMissing]:404,[cinematicLegacyRetired]:422,[cinematicPlaybackStale]:409,
  [propGenerateInvalid]:400,[propGenerateUnavailable]:503,[propGenerateMotionUnavailable]:503,[propMutationUnavailable]:503,
- NGS_FILE_DELETE_PAYLOAD_INVALID:400,NGS_FILE_DELETE_UNAVAILABLE:503,NGS_MAP_PAYLOAD_INVALID:400,NGS_ASSEMBLY_PAYLOAD_INVALID:400,
+ NGS_FILE_UPDATE_PAYLOAD_INVALID:400,NGS_FILE_DELETE_PAYLOAD_INVALID:400,NGS_FILE_DELETE_UNAVAILABLE:503,NGS_MAP_PAYLOAD_INVALID:400,NGS_ASSEMBLY_PAYLOAD_INVALID:400,
  [propImageInvalid]:400,[propImageUnavailable]:503,
  REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
  NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID:400,NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID:400,NGS_AUDIO_GENERATE_PAYLOAD_INVALID:400,NGS_AUDIO_DELETE_PAYLOAD_INVALID:400,
@@ -148,11 +148,11 @@ const motion2DPayload={type:'object',properties:{
  },required:['schemaVersion','projectId','sourcePresetId','variantPresetId','label'],additionalProperties:false};
 const metadataId={type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'};
 const exactObject=properties=>({type:'object',additionalProperties:false,required:Object.keys(properties),properties});
-const fileUpdatePayload=exactObject({
+const typedFileUpdatePayload=(root,content)=>exactObject({
  schemaVersion:{const:fileUpdateSchema},projectId:{const:'binari'},
- target:exactObject({root:{const:mapUpdateRoot},path:metadataId,kind:{const:'metadata'}}),
- expected:exactObject({revision:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER-1},officialRequestId:metadataId}),
- content:mapPayloadSchemas[1].properties.graph,
+ target:exactObject({root:{const:root},path:metadataId,kind:{const:'metadata'}}),
+ expected:exactObject({revision:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER-(root===assemblyUpdateRoot?2:1)},officialRequestId:metadataId}),
+ content,
 });
 
 const tool={
@@ -171,7 +171,9 @@ const tool={
   {properties:{requestType:{const:motion2DRequestType},payload:motion2DPayload}},
   {properties:{requestType:{const:npcAnimationRegenerateType},payload:npcAnimationRegeneratePayload}},
   ...[...assemblyTypes,assemblyTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:assemblyPayloadSchemas[i]}})),
-  {properties:{requestType:{const:fileUpdateType},payload:fileUpdatePayload}},
+  {properties:{requestType:{const:fileUpdateType},payload:{oneOf:[
+    typedFileUpdatePayload(mapUpdateRoot,mapPayloadSchemas[1].properties.graph),typedFileUpdatePayload(assemblyUpdateRoot,assemblyContentSchema),
+  ]}}},
   ...[...mapTypes,mapTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:mapPayloadSchemas[i]}}))]},
  outputSchema:{type:'object',properties:{officialRequestId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
   status:{const:'registered'}},required:['officialRequestId','status'],additionalProperties:false},

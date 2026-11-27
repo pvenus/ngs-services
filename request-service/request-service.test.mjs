@@ -980,3 +980,35 @@ test('assembly official request families advertise exact schemas and accept remo
  const rows=(await api.workflow({limit:10})).result.structuredContent.requests;
  assert.deepEqual(new Set(rows.map(x=>x.requestType)),new Set(['assembly.generate','assembly.update']));
 });
+
+test('typed assembly file.update validates bowl portal conditions with the existing request family',async t=>{
+ const {directory}=folder(t),api=await listener(t,directory);
+ const oid=h=>'request.official.'+h.repeat(64),root='canonical-files/binari/cinematics/assemblies';
+ const binding=(propId,h)=>({propId,revision:1,sha256:h.repeat(64)});
+ const condition={portalId:'front-portal',propRole:'bowl',requiredState:'carried-filled'};
+ const puzzle={id:'puzzle-one',type:'binari.ritual-well-water-demo',
+  layout:{altar:{regionId:'yard',x:40,y:60},well:{regionId:'yard',x:70,y:60}},
+  attachments:{bowl:{x:4,y:-10},lid:{x:4,y:-10}},
+  bindings:Object.fromEntries(['table','bowl','well','lid'].map((role,i)=>[role,binding(role,String(i+1))])),
+  portalConditions:[condition]};
+ const payload={schemaVersion:'ngs.file-update.v1',projectId:'binari',target:{root,path:oid('a'),kind:'metadata'},
+  expected:{revision:1,officialRequestId:oid('b')},content:{title:'굿터',mapId:oid('d'),puzzles:[puzzle]}};
+ const tool=(await api.rpc('tools/list',{})).result.tools.find(x=>x.name==='request_submit');
+ const schema=tool.inputSchema.oneOf.find(x=>x.properties.requestType.const==='file.update').properties.payload.oneOf;
+ assert.equal(schema.find(x=>x.properties.target.properties.root.const===root).properties.content.properties.puzzles.items
+  .properties.portalConditions.maxItems,16);
+ const submit=(id,body)=>api.submit({sourceId:'local',requestType:'file.update',idempotencyKey:id,payload:body});
+ for(const bad of [
+  [{...condition,propRole:'lid'}],[{...condition,requiredState:'foo'}],[{...condition,portalId:'../portal'}],
+  [condition,condition],Array.from({length:17},(_,i)=>({...condition,portalId:'portal-'+i})),
+ ]){
+  const response=(await submit('bad',{...payload,content:{...payload.content,puzzles:[{...puzzle,portalConditions:bad}]}})).result.structuredContent;
+  assert.deepEqual(response,{error:'NGS_FILE_UPDATE_PAYLOAD_INVALID',status:400});
+ }
+ assert.equal((await submit('expected-type',payload)).result.structuredContent.status,'registered');
+ const {requests}=(await api.workflow({limit:10})).result.structuredContent;
+ const {buildPlan}=await import('../workflow-planner/planner.mjs');
+ const plan=buildPlan(requests[0]);
+ assert.equal(plan.tasks[0].type,'file.update');
+ assert.deepEqual(plan.tasks[0].input.content,payload.content);
+});

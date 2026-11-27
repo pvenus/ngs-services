@@ -53,7 +53,7 @@ _ALLOW=MappingProxyType({
  'props':(_EXACT,frozenset(_PROPS_POST)),
  'cinematics':(_EXACT,frozenset('/v1/workflow/cinematics'+p for p in
   ('','/asset','/source-status','/result','-sequence','-sequence/frame','-sequence/result','-playback','-playback/target-status','-playback/result','-source','-source/result','-source/reconcile',
-   '-sequence-remove','-sequence-remove/result','-background','-background/result','-background/reconcile','-background/asset','-background/source-status','-background/identity'))|{'/v1/storage/delete-target','/v1/storage/delete-target/cinematic-inventory','/v1/workflow/maps','/v1/workflow/maps/context','/v1/workflow/maps/revision','/v1/workflow/maps/metadata-update','/v1/workflow/assemblies','/v1/workflow/assemblies/head','/v1/workflow/assemblies/revision','/v1/workflow/assemblies/list','/v1/workflow/assemblies/map'}),
+   '-sequence-remove','-sequence-remove/result','-background','-background/result','-background/reconcile','-background/asset','-background/source-status','-background/identity'))|{'/v1/storage/delete-target','/v1/storage/delete-target/cinematic-inventory','/v1/workflow/maps','/v1/workflow/maps/context','/v1/workflow/maps/revision','/v1/workflow/maps/metadata-update','/v1/workflow/assemblies','/v1/workflow/assemblies/head','/v1/workflow/assemblies/revision','/v1/workflow/assemblies/list','/v1/workflow/assemblies/map','/v1/workflow/assemblies/metadata-update'}),
 })
 _DYNAMIC=MappingProxyType({
  'concept':(('GET',r'/v1/requests/'+RECEIPT_TOKEN),),

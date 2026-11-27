@@ -3,6 +3,9 @@ import time
 from .filex_read import canonical,digest
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,keys,match,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json,OFFICIAL,SAFE_INT
+from .filex_writer_binding import writer as connect
+from .assembly_contract import content as assembly_content,MAX_REV as ASSEMBLY_MAX_REV,playable,affected_conditions_exist,state as assembly_state
+from .workflow_assembly import WRITER as ASSEMBLY_WRITER,ref as assembly_ref
 from .workflow_map import WRITER as MAP_WRITER,graph_valid,ref as map_ref
 
 PATH='/v1/storage/workflow-file-update'
@@ -12,6 +15,7 @@ TYPE='file.update'
 SCHEMA='ngs.file-update.v1'
 KEY='file_update'
 MAP_ROOT='canonical-files/binari/cinematics/maps'
+ASSEMBLY_ROOT='canonical-files/binari/cinematics/assemblies'
 
 def valid_pin(p):
     return keys(p,('revision','officialRequestId')) and type(p['revision']) is int and 1<=p['revision']<SAFE_INT and match(p['officialRequestId'],OFFICIAL)
@@ -38,7 +42,42 @@ class MapMetadata:
         return (type(result) is dict and result.get('mapId')==mid and result.get('revision')==rev and
                 result.get('officialRequestId')==oid and result.get('graph')==content)
 
-ADAPTERS={MAP_ROOT:MapMetadata()}
+class AssemblyMetadata:
+    def accepts_id(self,aid):
+        return match(aid,OFFICIAL)
+    def validate(self,content):
+        need(assembly_content(content))
+    def result_ref(self,aid,rev):
+        return assembly_ref(aid,rev)
+    def read(self,provider,aid,rev):
+        return provider.storage(ASSEMBLY_WRITER+'/revision',{'assemblyId':aid,'revision':rev})
+    def matches(self,result,oid,aid,rev,content):
+        return (assembly_state(result) and result['assemblyId']==aid and result['revision']==rev and
+                result['officialRequestId']==oid and result['title']==content['title'] and
+                result['map']['mapId']==content['mapId'] and result['puzzles']==content['puzzles'])
+    def write(self,provider,oid,p):
+        aid=p['target']['path'];expected=p['expected'];content=p['content'];rev=expected['revision']+1
+        prior=provider.storage(ASSEMBLY_WRITER+'/revision',{'assemblyId':aid,'revision':expected['revision']},missing=True)
+        if prior is None or prior['officialRequestId']!=expected['officialRequestId']:
+            raise CinematicConflict('FILE_UPDATE_REVISION_CONFLICT')
+        if content['title']!=prior['title'] or content['mapId']!=prior['map']['mapId']:
+            raise CinematicConflict('FILE_UPDATE_ASSEMBLY_IDENTITY_IMMUTABLE')
+        replay=provider.storage(ASSEMBLY_WRITER+'/revision',{'assemblyId':aid,'revision':rev},missing=True)
+        if replay is not None:
+            if not self.matches(replay,oid,aid,rev,content) or replay['map']!=prior['map']:
+                raise CinematicConflict('FILE_UPDATE_REVISION_CONFLICT')
+            return replay
+        rows=content['puzzles'];mid=content['mapId']
+        graph=provider.storage(ASSEMBLY_WRITER+'/map',{'mapId':mid})['graph']
+        if not affected_conditions_exist(prior['puzzles'],rows,graph):
+            raise CinematicConflict('FILE_UPDATE_ASSEMBLY_PORTAL_MISSING')
+        if not playable(graph,rows):raise CinematicConflict('FILE_UPDATE_ASSEMBLY_ROUTE_NOT_PLAYABLE')
+        unique={tuple(sorted(pin.items())):pin for x in rows for pin in x['bindings'].values()}
+        provider.verify_prop_pins(list(unique.values()))
+        next_state={**prior,'revision':rev,'updatedAt':int(time.time()*1000),'officialRequestId':oid,'puzzles':rows}
+        return provider.storage(ASSEMBLY_WRITER+'/metadata-update',{'expected':expected,'state':next_state})
+
+ADAPTERS={MAP_ROOT:MapMetadata(),ASSEMBLY_ROOT:AssemblyMetadata()}
 
 def planned(db,oid):
     need(match(oid,OFFICIAL))
@@ -53,7 +92,8 @@ def planned(db,oid):
     need(keys(target,('root','path','kind')) and type(target['root']) is str and target['root'] in ADAPTERS and
          target['kind']=='metadata' and target['path']!=oid and valid_pin(p['expected']))
     adapter=ADAPTERS[target['root']]
-    need(adapter.accepts_id(target['path']))
+    need(adapter.accepts_id(target['path']) and
+         (target['root']!=ASSEMBLY_ROOT or p['expected']['revision']<ASSEMBLY_MAX_REV))
     adapter.validate(p['content'])
     tasks=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 2',(oid,)).fetchall()
     need(len(tasks)==1);task=tasks[0]
@@ -64,9 +104,18 @@ def planned(db,oid):
     return run,task,(p,adapter)
 
 class WorkflowFileUpdate(WorkflowCinematic):
-    def storage(self,path,data):
+    def __init__(self,planner,*,writer_factory=None,prop_factory=None):
+        super().__init__(planner,writer_factory=writer_factory)
+        self.prop_factory=prop_factory or (lambda:connect('props'))
+    def verify_prop_pins(self,pins):
+        if not pins:return
+        with self.prop_factory() as tx:
+            out=tx.call('POST','/v1/workflow/props/assembly-bindings',{'pins':pins},missing=True)
+        if out is None:raise CinematicConflict('FILE_UPDATE_ASSEMBLY_PROP_UNAVAILABLE')
+        need(out=={'ok':True})
+    def storage(self,path,data,*,missing=False):
         with self.writer_factory() as tx:
-            try:return tx.call('POST',path,data)
+            try:return tx.call('POST',path,data,missing=missing) if missing else tx.call('POST',path,data)
             except ValueError as e:
                 if str(e)=='KNOWLEDGE_SOURCE_CHANGED':raise CinematicConflict('FILE_UPDATE_REVISION_CONFLICT') from None
                 raise

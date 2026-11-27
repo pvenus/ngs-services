@@ -10,6 +10,7 @@ from project_data_service.filex_cas_transport import FilexCASTransport
 from project_data_service.http_server import Handler
 from project_data_service.workflow_delete_claim import PrivatePlannerClaim
 from project_data_service.workflow_file_delete import ASSEMBLY_ROOT,storage_provider
+from project_data_service.workflow_file_update import WorkflowFileUpdate,PATH as UPDATE
 from project_data_service.single_target_delete import ASSEMBLY_CAPABILITY,PATH as DELETE,SCHEMA,SingleTargetDelete
 from project_data_service.workflow_assembly import WorkflowAssembly,PATH,CAP
 from test_cinematic_sequence_http import REPO
@@ -28,7 +29,7 @@ class AssemblyFixture(UnifiedFixture):
         map_id='request.official.'+'9'*64
         c=CinematicProjectStore(self.data/'cinematics')
         graph={'title':'맵','regions':[{'id':f'zone-{n}'} for n in range(1,6)],'startRegionId':'zone-1',
-               'connections':[{'from':f'zone-{n}','to':f'zone-{n+1}'} for n in range(1,5)]}
+               'connections':[{'id':f'edge-{n}','from':f'zone-{n}','to':f'zone-{n+1}'} for n in range(1,5)]}
         map_revision(c,{'schemaVersion':'ngs.map-metadata.v1','projectId':'binari','mapId':map_id,'officialRequestId':map_id,
                         'updatedAt':1,'revision':1,'graph':graph},True)
         db=self.root/'planner.sqlite'
@@ -57,6 +58,7 @@ s.close();"""
         def delete_ready():
             with cine() as conn:return conn.capabilities().get('workflowPinnedAssemblyFolderDeleteV1') is True
         app.workflow_assembly=WorkflowAssembly(planner,writer_factory=cine,prop_factory=lambda:factory('props','concept'))
+        app.workflow_file_update=WorkflowFileUpdate(planner,writer_factory=cine,prop_factory=lambda:factory('props','concept'))
         app.single_target_delete=SingleTargetDelete({ASSEMBLY_ROOT:storage_provider(planner,cine,delete_ready,root=ASSEMBLY_ROOT)},
             dedicated=[ASSEMBLY_ROOT])
         thread=Thread(target=app.serve_forever,daemon=True);thread.start()
@@ -149,6 +151,49 @@ s.close();"""
         self.assertEqual((root/'1.json').read_bytes(),initial)
         stale=stage('d',{**u,'puzzles':[]},'assembly.update',15)
         self.assertEqual(call('/read',{'claim':stale},409),{'error':'ASSEMBLY_REVISION_CONFLICT'})
+        # Official full metadata update saves portal rules; no new public request type.
+        batch_id=batch['assemblyId'];batch_ref=batch['map']
+        cond={'portalId':'edge-1','propRole':'bowl','requiredState':'carried-filled'}
+        rows=[{**batch['puzzles'][0],'portalConditions':[cond]},batch['puzzles'][1]]
+        def file_update(key,pin,rows,title=None):
+            payload={'schemaVersion':'ngs.file-update.v1','projectId':'binari',
+                     'target':{'root':ASSEMBLY_ROOT,'path':batch_id,'kind':'metadata'},'expected':pin,
+                     'content':{'title':title or batch['title'],'mapId':map_id,'puzzles':rows}}
+            return stage(key,payload,'file.update',18)
+        pin0={'revision':1,'officialRequestId':batch_id}
+        wrongTitle=file_update('0',pin0,rows,title='must not rename')
+        self.assertEqual(call(packet={'claim':wrongTitle},expect=409,base=UPDATE),{'error':'FILE_UPDATE_ASSEMBLY_IDENTITY_IMMUTABLE'})
+        change=file_update('1',pin0,rows)
+        receipt=call(packet={'claim':change},base=UPDATE)
+        self.assertEqual(call(packet={'claim':change},base=UPDATE),receipt)
+        complete(change,receipt)
+        self.assertEqual(call('/result',{'officialRequestId':change['officialRequestId']},base=UPDATE),receipt)
+        path=self.data/'cinematics'/'assemblies'/batch_id
+        batch=json.loads((path/'2.json').read_text())
+        self.assertEqual(batch['puzzles'],rows)
+        self.assertEqual(batch['map'],batch_ref)
+
+        latest={**graph,'connections':[{**e,'id':'replacement' if e['id']=='edge-1' else e['id']} for e in graph['connections']]+[
+            {'id':'return-4','from':'zone-4','to':'zone-3'},{'id':'return-3','from':'zone-3','to':'zone-2'}]}
+        map_revision(c,{'schemaVersion':'ngs.map-metadata.v1','projectId':'binari','mapId':map_id,
+                        'officialRequestId':'request.official.'+'6'*64,'updatedAt':15,'revision':3,'graph':latest},True)
+        pin1={'revision':2,'officialRequestId':change['officialRequestId']}
+        bad=[{**rows[0],'portalConditions':[{**cond,'requiredState':'altar-empty'}]},rows[1]]
+        refused=file_update('2',pin1,bad)
+        self.assertEqual(call(packet={'claim':refused},expect=409,base=UPDATE),{'error':'FILE_UPDATE_ASSEMBLY_PORTAL_MISSING'})
+        unchanged=[{**rows[0],'scale':scale},rows[1]]
+        unrelated=file_update('3',pin1,unchanged)
+        call(packet={'claim':unrelated},base=UPDATE)
+        batch=json.loads((path/'3.json').read_text())
+        self.assertEqual(batch['puzzles'],unchanged)
+        self.assertEqual(batch['map'],batch_ref)
+        stale_update=file_update('4',pin1,rows)
+        self.assertEqual(call(packet={'claim':stale_update},expect=409,base=UPDATE),{'error':'FILE_UPDATE_REVISION_CONFLICT'})
+        # A direct writer request is also fenced against an absent changed portal.
+        invalid={**batch,'revision':4,'officialRequestId':'request.official.'+'0'*64,'puzzles':bad}
+        self.call('/v1/scopes/cinematics/workflow/assemblies/metadata-update','media',
+                  {'expected':{'revision':3,'officialRequestId':batch['officialRequestId']},'state':invalid},status=409)
+
         # Backing bytes removed despite an intact manifest must not yield a new saved revision.
         media=bowl['media']['pixel']['assetId']
         (self.data/'props'/bowl['propId']/'assets'/media).unlink()
@@ -157,7 +202,7 @@ s.close();"""
         clear=stage('f',{**u,'expectedRevision':2,'puzzles':[]},'assembly.update',17)
         empty=call('/read',{'claim':clear})['state'];self.assertEqual(empty['puzzles'],[])
         call('',{'claim':clear,'state':empty})
-        self.assertEqual(call('/list',{}),{'assemblies':[empty,batch]})
+        self.assertEqual(call('/list',{}),{'assemblies':[batch,empty]})
 
         self.assertEqual(call(base=ASSEMBLY_CAPABILITY),{'enabled':True,'roots':[ASSEMBLY_ROOT],'schemaVersion':SCHEMA})
         self.assertEqual(call(base=DELETE)['roots'],[])

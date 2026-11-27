@@ -11,6 +11,7 @@ OID=r'request\.official\.[a-f0-9]{64}'
 SLUG=r'[a-z0-9]+(?:[-._][a-z0-9]+)*'
 REGION=r'[a-z][a-z0-9-]{0,31}'
 HASH=r'[a-f0-9]{64}'
+PORTAL_STATES=('altar-empty','carried-empty','carried-filled','altar-filled')
 FIELDS=('schemaVersion','projectId','assemblyId','revision','updatedAt','officialRequestId','title','map','puzzles')
 
 def keys(v,fields):return type(v)is dict and set(v)==set(fields)
@@ -24,20 +25,40 @@ def pin(v):
 def xy(v,a,b):return int_range(v['x'],a,b) and int_range(v['y'],a,b)
 def station(v):return keys(v,('regionId','x','y')) and match(v['regionId'],REGION) and xy(v,10,90)
 def offset(v):return keys(v,('x','y')) and xy(v,-12,12)
+def valid_conditions(v):
+    if type(v)is not list or len(v)>16:return False
+    ids=set()
+    for c in v:
+        if not (keys(c,('portalId','propRole','requiredState')) and match(c['portalId'],REGION) and c['portalId'] not in ids and
+                c['propRole']=='bowl' and c['requiredState'] in PORTAL_STATES):return False
+        ids.add(c['portalId'])
+    return True
+
+def condition_index(rows):
+    return {(p['id'],c['portalId']):c for p in rows for c in p.get('portalConditions',())}
+
+def affected_conditions_exist(previous,current,graph):
+    prior=condition_index(previous)
+    portals={e['id'] for e in graph['connections'] if 'id' in e}
+    return all(c==prior.get(k) or c['portalId'] in portals for k,c in condition_index(current).items())
+
 def puzzles(v):
     if type(v)is not list or not 0<=len(v)<=32:return False
     ids=set()
     fields=('id','type','layout','attachments','bindings')
     for p in v:
-        has_scale=type(p)is dict and 'scale' in p
-        if has_scale and not (keys(p['scale'],ROLES) and all(int_range(x,10,300) for x in p['scale'].values())):return False
-        if not (keys(p,fields+('scale',) if has_scale else fields) and slug(p['id']) and p['id'] not in ids and p['type']==TYPE and
+        optional=tuple(k for k in ('scale','portalConditions') if type(p)is dict and k in p)
+        if 'scale' in optional and not (keys(p['scale'],ROLES) and all(int_range(x,10,300) for x in p['scale'].values())):return False
+        if 'portalConditions' in optional and not valid_conditions(p['portalConditions']):return False
+        if not (keys(p,fields+optional) and slug(p['id']) and p['id'] not in ids and p['type']==TYPE and
                 keys(p['layout'],('altar','well')) and all(station(x) for x in p['layout'].values()) and
                 keys(p['attachments'],('bowl','lid')) and all(offset(x) for x in p['attachments'].values()) and
                 keys(p['bindings'],ROLES) and all(pin(x) for x in p['bindings'].values()) and
                 len({x['propId'] for x in p['bindings'].values()})==4):return False
         ids.add(p['id'])
     return True
+def content(v):
+    return keys(v,('title','mapId','puzzles')) and clean(v['title'],100) and match(v['mapId'],OID) and puzzles(v['puzzles'])
 def state(v):
     return (keys(v,FIELDS) and v['schemaVersion']==STATE and v['projectId']=='binari' and
             all(match(v[k],OID) for k in ('assemblyId','officialRequestId')) and int_range(v['revision'],1,MAX_REV) and

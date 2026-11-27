@@ -1,6 +1,6 @@
 """Atomic assembly publication on the existing cinematic store and lock."""
 import json
-from assembly_contract import LIMIT,OID,int_range,keys,match,playable,state,wire,MAX_REV
+from assembly_contract import LIMIT,OID,int_range,keys,match,playable,state,wire,MAX_REV,affected_conditions_exist,condition_index
 from map_store import map_base,read_revision,REVISION,deletion_marker
 from server import Conflict
 
@@ -76,6 +76,12 @@ def map_state(store,v):
     return m
 def call(store,operation,body):
     need(type(body)is dict)
+    expected=None
+    if operation=='metadata-update':
+        need(keys(body,('expected','state')) and keys(body['expected'],('revision','officialRequestId')) and
+             int_range(body['expected']['revision'],1,MAX_REV-1) and match(body['expected']['officialRequestId'],OID))
+        expected=body['expected'];body=body['state'];operation='publish'
+        need(state(body) and body['revision']==expected['revision']+1)
     with store.lock():
         if operation=='map':return map_state(store,body)
         if operation=='list':
@@ -101,6 +107,14 @@ def call(store,operation,body):
         need(operation=='publish' and state(body))
         if retirement(store,body['assemblyId']).exists():raise Conflict('assembly retired')
         p=base(store,body['assemblyId']);h=head(store,p);n=body['revision']
+        if expected is not None:
+            if h is None or h['revision']<expected['revision'] or revision(store,p,expected['revision'])['officialRequestId']!=expected['officialRequestId']:
+                raise Conflict('assembly revision changed')
+            if h['revision']>=n:
+                old=revision(store,p,n)
+                if all(old[k]==body[k] for k in old if k!='updatedAt'):return old
+                raise Conflict('assembly revision changed')
+            if h!=expected:raise Conflict('assembly revision changed')
         if h and n<=h['revision']:
             old=revision(store,p,n)
             if old==body:return old
@@ -111,7 +125,13 @@ def call(store,operation,body):
             need(previous['officialRequestId']==h['officialRequestId'] and previous['title']==body['title'] and previous['map']==body['map'])
             # Check the current map while holding the same storage lock as publication.
             m=map_state(store,{'mapId':body['map']['mapId']})
+            if expected is None:
+                if condition_index(previous['puzzles'])!=condition_index(body['puzzles']):
+                    raise Conflict('assembly portal conditions require file.update')
+            elif not affected_conditions_exist(previous['puzzles'],body['puzzles'],m['graph']):
+                raise Conflict('assembly portal condition target changed')
         else:
+            need(not condition_index(body['puzzles']))
             need(body['assemblyId']==body['officialRequestId'])
             m=map_state(store,{'mapId':body['map']['mapId']})
             if any(m[k]!=body['map'][k] for k in ('mapId','revision','officialRequestId')):raise Conflict('assembly map pin stale')

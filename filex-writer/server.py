@@ -483,13 +483,13 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     if url.path==ASSEMBLY or url.path.startswith(ASSEMBLY+'/'):
                         from assembly_store import call as assembly_call
                         routes.update({ASSEMBLY:lambda p:assembly_call(store,'publish',p),
-                         **{ASSEMBLY+'/'+op:(lambda p,op=op:assembly_call(store,op,p)) for op in ('head','revision','list','map')}})
+                         **{ASSEMBLY+'/'+op:(lambda p,op=op:assembly_call(store,op,p)) for op in ('head','revision','list','map','metadata-update')}})
                     action=routes.get(url.path)
                     if self.command!='POST' or action is None:return self.reply(404,{'error':'NOT_FOUND'})
                     n=self.headers.get('Content-Length','')
                     if (url.query or self.headers.get('Origin') is not None or self.headers.get('Transfer-Encoding') is not None or
                         self.headers.get('Content-Type')!='application/json' or not n.isascii() or not n.isdecimal() or
-                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path in (CINEMATIC_ROUTE,SOURCE_ROUTE,BACKGROUND_ROUTE) else 6*1024*1024 if url.path==SEQUENCE_ROUTE+'/frame' else 64*1024 if url.path in (SEQUENCE_ROUTE,PLAYBACK_ROUTE,PLAYBACK_ROUTE+'/result',MAP_ROUTE,MAP_ROUTE+'/metadata-update',ASSEMBLY) else 4096)):
+                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path in (CINEMATIC_ROUTE,SOURCE_ROUTE,BACKGROUND_ROUTE) else 6*1024*1024 if url.path==SEQUENCE_ROUTE+'/frame' else 64*1024 if url.path in (SEQUENCE_ROUTE,PLAYBACK_ROUTE,PLAYBACK_ROUTE+'/result',MAP_ROUTE,MAP_ROUTE+'/metadata-update',ASSEMBLY,ASSEMBLY+'/metadata-update') else 4096)):
                         raise ValueError('cinematic transport')
                     def distinct(values):
                         out=dict(values)
