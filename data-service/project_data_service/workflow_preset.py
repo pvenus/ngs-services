@@ -171,6 +171,8 @@ def _log_outcome(handler, envelope, status, error):
         'KNOWLEDGE_SOURCE_CHANGED': 'FILEX_HTTP_CONFLICT',
         'FILEX_CAS_HTTP_400': 'FILEX_REQUEST_REJECTED',
         'FILEX_CAS_HTTP_503': 'FILEX_OUTCOME_UNCONFIRMED',
+        'FILEX_WRITE_BUSY': 'FILEX_WRITE_BUSY',
+        'STORAGE_FAILURE': 'FILEX_STORAGE_FAILURE',
     }
     raw = error.args[0] if isinstance(error, ValueError) and len(error.args) == 1 else None
     reason = reasons.get(raw, 'PRESET_VALIDATION_UNCLASSIFIED') if isinstance(raw, str) else 'PRESET_VALIDATION_UNCLASSIFIED'

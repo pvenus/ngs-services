@@ -154,7 +154,7 @@ def serve(handler,mode='representative'):
             'WORKFLOW_PORTRAIT_PLAN_REQUIRED','WORKFLOW_PORTRAIT_PIXEL_REFERENCE_LINEAGE',
             'WORKFLOW_PORTRAIT_REFERENCE','WORKFLOW_PORTRAIT_REFERENCE_BYTES',
             'WORKFLOW_PORTRAIT_PIXEL_REFERENCE_CHANGED','WORKFLOW_PORTRAIT_WRITE_NOT_CONFIRMED',
-            'FILEX_CAS_HTTP_503','FILEX_CAS_HTTP_404','KNOWLEDGE_SOURCE_CHANGED',
+            'FILEX_CAS_HTTP_503','FILEX_CAS_HTTP_404','KNOWLEDGE_SOURCE_CHANGED','FILEX_WRITE_BUSY','STORAGE_FAILURE',
         }
         reason=error.args[0] if len(error.args)==1 and type(error.args[0]) is str and error.args[0] in safe else 'UNCLASSIFIED'
         claim=payload.get('claim') if isinstance(payload,dict) else None

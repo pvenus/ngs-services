@@ -47,6 +47,15 @@ class FilexCASTransport:
     try:failure=json.loads(e.read(513))
     except (ValueError,OSError,HTTPException):failure=None
     if failure=={'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'}:raise PinnedDeleteRejected()from None
+   if e.code==503 and (path in ('/v1/workflow/preset','/v1/workflow/plan-current','/v1/workflow/plan-idle',
+            '/v1/workflow/plan-representative','/v1/workflow/portrait-representative',
+            '/v1/workflow/portrait-idle-reference','/v1/workflow/portrait-direction',
+            '/v1/workflow/portrait-combat-reference','/v1/workflow/portrait-combat-direction',
+            '/v1/snapshot','/v1/capabilities') or path.startswith('/v1/generation/')):
+    try:failure=json.loads(e.read(512))
+    except (ValueError,OSError,HTTPException):failure=None
+    for code in ('FILEX_WRITE_BUSY','STORAGE_FAILURE'):
+     if failure=={'error':code}:raise ValueError(code) from None
    if e.code==409:raise ValueError('KNOWLEDGE_SOURCE_CHANGED')from None
    raise ValueError('FILEX_CAS_HTTP_'+str(e.code))from None
   require(asset_read or len(raw)<=limit,'FILEX_CAS_RESPONSE_LIMIT');return json.loads(raw)
