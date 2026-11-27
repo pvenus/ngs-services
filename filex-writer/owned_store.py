@@ -69,9 +69,17 @@ class OwnedNPCStore(NPCStore):
                 raise Conflict('NPC_PLANNING_UNBOUND_MARKDOWN')
             documents[rel]=planning_projection(rel,value,lambda key:self.safe(key).read_bytes())
         return documents
-    def snapshot_unlocked(self):
+    def documents_snapshot_unlocked(self):
         documents=self.documents_unlocked()
-        hashes={k:digest(v) for k,v in documents.items()};refs=set();manifests=self.manifests()
+        hashes={k:digest(v) for k,v in documents.items()}
+        version=digest(hashes)
+        return {'sourceVersion':version,'manifestHash':version,'documents':documents,
+                'hashes':hashes,'hashMode':'canonical-json'}
+    def documents_snapshot(self):
+        with self.lock():return self.documents_snapshot_unlocked()
+    def snapshot_unlocked(self):
+        snapshot=self.documents_snapshot_unlocked()
+        documents=snapshot['documents'];refs=set();manifests=self.manifests()
         for owner in documents.get('metadata.json',{}).get('characterOrder',[]):
             if owner in manifests:refs.update(x['assetId']for x in manifests[owner]['slots'].values())
             else:refs.update(re.findall(r'[0-9a-f]{64}\.(?:png|jpg|webp|mp4)',encoded({k:v for k,v in documents.items()if k.startswith(owner+'/')}).decode()))
@@ -80,7 +88,7 @@ class OwnedNPCStore(NPCStore):
             b=self.asset_path(aid,slot_paths=slot_paths).read_bytes()
             if hashlib.sha256(b).hexdigest()!=aid.split('.')[0]:raise Conflict('asset integrity')
             assets.append({'assetId':aid,'sha256':aid.split('.')[0],'size':len(b),'mimeType':{'png':'image/png','jpg':'image/jpeg','webp':'image/webp','mp4':'video/mp4'}[aid.split('.')[-1]]})
-        return {'sourceVersion':digest(hashes),'manifestHash':digest(hashes),'documents':documents,'hashes':hashes,'assets':assets,'hashMode':'canonical-json'}
+        return {**snapshot,'assets':assets}
     def recover_owned(self):
         journal=self.safe('.owned-tx.json')
         if not journal.exists():return
