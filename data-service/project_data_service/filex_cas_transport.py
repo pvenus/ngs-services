@@ -2,6 +2,7 @@
 import base64,hashlib,json,urllib.parse,urllib.request,urllib.error
 from http.client import HTTPException
 from pathlib import Path
+from .workflow_db_boundary import require_closed_snapshot
 from .filex_read import private_read,canonical,require
 from .filex_writer_binding import scoped_path
 CONFIG=Path.home()/'Library/Application Support/NPCGen/pds-filex-cas.json'
@@ -26,6 +27,7 @@ class FilexCASTransport:
  def __exit__(self,*args):self.token=None
  def request_url(self,path):return self.endpoint+(scoped_path(self.writer_scope,path) if self.writer_scope else path)
  def call(self,method,path,body=None,missing=False,*,timeout=60):
+  require_closed_snapshot()
   headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}
   try:
    with self.op.open(urllib.request.Request(self.request_url(path),data=canonical(body)if body is not None else None,method=method,headers=headers),timeout=timeout)as r:
@@ -60,6 +62,7 @@ class FilexCASTransport:
    raise ValueError('FILEX_CAS_HTTP_'+str(e.code))from None
   require(asset_read or len(raw)<=limit,'FILEX_CAS_RESPONSE_LIMIT');return json.loads(raw)
  def audio_separate_asset(self,path,binding,*,maximum):
+  require_closed_snapshot()
   require(path=='/v1/workflow/audio-separate/asset','FILEX_AUDIO_ASSET_ROUTE')
   headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}
   req=urllib.request.Request(self.request_url(path),data=canonical({'binding':binding}),method='POST',headers=headers)

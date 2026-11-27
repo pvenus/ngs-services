@@ -10,6 +10,7 @@ import stat
 
 from .filex_read import canonical,digest
 from .workflow_pose_recipes import POSE_RECIPES
+from .workflow_db_boundary import workflow_snapshot_open
 
 IDENTITY=('officialRequestId','taskId','projectId','npcId','payloadSha256')
 SCHEMA='ngs.npc-one-stop.replace.v1'
@@ -100,8 +101,12 @@ class PrivatePlannerClaim:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
                 ==['workflow_runs','workflow_tasks'])
             self.check_path()
-            yield db
-            self.check_path()
+            token=workflow_snapshot_open.set(True)
+            try:
+                yield db
+                self.check_path()
+            finally:
+                workflow_snapshot_open.reset(token)
         finally:
             db.close()
 

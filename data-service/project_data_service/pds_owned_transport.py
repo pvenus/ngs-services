@@ -4,6 +4,7 @@ original admission guard. Never obtain a fresh generation during late publish.
 """
 import base64,hashlib
 from urllib.parse import quote
+from .workflow_db_boundary import require_closed_snapshot
 from .filex_npc_store import NPCTransport
 from .filex_read import require
 
@@ -104,6 +105,7 @@ class OwnedNPCTransport(NPCTransport):
   require(__import__('re').fullmatch(r'asset\.[a-f0-9]{48}',asset_id),'PORTRAIT_ASSET_ID')
   return self.call('GET','/v1/portrait-assets/'+asset_id,missing=True)
  def register_portrait_asset(self,metadata,data):
+  require_closed_snapshot()
   import json,urllib.request
   from .filex_read import canonical
   envelope={'metadata':metadata,'guard':self._guard()}

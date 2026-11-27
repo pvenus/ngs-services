@@ -1,6 +1,7 @@
 """PDS-owned read-only Filex transport. Workers never receive its credentials or paths."""
 import hashlib, http.cookiejar, json, os, re, stat, urllib.parse, urllib.request
 from pathlib import Path
+from .workflow_db_boundary import require_closed_snapshot
 
 CONFIG=Path.home()/'Library/Application Support/NPCGen/pds-filex-source.json'
 ORIGIN='http://127.0.0.1:5212'
@@ -26,6 +27,7 @@ class FilexRead:
   self.jar=http.cookiejar.CookieJar();self.token=None
   self.op=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPCookieProcessor(self.jar),NoRedirect())
  def call(self,method,path,body=None,limit=None):
+  require_closed_snapshot()
   headers={'Origin':self.origin}
   if body is not None:headers['Content-Type']='application/json'
   if self.token:headers['Authorization']='Bearer '+self.token
