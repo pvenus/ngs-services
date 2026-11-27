@@ -6,7 +6,7 @@ from .workflow_cinematic_sequence import exact_claim,strict_json,OFFICIAL,SAFE_I
 from .filex_writer_binding import writer as connect
 from .assembly_contract import content as assembly_content,MAX_REV as ASSEMBLY_MAX_REV,SPIRIT_TYPE,playable,affected_conditions_exist,definitions_preserved,state as assembly_state
 from .workflow_assembly import WRITER as ASSEMBLY_WRITER,ref as assembly_ref
-from .workflow_map import WRITER as MAP_WRITER,graph_valid,changed_decoration_pins,ref as map_ref
+from .workflow_map import WRITER as MAP_WRITER,graph_valid, preserve_perspective,changed_decoration_pins,ref as map_ref
 
 PATH='/v1/storage/workflow-file-update'
 CAP='workflow.file-update.v1'
@@ -30,7 +30,7 @@ class MapMetadata:
     def read(self,provider,mid,rev):
         return provider.storage(MAP_WRITER+'/revision',{'mapId':mid,'revision':rev})
     def logical_content(self,prior,content):
-        result=dict(content)
+        result=preserve_perspective(prior,content)
         if 'decorations' in prior and 'decorations' not in result:result['decorations']=prior['decorations']
         return graph_valid(result)
     def write(self,provider,oid,p):
@@ -53,7 +53,7 @@ class MapMetadata:
                 'updatedAt':int(time.time()*1000),'officialRequestId':oid,'graph':content}
         return provider.storage(MAP_WRITER+'/metadata-update',{'expected':expected,'state':result})
     def matches(self,result,oid,mid,rev,content,*,provider=None):
-        if provider is not None and 'decorations' not in content:
+        if provider is not None:
             prior=self.read(provider,mid,rev-1)
             content=self.logical_content(prior['graph'],content)
         return (type(result) is dict and result.get('mapId')==mid and result.get('revision')==rev and

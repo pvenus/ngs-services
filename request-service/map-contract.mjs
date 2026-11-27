@@ -42,6 +42,12 @@ export const validDecorationDesign=v=>mapFields(v,['mode','notes','candidates'])
  Array.isArray(v.candidates)&&(v.mode==='none'?v.candidates.length===0:1<=v.candidates.length&&v.candidates.length<=12)&&
  v.candidates.every(c=>mapFields(c,['prop','visibility'])&&mapPropPin(c.prop)&&visibility(c.visibility))&&
  new Set(v.candidates.map(c=>c.prop.propId)).size===v.candidates.length;
+const baseRegionFields=['id','name','description','backgroundId','imageSha256'];
+export const validMapPerspective=v=>v===null||(mapFields(v,['near','far'])&&
+ ['near','far'].every(k=>mapFields(v[k],['point','actorHeight','viewWidth'])&&mapPoint(v[k].point)&&
+ Number.isInteger(v[k].actorHeight)&&v[k].actorHeight>=10&&v[k].actorHeight<=650&&
+ Number.isInteger(v[k].viewWidth)&&v[k].viewWidth>=200&&v[k].viewWidth<=1000)&&
+ (v.near.point.x-v.far.point.x)**2+(v.near.point.y-v.far.point.y)**2>=100);
 export const mapBackgroundIds=graph=>[...new Set(graph.regions.map(r=>r.backgroundId).filter(Boolean))];
 export function validMapGraph(v,{partial=false}={}){
  const fields=['title','startRegionId','regions','connections'];
@@ -54,7 +60,7 @@ export function validMapGraph(v,{partial=false}={}){
  }
  const withColliders=v!==null&&typeof v==='object'&&Object.hasOwn(v,'colliders');
  if(!mapFields(v,withColliders?[...fields,'colliders']:fields)||!mapText(v.title,100)||!Array.isArray(v.regions)||
-    v.regions.length<1||v.regions.length>24||!v.regions.every(r=>mapFields(r,['id','name','description','backgroundId','imageSha256'])&&
+    v.regions.length<1||v.regions.length>24||!v.regions.every(r=>(mapFields(r,baseRegionFields)||(!partial&&mapFields(r,[...baseRegionFields,'perspective'])&&validMapPerspective(r.perspective)))&&
       regionId(r.id)&&mapText(r.name,100)&&mapText(r.description,1000)&&backgroundId(r.backgroundId)&&typeof r.imageSha256==='string'&&/^[a-f0-9]{64}$/.test(r.imageSha256)))return false;
  const ids=new Set(v.regions.map(r=>r.id));
  if(Object.hasOwn(v,'decorations')&&!validDecorations(v.decorations,ids))return false;
@@ -83,14 +89,16 @@ const title={type:'string',minLength:1,maxLength:100};
 const count=(minimum,maximum)=>({type:'integer',minimum,maximum});
 const pointSchema=obj({x:count(0,1000),y:count(0,1000)});
 const rectangleSchema=obj({...pointSchema.properties,width:count(1,1000),height:count(1,1000)});
-const regionSchema=obj({id:key,name:title,description:{type:'string',minLength:1,maxLength:1000},
- backgroundId:{type:'string',pattern:'^background\\.[a-f0-9]{64}$'},imageSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}});
+const perspectiveAnchorSchema=obj({point:pointSchema,actorHeight:count(10,650),viewWidth:count(200,1000)});
+const perspectiveSchema={oneOf:[{type:'null'},obj({near:perspectiveAnchorSchema,far:perspectiveAnchorSchema})]};
+const regionSchema=generate=>obj({id:key,name:title,description:{type:'string',minLength:1,maxLength:1000},
+ backgroundId:{type:'string',pattern:'^background\\.[a-f0-9]{64}$'},imageSha256:{type:'string',pattern:'^[a-f0-9]{64}$'},...(generate?{}:{perspective:perspectiveSchema})},baseRegionFields);
 const propPinSchema=obj({propId:{type:'string',minLength:2,maxLength:80,pattern:'^[a-z0-9]+(?:[-._][a-z0-9]+)*$'},
   revision:count(1,Number.MAX_SAFE_INTEGER-1),sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}});
 const visibilitySchema={enum:['both','pixel','cinematic']};
 const decorationSchema=obj({id:key,regionId:key,prop:propPinSchema,anchor:pointSchema,scale:count(10,300),visibility:visibilitySchema,rotation:count(0,359),flipX:{type:'boolean'},flipY:{type:'boolean'},zOrder:count(propZMin,propZMax)},decorationFields);
 const graphSchema=(generate)=>obj({title,startRegionId:key,...(generate?{}:{startPoint:pointSchema,decorations:{type:'array',maxItems:48,items:decorationSchema}}),
- regions:{type:'array',minItems:generate?2:1,maxItems:generate?12:24,items:regionSchema},
+ regions:{type:'array',minItems:generate?2:1,maxItems:generate?12:24,items:regionSchema(generate)},
  connections:{type:'array',minItems:generate?1:0,maxItems:96,items:obj({id:key,from:key,to:key,
   hit:generate?{type:'null'}:rectangleSchema,spawn:generate?{type:'null'}:pointSchema,label:title})},
  colliders:{type:'array',maxItems:generate?0:96,items:{oneOf:[obj({id:key,regionId:key,rect:rectangleSchema}),obj({id:key,regionId:key,rect:rectangleSchema,shape:{enum:['rect','ellipse']},rotation:count(0,359)})]}}},

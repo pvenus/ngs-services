@@ -257,6 +257,9 @@ s.close();"""
         # New edit path replaces the entire known metadata document, not raw paths.
         self.assertEqual(call(prefix=UPDATE),{'enabled':True,'schemaVersion':UPDATE_CAP})
         patch={**changed,'connections':[{**e,'spawn':{'x':440+i,'y':840}} for i,e in enumerate(changed['connections'])]}
+        perspective={'near':{'point':{'x':486,'y':645},'actorHeight':376,'viewWidth':872},
+                     'far':{'point':{'x':308,'y':366},'actorHeight':87,'viewWidth':543}}
+        patch['regions']=[{**row,'perspective':perspective} if i==0 else row for i,row in enumerate(patch['regions'])]
         command={'schemaVersion':'ngs.file-update.v1','projectId':'binari',
                  'target':{'root':MAP_ROOT,'path':survivor,'kind':'metadata'},
                  'expected':{'revision':1,'officialRequestId':survivor},'content':patch}

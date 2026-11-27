@@ -62,3 +62,15 @@ class MapGroupStoreTest(TestCase):
         with ThreadPoolExecutor(2) as pool:results=list(pool.map(publish,states))
         self.assertEqual(sum(x is not None for x in results),1)
         self.assertEqual(map_revision(self.store,states[0]),next(x for x in results if x is not None))
+
+    def test_perspective_survives_same_revision_reads_and_rejects_invalid_numbers(self):
+        profile={'near':{'point':{'x':486,'y':645},'actorHeight':376,'viewWidth':872},
+                 'far':{'point':{'x':308,'y':366},'actorHeight':87,'viewWidth':543}}
+        good=self.state(1,graph={**self.graph,'regions':[{'id':'yard','perspective':profile}]})
+        self.assertEqual(map_revision(self.store,good,True),good)
+        self.assertEqual(map_revision(self.store,good),good)
+        bad={**profile,'near':{**profile['near'],'viewWidth':True}}
+        invalid=self.state(2,graph={**self.graph,'regions':[{'id':'yard','perspective':bad}]})
+        with self.assertRaises(ValueError):map_revision(self.store,invalid,True)
+        cleared=self.state(2,graph={**self.graph,'regions':[{'id':'yard','perspective':None}]})
+        self.assertEqual(map_revision(self.store,cleared,True),cleared)

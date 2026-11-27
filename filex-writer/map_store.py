@@ -89,6 +89,22 @@ def part_path(base,n,part):
     need(not path.is_symlink())
     return path
 
+def validate_perspective(graph):
+    regions=graph.get('regions')
+    need(type(regions) is list)
+    for row in regions:
+        need(type(row) is dict)
+        profile=row.get('perspective')
+        if profile is None:continue
+        need(type(profile) is dict and set(profile)=={'near','far'})
+        for a in profile.values():
+            need(type(a) is dict and set(a)=={'point','actorHeight','viewWidth'} and
+                 type(a['actorHeight']) is int and 10<=a['actorHeight']<=650 and
+                 type(a['viewWidth']) is int and 200<=a['viewWidth']<=1000)
+            pt=a['point']
+            need(type(pt) is dict and set(pt)=={'x','y'} and all(type(n) is int and 0<=n<=1000 for n in pt.values()))
+        need(sum((profile['near']['point'][k]-profile['far']['point'][k])**2 for k in ('x','y'))>=100)
+
 def validate_start(graph):
     if 'startPoint' not in graph:return
     pt=graph['startPoint']
@@ -136,7 +152,7 @@ def read_revision(store,base,n):
     state=json.loads(store._read(p,65536))
     need(type(state)is dict and state.get('revision')==n and state.get('mapId')==base.name)
     if state.get('schemaVersion')==GROUP_SCHEMA:state=read_group(store,base,n,state)
-    validate_colliders(state.get('graph')); validate_start(state['graph']);validate_decorations(state['graph'])
+    validate_colliders(state.get('graph')); validate_start(state['graph']);validate_decorations(state['graph']);validate_perspective(state['graph'])
     return state
 def map_context(store,p):
     ids=p.get('backgroundIds') if type(p)is dict else None
@@ -167,7 +183,7 @@ def map_revision(store,p,write=False,expected=None):
     if not write:return read_revision(store,base,n)
     need(set(p)=={'schemaVersion','projectId','mapId','revision','updatedAt','officialRequestId','graph'} and
          p['schemaVersion']=='ngs.map-metadata.v1' and p['projectId']=='binari' and match(p['officialRequestId'],OID))
-    graph=p['graph']; validate_colliders(graph); validate_start(graph);validate_decorations(graph)
+    graph=p['graph']; validate_colliders(graph); validate_start(graph);validate_decorations(graph);validate_perspective(graph)
     required={'title','regions','startRegionId','connections'}
     need(required<=set(graph)<=required|{'colliders','startPoint','decorations'} and len(encode(p))<65536)
     part_bytes={part:encode({field:graph[field]} if field in graph else {}) for part,field in PARTS.items()}

@@ -22,6 +22,22 @@ def text(v,n):return type(v)is str and 0<len(v)<=n and v==v.strip() and not any(
 def notes(v):return v=='' or text(v,1000) and len(v.encode('utf-16-le'))<=2000
 def point(v):
     return keys(v,('x','y')) and all(type(x)is int and 0<=x<=1000 for x in v.values())
+def valid_perspective(v):
+    if v is None:return True
+    if not keys(v,('near','far')):return False
+    if not all(keys(a,('point','actorHeight','viewWidth')) and point(a['point']) and
+               type(a['actorHeight']) is int and 10<=a['actorHeight']<=650 and
+               type(a['viewWidth']) is int and 200<=a['viewWidth']<=1000 for a in v.values()):return False
+    return sum((v['near']['point'][k]-v['far']['point'][k])**2 for k in ('x','y'))>=100
+def preserve_perspective(prior,current):
+    previous={r['id']:r for r in prior['regions']}
+    def keep(r):
+        old=previous.get(r['id'],{})
+        if 'perspective' not in r and 'perspective' in old and old.get('imageSha256')==r['imageSha256'] and old.get('backgroundId')==r['backgroundId']:
+            return {**r,'perspective':old['perspective']}
+        return r
+    return {**current,'regions':[keep(r) for r in current['regions']]}
+
 def rect(v):
     return (keys(v,('x','y','width','height')) and all(type(x)is int for x in v.values()) and
             0<=v['x'] and 0<=v['y'] and 0<v['width']<=1000-v['x'] and 0<v['height']<=1000-v['y'])
@@ -62,7 +78,8 @@ def graph_valid(v,partial=False):
     need(type(regions)is list and 1<=len(regions)<=24 and type(edges)is list and len(edges)<=96)
     bg=set()
     for r in regions:
-        need(keys(r,('id','name','description','backgroundId','imageSha256')) and match(r['id'],r'[a-z][a-z0-9-]{0,31}') and
+        region_fields=('id','name','description','backgroundId','imageSha256')
+        need((keys(r,region_fields) or not partial and keys(r,(*region_fields,'perspective')) and valid_perspective(r['perspective'])) and match(r['id'],r'[a-z][a-z0-9-]{0,31}') and
              r['id'] not in bg and text(r['name'],100) and text(r['description'],1000) and
              match(r['backgroundId'],BG) and match(r['imageSha256'],r'[a-f0-9]{64}'))
         bg.add(r['id'])
@@ -232,6 +249,8 @@ class WorkflowMap(WorkflowCinematic):
                 previous=self.call_map('/revision',{'mapId':mid,'revision':rev-1})['graph']
                 if 'decorations' in previous and 'decorations' not in p['graph']:
                     raise CinematicConflict('MAP_DECORATIONS_REQUIRED_FOR_UPDATE')
+                if preserve_perspective(previous,p['graph'])!=p['graph']:
+                    raise CinematicConflict('MAP_PERSPECTIVE_REQUIRED_FOR_UPDATE')
                 self.verify_props(changed_decoration_pins(previous,p['graph']))
             else:self.verify_props(changed_decoration_pins({},p['graph']))
             result=self.call_map('',{'schemaVersion':'ngs.map-metadata.v1','projectId':'binari','mapId':mid,
