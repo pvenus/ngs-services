@@ -192,6 +192,37 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.writer.owner_files('npc.fresh')['npc.fresh/assets/portraits/representative/portrait.png'],raw)
         self.assertEqual(self.writer.snapshot()['documents']['metadata.json']['_pdsCurrent']['revision'],before+2)
 
+    def test_reserved_save_releases_sqlite_for_unrelated_commit_and_fences_rejected_attempt(self):
+        from project_data_service.pds_owned_transport import OwnedNPCTransport
+        from project_data_service.workflow_save_reservation import expire_document_saves
+        from unittest.mock import patch
+        with sqlite3.connect(self.db) as db:
+            db.execute('ALTER TABLE workflow_tasks ADD COLUMN save_started_at INTEGER')
+        _,view=self.read();basis=view['basis']
+        original=OwnedNPCTransport.workflow_plan_idle
+        def send(tx,binding,content,save_fence=None):
+            with sqlite3.connect(self.db,timeout=0) as db:
+                marker=db.execute('SELECT save_started_at FROM workflow_tasks WHERE task_id=?',(self.c['taskId'],)).fetchone()[0]
+                self.assertIsNotNone(marker)
+                # Different task can commit while this Filex call has not returned.
+                db.execute('UPDATE workflow_tasks SET updated_at=updated_at+1 WHERE task_id=?',(self.preset_id,))
+            self.assertEqual(save_fence,{'taskId':self.c['taskId'],'claimStamp':self.c['claimStamp']})
+            return original(tx,binding,content,save_fence)
+        with patch.object(OwnedNPCTransport,'workflow_plan_idle',send):
+            self.assertEqual(self.publish(basis),(200,{'ok':True}))
+        with sqlite3.connect(self.db) as db:
+            self.assertIsNotNone(db.execute('SELECT save_started_at FROM workflow_tasks WHERE task_id=?',(self.c['taskId'],)).fetchone()[0])
+            db.execute('UPDATE workflow_tasks SET save_started_at=5 WHERE task_id=?',(self.c['taskId'],))
+        pds=self.pds.workflow_plan_idle
+        self.assertEqual(expire_document_saves(pds.verifier,pds.source,now_ms=200000),[self.c['taskId']])
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute('SELECT status,save_started_at FROM workflow_tasks WHERE task_id=?',(self.c['taskId'],)).fetchone(),('failed',None))
+        with pds.source.store.factory() as tx:
+            generation={k:self.c[k] for k in ('taskId','claimStamp')}
+            binding={k:self.c[k] for k in ('taskId','officialRequestId','projectId','npcId','payloadSha256')}
+            with self.assertRaisesRegex(ValueError,'KNOWLEDGE_SOURCE_CHANGED'):
+                tx.workflow_plan_idle({**binding,'categoryId':basis['categoryId']},'late stale output',generation)
+
     def test_denied_without_writer_opt_in(self):
         _,uri=self.start(handler(self.writer,self.original_token,workflow_representative=True))
         req=Request(uri+'/v1/workflow/plan-idle',headers={'Authorization':'Bearer '+self.original_token,

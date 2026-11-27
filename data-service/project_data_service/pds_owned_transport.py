@@ -74,12 +74,14 @@ class OwnedNPCTransport(NPCTransport):
  def delete_prepared(self,request_id,input_hash,character_id,source,metadata,generation_id):
   # Deletion is fenced at zero leases: do not borrow/reacquire a worker lease.
   return self.call('POST','/v1/delete-character',{'requestId':request_id,'inputHash':input_hash,'characterId':character_id,'expectedSourceVersion':source,'metadataAfter':metadata,'guard':{'npcId':character_id,'generationId':generation_id,'requestId':request_id}})
- def workflow_plan_representative(self,binding,content,metadata):
-  return self.call('POST','/v1/workflow/plan-representative',{'binding':binding,'content':content,'metadataAfter':metadata})
- def workflow_plan_current(self,stage,binding,content):
-  return self.call('POST','/v1/workflow/plan-current',{'stage':stage,'binding':binding,'content':content})
- def workflow_plan_idle(self,binding,content):
-  return self.call('POST','/v1/workflow/plan-idle',{'binding':binding,'content':content})
+ def workflow_plan_representative(self,binding,content,metadata,save_fence=None):
+  return self.call('POST','/v1/workflow/plan-representative',{'binding':binding,'content':content,'metadataAfter':metadata,**({'saveFence':save_fence}if save_fence else {})})
+ def workflow_plan_current(self,stage,binding,content,save_fence=None):
+  return self.call('POST','/v1/workflow/plan-current',{'stage':stage,'binding':binding,'content':content,**({'saveFence':save_fence}if save_fence else {})})
+ def workflow_plan_idle(self,binding,content,save_fence=None):
+  return self.call('POST','/v1/workflow/plan-idle',{'binding':binding,'content':content,**({'saveFence':save_fence}if save_fence else {})})
+ def revoke_workflow_document_save(self,save_fence):
+  return self.call('POST','/v1/workflow/plan-revoke',save_fence)
  def workflow_portrait_representative(self,binding,base64_png,*,mode='representative'):
   path={'representative':'portrait-representative','idle':'portrait-idle-reference','direction':'portrait-direction','combat':'portrait-combat-reference',
         'combat_direction':'portrait-combat-direction'}[mode]

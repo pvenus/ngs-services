@@ -11,7 +11,7 @@ WORKFLOW_DB = Path.home() / 'Workspaces/Workers/data/workflow-planner/workflow.s
 REQUEST_ID = re.compile(r'request\.official\.[a-f0-9]{64}')
 TASK_LABEL = re.compile(r'[a-z0-9][a-z0-9._-]{0,99}')
 RUN_STATES = {'awaiting_rs', 'planned', 'failed', 'not_claimable'}
-TASK_STATES = {'pending', 'running', 'completed', 'failed'}
+TASK_STATES = {'pending', 'running', 'saving', 'completed', 'failed'}
 WORKERS = {'file', 'document', 'image', 'animation', 'postprocess', 'audio'}
 # Upper bound implied by one accepted canonical payload, not a selection cap.
 # A valid motion record always carries the exact keys, at least one byte of
@@ -77,10 +77,11 @@ def read_progress(request_id, path=WORKFLOW_DB):
                 # Select only fixed expressions; old Planner schemas remain readable.
                 retry = 't.retry_count' if 'retry_count' in fields else 'NULL'
                 limit = 't.retry_limit' if 'retry_limit' in fields else '3' if 'retry_count' in fields else 'NULL'
+                saving = "CASE WHEN t.status='running' AND t.save_started_at IS NOT NULL THEN 'saving' ELSE t.status END" if 'save_started_at' in fields else 't.status'
                 extra = ','.join(f't.depends_on_task_id_{n}' if f'depends_on_task_id_{n}' in fields else 'NULL'
                                  for n in range(2,6))
                 rows = db.execute(f'''
-                    SELECT t.task_id,t.task_key,t.task_type,t.worker_type,t.status,t.updated_at,
+                    SELECT t.task_id,t.task_key,t.task_type,t.worker_type,{saving},t.updated_at,
                            {retry},{limit},t.depends_on_task_id,{extra}
                     FROM workflow_tasks AS t
                     WHERE t.official_request_id=?

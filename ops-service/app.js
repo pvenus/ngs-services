@@ -91,7 +91,7 @@ function stateFor(task,keys,state){
  if(parents.some(key=>keys.get(key)?.status==='failed'))return 'blocked';
  return parents.every(key=>keys.get(key)?.status==='completed')?'ready':'pending';
 }
-const progressLabels={completed:'완료',running:'진행 중',ready:'인수 가능',pending:'대기',failed:'실패',blocked:'선행 실패'};
+const progressLabels={completed:'완료',running:'진행 중',saving:'저장 중',ready:'인수 가능',pending:'대기',failed:'실패',blocked:'선행 실패'};
 const progressRowId=key=>'progress-task-'+encodeURIComponent(key);
 function dependencyCell(task,keys,selection){
  if(motionFinalDependencies(task,keys))return cell('8방향 MP4');

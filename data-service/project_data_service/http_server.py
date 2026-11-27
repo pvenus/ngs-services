@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import signal
+import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -878,6 +879,17 @@ def serve(storage_root: Path, host: str, port: int):
             previous_signals[sig] = signal.signal(sig, lambda *_: stopped.set())
     server.timeout = .5
     stop_heartbeat = None
+    if idle_plan_enabled == '1' or shared_plan == '1' or representative_enabled == '1':
+        from .workflow_save_reservation import expire_document_saves
+        from .workflow_delete_claim import ClaimDenied
+        def watch_document_saves():
+            while not stopped.wait(15):
+                try:
+                    for task in expire_document_saves(planner,app.domains.npcs):
+                        print(json.dumps({'event':'workflow_document_save_timeout_failed','taskId':task}),flush=True)
+                except (ClaimDenied,OSError,ValueError,sqlite3.Error):
+                    continue
+        threading.Thread(target=watch_document_saves,name='document-save-timeouts',daemon=True).start()
     try:
         server.filex_bridge.start()
         from .ops_heartbeat import start as start_heartbeat
@@ -886,6 +898,7 @@ def serve(storage_root: Path, host: str, port: int):
         while not stopped.is_set():
             server.handle_request()
     finally:
+        stopped.set()
         if stop_heartbeat is not None:
             stop_heartbeat()
         server.filex_bridge.close()

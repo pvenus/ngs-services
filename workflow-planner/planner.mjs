@@ -14,7 +14,7 @@ import {npcPlanningAddType,npcPlanningAddTaskKey,validateNPCPlanningAdd} from '.
 import {audioRequestType,audioTaskKey,validateAudioGenerate} from './audio-generate-envelope.mjs';
 import {audioDeleteType,audioDeleteTaskKey,validateAudioDelete} from './audio-delete-envelope.mjs';
 import {audioSeparateType,audioSeparateTaskKey,validateAudioSeparate} from './audio-separate-envelope.mjs';
-import {createWorkflowTasksSql,PORTRAIT_READ_OWNER_COLUMN,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,FAST_RETRY_LIMIT,migrateWorkflowAudioTask,migrateWorkflowRetryPolicy,migrateWorkflowDependencies,ADDITIONAL_DEPENDENCY_COLUMNS} from './audio-task-schema.mjs';
+import {createWorkflowTasksSql,PORTRAIT_READ_OWNER_COLUMN,RETRY_COUNT_COLUMN,WORKFLOW_TASK_MAX_RETRIES,FAST_RETRY_LIMIT,migrateWorkflowAudioTask,migrateWorkflowRetryPolicy,migrateWorkflowDependencies,migrateWorkflowSaveStage,ADDITIONAL_DEPENDENCY_COLUMNS} from './audio-task-schema.mjs';
 
 import {motion2DRequestType,validateMotion2D} from './motion-preset-convert-2d-envelope.mjs';
 import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit} from './motion-preset-convert-2d-plan.mjs';
@@ -433,7 +433,7 @@ export class PlannerStore{
     updated_at INTEGER NOT NULL, reason TEXT
   ) STRICT;
   ${createWorkflowTasksSql};`);
-  try{migrateWorkflowRetryCount(this.db);migrateWorkflowAudioTask(this.db);migrateNpcPortraitReadOwner(this.db);migrateWorkflowRetryPolicy(this.db);migrateWorkflowDependencies(this.db);}catch(e){this.db.close();throw e;}
+  try{migrateWorkflowRetryCount(this.db);migrateWorkflowAudioTask(this.db);migrateNpcPortraitReadOwner(this.db);migrateWorkflowRetryPolicy(this.db);migrateWorkflowDependencies(this.db);migrateWorkflowSaveStage(this.db);}catch(e){this.db.close();throw e;}
  }
  stage(row){
   const payload=checkRow(row);

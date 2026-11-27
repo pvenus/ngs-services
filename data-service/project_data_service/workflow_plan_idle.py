@@ -7,6 +7,7 @@ from .filex_read import canonical, digest, require
 from .pds_owned_transport import OwnedNPCTransport
 from .workflow_delete_claim import ClaimDenied, PrivatePlannerClaim
 from .workflow_plan_representative import FOLDER_INPUT, log_publication_conflict
+from .workflow_save_reservation import SaveReservation, publish_reserved
 
 PATH='/v1/npcs/ownership/workflow-plan-idle'
 FOLDER_READINESS=PATH+'?inputMode='+FOLDER_INPUT
@@ -95,7 +96,7 @@ class IdlePlan:
             identity,character,chain=pinned
         return self.read_authorized(identity,character,chain)
 
-    def publish_authorized(self,identity,b,a,chain):
+    def publish_authorized(self,identity,b,a,chain,save_fence=None):
         require(type(b) is dict and set(b)==BASIS
                 and type(b['categoryId']) is str and re.fullmatch(r'category\.preset\.[a-f0-9]{32}',b['categoryId']),
                 'WORKFLOW_IDLE_PLAN_BASIS')
@@ -107,16 +108,22 @@ class IdlePlan:
         with self.source.store.factory() as tx:
             self._writer(tx,chain)
             binding={**identity,**b}
-            ack=(tx.workflow_plan_current(self.stage,binding,a['content']) if chain else
-                 tx.workflow_plan_idle(binding,a['content']))
+            opts={'save_fence':save_fence} if save_fence is not None else {}
+            ack=(tx.workflow_plan_current(self.stage,binding,a['content'],**opts) if chain else
+                 tx.workflow_plan_idle(binding,a['content'],**opts))
         require(type(ack) is dict and set(ack)=={'ok'} and ack['ok'] is True,
                 'WORKFLOW_IDLE_PLAN_WRITE_NOT_CONFIRMED')
         return {'ok':True}
 
     def publish(self,envelope):
         require(type(envelope) is dict and set(envelope)=={'claim','basis','artifact'},'WORKFLOW_IDLE_PLAN_PUBLISH')
+        reservation=SaveReservation(self.verifier,envelope['claim'])
+        enabled=reservation.supports()
         with self.verifier.authorized_document_chain(envelope['claim'],self.stage) as (identity,_,chain):
-            return self.publish_authorized(identity,envelope['basis'],envelope['artifact'],chain)
+            if not enabled:
+                return self.publish_authorized(identity,envelope['basis'],envelope['artifact'],chain)
+        return publish_reserved(reservation,self.source,
+            lambda fence:self.publish_authorized(identity,envelope['basis'],envelope['artifact'],chain,fence))
 
 
 def serve(handler,stage='idle'):
