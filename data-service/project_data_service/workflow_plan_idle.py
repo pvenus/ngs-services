@@ -6,7 +6,7 @@ from .filex_npc_authority import FilexCurrentNPC
 from .filex_read import canonical, digest, require
 from .pds_owned_transport import OwnedNPCTransport
 from .workflow_delete_claim import ClaimDenied, PrivatePlannerClaim
-from .workflow_plan_representative import FOLDER_INPUT
+from .workflow_plan_representative import FOLDER_INPUT, log_publication_conflict
 
 PATH='/v1/npcs/ownership/workflow-plan-idle'
 FOLDER_READINESS=PATH+'?inputMode='+FOLDER_INPUT
@@ -129,6 +129,7 @@ def serve(handler,stage='idle'):
         or handler.headers.get('Origin') is not None or handler.headers.get('Transfer-Encoding') is not None
         or method=='POST' and handler.headers.get('Content-Type')!='application/json'):
         return handler.respond(403,{'error':'WORKFLOW_IDLE_PLAN_INTERNAL_ONLY'})
+    payload=None
     try:
         if method=='GET':return handler.respond(200,service.capability())
         handler.connection.settimeout(8)
@@ -136,7 +137,9 @@ def serve(handler,stage='idle'):
         return handler.respond(200,service.read(payload) if handler.path.endswith('/read') else service.publish(payload))
     except ClaimDenied:
         return handler.respond(403,{'error':'WORKFLOW_IDLE_PLAN_CLAIM_DENIED'})
-    except (ValueError,KeyError,TypeError):
+    except (ValueError,KeyError,TypeError) as error:
+        if method=='POST' and not handler.path.endswith('/read'):
+            log_publication_conflict(handler,payload,stage,error)
         return handler.respond(409,{'error':'WORKFLOW_IDLE_PLAN_NOT_CONFIRMED'})
     except (OSError,sqlite3.Error):
         return handler.respond(503,{'error':'WORKFLOW_IDLE_PLAN_OUTCOME_UNCONFIRMED'})
