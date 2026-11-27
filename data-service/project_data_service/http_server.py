@@ -61,8 +61,8 @@ class Handler(DomainHandler):
         if media_path in (npc_planning_add_path,npc_planning_add_path+'/read'):
             return npc_planning_add(self)
 
-        from .single_target_delete import PATH as single_delete_path,NPC_STANDALONE_CAPABILITY,BACKGROUND_CAPABILITY,MAP_CAPABILITY,CINEMATIC_CAPABILITY,CINEMATIC_INVENTORY,serve as single_delete
-        if media_path in (single_delete_path,NPC_STANDALONE_CAPABILITY,BACKGROUND_CAPABILITY,MAP_CAPABILITY,CINEMATIC_CAPABILITY,CINEMATIC_INVENTORY):return single_delete(self)
+        from .single_target_delete import PATH as single_delete_path,NPC_STANDALONE_CAPABILITY,BACKGROUND_CAPABILITY,MAP_CAPABILITY,ASSEMBLY_CAPABILITY,CINEMATIC_CAPABILITY,CINEMATIC_INVENTORY,serve as single_delete
+        if media_path in (single_delete_path,NPC_STANDALONE_CAPABILITY,BACKGROUND_CAPABILITY,MAP_CAPABILITY,ASSEMBLY_CAPABILITY,CINEMATIC_CAPABILITY,CINEMATIC_INVENTORY):return single_delete(self)
 
         from .workflow_motion_2d import ROUTES as motion_2d_routes,serve as motion_2d
         if media_path in motion_2d_routes:return motion_2d(self)
@@ -697,7 +697,10 @@ def serve(storage_root: Path, host: str, port: int):
     map_delete=os.getenv('PDS_WORKFLOW_MAP_DELETE','1' if host=='127.0.0.1' and hasattr(server,'workflow_delete') else '0')
     if map_delete not in ('0','1') or map_delete=='1' and (host!='127.0.0.1' or not hasattr(server,'workflow_delete')):
         raise ValueError('WORKFLOW_MAP_DELETE_OPT_IN')
-    if npc_folder_delete=='1' or concept_folder_delete=='1' or audio_delete=='1' or prop_folder_delete=='1' or background_delete=='1' or cinematic_delete=='1' or map_delete=='1':
+    assembly_delete=os.getenv('PDS_WORKFLOW_ASSEMBLY_DELETE','1' if host=='127.0.0.1' and hasattr(server,'workflow_delete') else '0')
+    if assembly_delete not in ('0','1') or assembly_delete=='1' and (host!='127.0.0.1' or not hasattr(server,'workflow_delete')):
+        raise ValueError('WORKFLOW_ASSEMBLY_DELETE_OPT_IN')
+    if assembly_delete=='1' or npc_folder_delete=='1' or concept_folder_delete=='1' or audio_delete=='1' or prop_folder_delete=='1' or background_delete=='1' or cinematic_delete=='1' or map_delete=='1':
         from .single_target_delete import SingleTargetDelete
         roots={}
         if npc_folder_delete=='1':
@@ -723,7 +726,7 @@ def serve(storage_root: Path, host: str, port: int):
             def prop_delete_ready():
                 with writer('props') as conn:return conn.capabilities().get('workflowPinnedPropFolderDeleteV1') is True
             roots[PROP_ROOT]=storage_provider(planner,lambda:writer('props'),prop_delete_ready)
-        from .workflow_file_delete import BACKGROUND_ROOT,MAP_ROOT
+        from .workflow_file_delete import BACKGROUND_ROOT,MAP_ROOT,ASSEMBLY_ROOT
         if background_delete=='1':
             from .workflow_file_delete import storage_provider
             from .filex_writer_binding import writer
@@ -746,7 +749,13 @@ def serve(storage_root: Path, host: str, port: int):
             def map_delete_ready():
                 with writer('cinematics') as conn:return conn.capabilities().get('workflowPinnedMapFolderDeleteV1') is True
             roots[MAP_ROOT]=storage_provider(planner,lambda:writer('cinematics'),map_delete_ready,root=MAP_ROOT)
-        server.single_target_delete=SingleTargetDelete(roots,dedicated=[k for k in roots if k in (BACKGROUND_ROOT,MAP_ROOT,'canonical-files/binari/cinematics')])
+        if assembly_delete=='1':
+            from .workflow_file_delete import storage_provider
+            from .filex_writer_binding import writer
+            def assembly_delete_ready():
+                with writer('cinematics') as conn:return conn.capabilities().get('workflowPinnedAssemblyFolderDeleteV1') is True
+            roots[ASSEMBLY_ROOT]=storage_provider(planner,lambda:writer('cinematics'),assembly_delete_ready,root=ASSEMBLY_ROOT)
+        server.single_target_delete=SingleTargetDelete(roots,dedicated=[k for k in roots if k in (BACKGROUND_ROOT,MAP_ROOT,ASSEMBLY_ROOT,'canonical-files/binari/cinematics')])
     representative_enabled=os.environ.get('PDS_WORKFLOW_PLAN_REPRESENTATIVE','0')
     if representative_enabled not in ('0','1'):raise ValueError('WORKFLOW_REPRESENTATIVE_OPT_IN')
     if representative_enabled=='1':

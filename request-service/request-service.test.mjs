@@ -907,8 +907,9 @@ test('local map request contracts are discoverable and the valid queued payload 
  }
 });
 
-test('map folder deletion advertises only its dedicated capability and pins a single published revision', async t=>{
- const {directory,path}=folder(t),root='canonical-files/binari/cinematics/maps';
+for(const folderKind of ['maps','assemblies'])
+test(folderKind+' deletion advertises only its dedicated capability and pins a single published revision', async t=>{
+ const {directory,path}=folder(t),root='canonical-files/binari/cinematics/'+folderKind;
  let ready=false;
  const service=createRequestService({directory,fileDeleteReadiness:async r=>ready&&r===root});
  await new Promise(resolve=>service.listen(0,host,resolve));
@@ -920,7 +921,7 @@ test('map folder deletion advertises only its dedicated capability and pins a si
  const expected={revision:2,officialRequestId:'request.official.'+'2'.repeat(64)};
  const payload={schemaVersion:'ngs.file-delete.v1',projectId:'binari',target,expected};
  const submit=payload=>rpc('tools/call',{name:'request_submit',arguments:{sourceId:'local',requestType:'file.delete',idempotencyKey:'one-map',payload}});
- assert.doesNotMatch(JSON.stringify((await rpc('tools/list')).result),/canonical-files\/binari\/cinematics\/maps/);
+ assert.equal(JSON.stringify((await rpc('tools/list')).result).includes(root),false);
  assert.match(JSON.stringify(await submit(payload)),/NGS_FILE_DELETE_UNAVAILABLE/);
  ready=true;
  const shapes=(await rpc('tools/list')).result.tools[0].inputSchema.oneOf;

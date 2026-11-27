@@ -39,3 +39,12 @@ The PDS loopback workflow uses
 worker claims or direct Filex permissions.
 
 Map revisions in older or new assembly metadata record publication provenance. Editing an existing assembly validates placement against the latest complete published graph for its map ID. Play clients resolve by map ID, not by that recorded revision, so a portal update does not rewrite assembly data.
+
+An assembly's whole folder can be retired through the existing single-target
+`file.delete` workflow. The target root is
+`canonical-files/binari/cinematics/assemblies`, the target path is one
+assembly ID, and the expected pin is the currently published
+`{revision,officialRequestId}`. Filex checks the pin under the same lock as
+publication before quarantining that one folder. A durable retirement marker
+prevents delayed generation or updates from recreating it. Neither its
+linked map nor any pinned prop is deleted.

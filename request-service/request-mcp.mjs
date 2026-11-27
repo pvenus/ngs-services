@@ -1,6 +1,6 @@
 import {assemblyTypes,assemblyPayloadSchemas} from './assembly-contract.mjs';
 import {mapTypes,mapPayloadSchemas} from './map-contract.mjs';
-import {fileDeleteType,fileDeleteSchema,propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot,cinematicDeleteRoot,mapDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
+import {fileDeleteType,fileDeleteSchema,propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot,cinematicDeleteRoot,mapDeleteRoot,assemblyDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
 /** Same-host, stateless Streamable HTTP MCP. Register, list and track durable requests without executing them. */
 import {cancelTool,basicSchemaVersion,legacyOneStopSchemas,selectionSchemas,motionPresetIdPattern as selectedMotionIdPattern,motionSelectionPoses,submitTool,updateStatusTool,workflowStatuses} from './one-stop-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema,conceptCategoryAddIdPattern,conceptCategoryIdPattern,conceptCategoryGroupIdPattern} from './concept-category-envelope.mjs';
@@ -127,6 +127,10 @@ const mapFileDeletePayload={...fileDeletePayload,properties:{...fileDeletePayloa
   kind:{const:'directory'},path:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'}}},
  expected:{type:'object',properties:{officialRequestId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
   revision:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER}},required:['officialRequestId','revision'],additionalProperties:false},
+}};
+const assemblyFileDeletePayload={...mapFileDeletePayload,properties:{...mapFileDeletePayload.properties,
+ target:{...mapFileDeletePayload.properties.target,properties:{...mapFileDeletePayload.properties.target.properties,
+ root:{const:assemblyDeleteRoot}}},
 }};
 const audioDeletePayload={type:'object',properties:{
  schemaVersion:{const:audioDeleteSchema},projectId:{const:'binari'},officialRequestId:{type:'string',pattern:audioOfficialIdPattern,minLength:81,maxLength:81},
@@ -297,6 +301,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
   if(await deleteReady(backgroundDeleteRoot))deleteShapes.push(backgroundFileDeletePayload);
   if(await deleteReady(cinematicDeleteRoot))deleteShapes.push(cinematicFileDeletePayload);
   if(await deleteReady(mapDeleteRoot))deleteShapes.push(mapFileDeletePayload);
+  if(await deleteReady(assemblyDeleteRoot))deleteShapes.push(assemblyFileDeletePayload);
   if(deleteShapes.length)submit=addPropFamily(submit,fileDeleteType,deleteShapes.length===1?deleteShapes[0]:{oneOf:deleteShapes});
   if(cinematicLegacyAdmission&&await cinematicReady())submit=addPropFamily(submit,cinematicType,cinematicPayloadSchema);
   if(await sequenceReady())submit=addPropFamily(submit,cinematicSequenceType,cinematicSequencePayloadSchema);

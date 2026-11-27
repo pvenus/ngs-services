@@ -9,6 +9,8 @@ from map_store import map_revision
 from project_data_service.filex_cas_transport import FilexCASTransport
 from project_data_service.http_server import Handler
 from project_data_service.workflow_delete_claim import PrivatePlannerClaim
+from project_data_service.workflow_file_delete import ASSEMBLY_ROOT,storage_provider
+from project_data_service.single_target_delete import ASSEMBLY_CAPABILITY,PATH as DELETE,SCHEMA,SingleTargetDelete
 from project_data_service.workflow_assembly import WorkflowAssembly,PATH,CAP
 from test_cinematic_sequence_http import REPO
 from test_prop_package_http import make
@@ -49,13 +51,19 @@ s.close();"""
             return FilexCASTransport({'schemaVersion':'pds-filex-cas.v1','projectId':'binari','enabled':True,
                 'endpoint':self.origin,'tokenFile':str(self.secret/auth/'writer_token'),'writerScope':scope})
         app=ThreadingHTTPServer(('127.0.0.1',0),Handler)
-        app.workflow_assembly=WorkflowAssembly(PrivatePlannerClaim(str(db),st.st_dev,st.st_ino),
-            writer_factory=lambda:factory('cinematics','media'),prop_factory=lambda:factory('props','concept'))
+        planner=PrivatePlannerClaim(str(db),st.st_dev,st.st_ino)
+        def cine():
+            return factory('cinematics','media')
+        def delete_ready():
+            with cine() as conn:return conn.capabilities().get('workflowPinnedAssemblyFolderDeleteV1') is True
+        app.workflow_assembly=WorkflowAssembly(planner,writer_factory=cine,prop_factory=lambda:factory('props','concept'))
+        app.single_target_delete=SingleTargetDelete({ASSEMBLY_ROOT:storage_provider(planner,cine,delete_ready,root=ASSEMBLY_ROOT)},
+            dedicated=[ASSEMBLY_ROOT])
         thread=Thread(target=app.serve_forever,daemon=True);thread.start()
         def stop():app.shutdown();app.server_close();thread.join()
         self.addCleanup(stop)
-        def call(tail='',packet=None,expect=200):
-            req=Request(f'http://127.0.0.1:{app.server_port}'+PATH+tail,
+        def call(tail='',packet=None,expect=200,base=PATH):
+            req=Request(f'http://127.0.0.1:{app.server_port}'+base+tail,
                 data=None if packet is None else json.dumps(packet).encode(),
                 headers={} if packet is None else {'Content-Type':'application/json'})
             try:
@@ -150,3 +158,29 @@ s.close();"""
         empty=call('/read',{'claim':clear})['state'];self.assertEqual(empty['puzzles'],[])
         call('',{'claim':clear,'state':empty})
         self.assertEqual(call('/list',{}),{'assemblies':[empty,batch]})
+
+        self.assertEqual(call(base=ASSEMBLY_CAPABILITY),{'enabled':True,'roots':[ASSEMBLY_ROOT],'schemaVersion':SCHEMA})
+        self.assertEqual(call(base=DELETE)['roots'],[])
+        target={'root':ASSEMBLY_ROOT,'path':aid,'kind':'directory'}
+        def deletion(key,revision,publisher):
+            payload={'schemaVersion':'ngs.file-delete.v1','projectId':'binari','target':target,
+                     'expected':{'revision':revision,'officialRequestId':publisher}}
+            claim=stage(key,payload,'file.delete',19)
+            return {'claim':claim,'target':target}
+        self.assertEqual(call(packet=deletion('7',1,aid),expect=409,base=DELETE),{'error':'STORAGE_DELETE_STALE_TARGET'})
+        self.assertEqual(call(packet=deletion('6',3,aid),expect=409,base=DELETE),{'error':'STORAGE_DELETE_STALE_TARGET'})
+        self.assertTrue(root.is_dir())
+        command=deletion('5',3,clear['officialRequestId'])
+        wrong={**command,'target':{**target,'path':batch['assemblyId']}}
+        self.assertEqual(call(packet=wrong,expect=403,base=DELETE),{'error':'STORAGE_DELETE_CLAIM_DENIED'})
+        receipt=call(packet=command,base=DELETE)
+        self.assertTrue(receipt['targetAbsent'])
+        self.assertFalse(root.exists())
+        self.assertEqual(call(packet=command,base=DELETE),receipt)
+        self.assertEqual(call('/list',{}),{'assemblies':[batch]})
+        self.assertEqual(call('/read',{'claim':clear},409),{'error':'ASSEMBLY_REVISION_CONFLICT'})
+        self.call('/v1/scopes/cinematics/workflow/assemblies','media',st1,status=409)
+        self.assertTrue((self.data/'cinematics'/'maps'/map_id/'1.json').is_file())
+        self.assertTrue((self.data/'props'/bowl['propId']/'metadata.json').is_file())
+        recovery=root.parent/'.storage-quarantine'/receipt['recoveryId']/'target'
+        self.assertEqual((recovery/'1.json').read_bytes(),initial)

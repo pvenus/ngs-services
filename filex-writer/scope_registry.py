@@ -101,7 +101,7 @@ def _special_caps(profile,folder):
        'media':{'mediaArtifactsV1':True},
        'audio':{'workflowAudioResultV1':True,'workflowAudioSeparateV1':True,'workflowAudioDeleteV1':True},
        'props':{'workflowPropPackageV1':True,'workflowPropAssemblyBindingsV1':True,'workflowPinnedPropFolderDeleteV1':True,'workflowPropAnimationRemoveV1':True},
-       'cinematics':{'workflowMapMetadataV1':True,'workflowAssemblyV1':True,'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True,'workflowCinematicSourceV1':True,'workflowBackgroundSourceV1':True,'workflowBackgroundPixelV1':True,'workflowBackgroundAnimationV1':True,'workflowCinematicSequenceRemoveV1':True,'workflowPinnedCinematicTargetDeleteV1':True,'workflowPinnedBackgroundFileDeleteV1':True,'workflowPinnedMapFolderDeleteV1':True},
+       'cinematics':{'workflowMapMetadataV1':True,'workflowAssemblyV1':True,'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True,'workflowCinematicSourceV1':True,'workflowBackgroundSourceV1':True,'workflowBackgroundPixelV1':True,'workflowBackgroundAnimationV1':True,'workflowCinematicSequenceRemoveV1':True,'workflowPinnedCinematicTargetDeleteV1':True,'workflowPinnedBackgroundFileDeleteV1':True,'workflowPinnedMapFolderDeleteV1':True,'workflowPinnedAssemblyFolderDeleteV1':True},
     }
     return {'namespace':CANONICAL_NAMESPACE+folder+'/',**entries[profile]} if profile in entries else None
 
