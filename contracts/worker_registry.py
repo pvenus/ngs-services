@@ -67,7 +67,7 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
     raise ValueError('LAYA_BACKGROUND_QUEUE_ADAPTER_CONTRACT')
   elif worker=='document':
    mode=action['id']
-   if (mode not in ('map.generate','map.update') or action.get('modelCalls')!=int(mode=='map.generate') or
+   if (mode not in ('map.generate','map.update') or action.get('modelCalls')!=(3 if mode=='map.generate' else 0) or
        action.get('dependsOn')!=[] or registry['requestTypes'].get(mode,{}).get('stageIds')!=[mode] or
        action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.map-'+mode.split('.')[1]+'.v1' or
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or policy.get('apply')!='authorized-mutation'):
