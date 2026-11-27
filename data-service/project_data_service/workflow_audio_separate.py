@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import json
 import sqlite3
 
+from .workflow_save_reservation import optionally_save
 from .concept_filex import FilexConcept
 from .database import DataError
 from .filex_cas_transport import AudioPrewriteRejected
@@ -46,7 +47,8 @@ class WorkflowAudioSeparate:
             raise ValueError('WORKFLOW_AUDIO_SEPARATE_WRITER_UNAVAILABLE')
 
     def capability(self):
-        with self.verifier.snapshot(),self.writer_factory() as tx:
+        with self.verifier.snapshot():pass
+        with self.writer_factory() as tx:
             self.writer(tx)
         return {'enabled':True,'schemaVersion':SCHEMA}
 
@@ -77,8 +79,8 @@ class WorkflowAudioSeparate:
             source={k:p[k] for k in SOURCE_FIELDS}
             source_payload=published_song(db,p['sourceOfficialRequestId'])
             need(row['task_input']==canonical(source).decode() and source_payload is not None)
-            yield {**{k:claim[k] for k in CLAIM_FIELDS if k!='claimStamp'},**source,
-                   'sourcePayloadSha256':source_payload}
+        yield {**{k:claim[k] for k in CLAIM_FIELDS if k!='claimStamp'},**source,
+               'sourcePayloadSha256':source_payload}
 
     def run(self,body,action,started):
         need(type(body) is dict and set(body)==({'claim','artifact'} if action=='publish' else {'claim'}))
@@ -89,7 +91,7 @@ class WorkflowAudioSeparate:
                  and type(a['base64']) is str and len(a['base64'])==((a['bytes']+2)//3)*4)
         # Same authenticated Planner read transaction as ordinary audio publication,
         # fencing state changes for the short scoped Filex transaction, not model work.
-        with self.selected(body['claim']) as b,self.writer_factory() as tx:
+        with self.selected(body['claim']) as b, optionally_save(self.verifier,body['claim'],action=='publish'),self.writer_factory() as tx:
             self.writer(tx)
             if action=='asset':
                 return tx.audio_separate_asset(WRITER_PATH+'/asset',b,maximum=MAX_WAV)

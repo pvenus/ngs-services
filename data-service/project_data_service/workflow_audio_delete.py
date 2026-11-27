@@ -26,7 +26,8 @@ def storage_provider(concept,planner,*,writer_factory=None):
     namespace=AUDIO_NAMESPACE if writer_factory is not None else 'canonical-files/binari/concept/'
 
     def ready():
-        with planner.snapshot(),factory() as tx:
+        with planner.snapshot():pass
+        with factory() as tx:
             cap=tx.capabilities()
             return cap.get('namespace')==namespace and cap.get('workflowAudioDeleteV1') is True
 
@@ -52,7 +53,7 @@ def storage_provider(concept,planner,*,writer_factory=None):
                         and row['payload_sha256']==digest(payload)==c['payloadSha256'] and row['payload']==canonical(payload).decode()
                         and row['task_input']==canonical(expected).decode())
                 require(published_song(db,source) or published_song(db,source,derived=True))
-                yield {'operationId':tid,'target':{'root':ROOT,'path':source,'kind':'directory'}}
+            yield {'operationId':tid,'target':{'root':ROOT,'path':source,'kind':'directory'}}
         except PlannerDenied as exc:raise ClaimDenied() from exc
 
     def execute(command):

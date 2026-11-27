@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 
+from .workflow_save_reservation import optionally_save
 from .filex_npc_authority import FilexCurrentNPC
 from .filex_read import canonical,digest
 from .pds_owned_transport import OwnedNPCTransport
@@ -48,7 +49,8 @@ class PlanningUpdate:
                  self.error_prefix+'_WRITER_UNAVAILABLE')
 
     def capability(self):
-        with self.verifier.snapshot(),self.source.store.factory() as t:self._writer(t)
+        with self.verifier.snapshot():pass
+        with self.source.store.factory() as t:self._writer(t)
         return {'enabled':True,'schemaVersion':self.wire_schema}
 
     def authorize(self,db,c):
@@ -75,6 +77,7 @@ class PlanningUpdate:
                  'NPC_PLANNING_UPDATE_ENVELOPE')
         with self.verifier.snapshot() as db:
             binding=self.authorize(db,envelope['claim'])
+        with optionally_save(self.verifier,envelope['claim'],not reading):
             with self.source.store.factory() as t:
                 self._writer(t)
                 if reading:

@@ -438,15 +438,15 @@ class PrivatePlannerClaim:
                 require(additional in ((None,)*4,(representative,None,None,None)))
             else:
                 require(additional==(None,)*4)
-            identity={k:claim[k] for k in IDENTITY}
-            if key=='delete':
-                yield identity,c,tuple(slots.values()),selected_poses is not None
-            elif key=='preset':
-                yield identity,c,delete_predecessor,{'idle','combat'} if basic and payload['includeCombat'] else selected_poses
-            elif media_binding is not None:
-                yield identity,c,media_binding
-            elif chain_result:
-                base=(identity,c,pixel_direction if direction else chain)
-                yield (*base,'save_started_at' in row.keys()) if read_save_support else base
-            else:
-                yield identity,c
+        identity={k:claim[k] for k in IDENTITY}
+        if key=='delete':
+            yield identity,c,tuple(slots.values()),selected_poses is not None
+        elif key=='preset':
+            yield identity,c,delete_predecessor,{'idle','combat'} if basic and payload['includeCombat'] else selected_poses
+        elif media_binding is not None:
+            yield identity,c,media_binding
+        elif chain_result:
+            base=(identity,c,pixel_direction if direction else chain)
+            yield (*base,'save_started_at' in row.keys()) if read_save_support else base
+        else:
+            yield identity,c

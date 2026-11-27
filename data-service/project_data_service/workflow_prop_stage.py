@@ -3,7 +3,9 @@ import base64
 from contextlib import contextmanager
 from urllib.parse import urlsplit
 
+from .workflow_save_reservation import save_handoff
 from .filex_read import digest
+from .workflow_delete_claim import ClaimDenied
 from .prop_package_contract import sha
 from .prop_design_context import PropDesignContext
 from .prop_stage_claim import (
@@ -94,7 +96,7 @@ class RealPropAuthority:
 
     @contextmanager
     def snapshot(self,claim):
-        with self.planner.selected(claim,(PUBLISH,)) as (run,p,rows,key):
+        with self.planner.selected(claim,(PUBLISH,)) as (run,p,rows,key), save_handoff(self.planner.claim,claim):
             self.require_mode(run,p)
             # The DB shared read transaction spans all Filex read/write operations.
             members=[];records={}
@@ -280,7 +282,7 @@ class RealPropAuthority:
             return self.details(run,p,rows,key)
 
     def stage(self,claim,artifact,design_only):
-        with self.planner.selected(claim,(DESIGN,) if design_only else tuple(k for k in STAGES if k!=DESIGN)) as (run,p,rows,key):
+        with self.planner.selected(claim,(DESIGN,) if design_only else tuple(k for k in STAGES if k!=DESIGN)) as (run,p,rows,key), save_handoff(self.planner.claim,claim):
             self.require_mode(run,p);small=False
             input=strict_json(rows[key]['task_input'].encode())
             if key==DESIGN:
@@ -369,5 +371,5 @@ def serve(handler):
     except ReferenceChanged:return handler.respond(409,{'error':'WORKFLOW_PROP_REFERENCE_CHANGED'})
     except Stale:return handler.respond(409,{'error':'WORKFLOW_PROP_STAGE_SOURCE_CHANGED'})
     except Waiting:return handler.respond(409,{'error':'WORKFLOW_PROP_STAGE_INPUT_PENDING'})
-    except Denied:return handler.respond(403,{'error':'WORKFLOW_PROP_STAGE_DENIED'})
+    except (Denied,ClaimDenied):return handler.respond(403,{'error':'WORKFLOW_PROP_STAGE_DENIED'})
     except (FileNotFoundError,ValueError,OSError):return handler.respond(503,{'error':'WORKFLOW_PROP_STAGE_UNAVAILABLE'})

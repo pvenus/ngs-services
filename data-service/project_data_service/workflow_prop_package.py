@@ -2,6 +2,7 @@
 import re
 from urllib.parse import urlsplit
 from .filex_read import canonical,digest
+from .workflow_delete_claim import ClaimDenied
 from .workflow_motion_2d import strict_json
 
 PATH='/v1/props/ownership/workflow-package'
@@ -54,8 +55,8 @@ class WorkflowPropPackage:
         need(keys(claim,('officialRequestId','projectId','taskId','payloadSha256','claimStamp')) and prop_id(m.get('propId')) and
           m.get('projectId')=='binari'==claim['projectId'] and m.get('officialRequestId')==claim['officialRequestId'] and
           m.get('requestSha256')==claim['payloadSha256'])
-        # The production authority must hold the real exact Planner claim through
-        # Filex commit. The trusted authority supplies the plan-bound proof;
+        # The production authority reserves the exact Planner claim before Filex
+        # I/O. The trusted authority supplies the plan-bound proof;
         # callers cannot supply candidate receipts, directories, or media paths.
         with self.authority.snapshot(claim) as prepare:
             head=self.writer(WRITER+'/head',{'propId':m['propId']})['pointer']
@@ -134,6 +135,6 @@ def serve(handler):
         result=obj.publish(body) if parsed.path==PATH else obj.read(parsed.path.rsplit('/',1)[-1],body)
         return handler.respond(200,result)
     except Stale:return handler.respond(409,{'error':'WORKFLOW_PROP_PACKAGE_HEAD_CHANGED'})
-    except Denied:return handler.respond(403,{'error':'WORKFLOW_PROP_PACKAGE_DENIED'})
+    except (Denied,ClaimDenied):return handler.respond(403,{'error':'WORKFLOW_PROP_PACKAGE_DENIED'})
     except FileNotFoundError:return handler.respond(404,{'error':'WORKFLOW_PROP_PACKAGE_NOT_FOUND'})
     except (OSError,ValueError):return handler.respond(503,{'error':'WORKFLOW_PROP_PACKAGE_OUTCOME_UNCERTAIN'})

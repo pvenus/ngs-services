@@ -8,6 +8,7 @@ import struct
 import unicodedata
 import zlib
 
+from .workflow_save_reservation import save_handoff
 from .concept_filex import FilexConcept
 from .filex_read import canonical,digest,require
 from .media_artifacts import MediaArtifacts
@@ -112,7 +113,7 @@ class WorkflowPropImage:
                  p['lane'] in ('detail','pixel') and intent(p['intent']) and match(p['designContextSha256'],SHA) and
                  all(match(p[k],r'[a-z][a-z0-9_-]{0,127}') for k in ('propId','state')) and
                  r['payload']==r['task_input']==canonical(p).decode() and digest(p)==claim['payloadSha256'])
-            yield p
+        yield p
 
     def run(self,body,reading):
         need(keys(body,{'claim'} if reading else {'claim','artifact'}))
@@ -121,7 +122,7 @@ class WorkflowPropImage:
         context=self.source.read(P)
         need(context['contextSha256']==p['designContextSha256'])
         if reading:
-            with self.selected(claim) as current:need(current==p)
+            with self.selected(claim) as current, save_handoff(self.verifier,claim):need(current==p)
             return context
         a=body['artifact']
         need(keys(a,{'base64','sha256','bytes','mimeType','contextSha256'}) and

@@ -1,5 +1,6 @@
 """Opt-in exact official audio workflow. No reservations, provider or file access."""
 import contextlib,hashlib,re,sqlite3,json
+from .workflow_save_reservation import optionally_save
 from .concept_filex import FilexConcept
 from .database import DataError
 from .filex_read import canonical,digest
@@ -62,7 +63,8 @@ class WorkflowAudio:
         self.writer_namespace=AUDIO_NAMESPACE if writer_factory is not None else LEGACY_NAMESPACE
 
     def capability(self):
-        with self.verifier.snapshot(),self.writer_factory() as t:
+        with self.verifier.snapshot():pass
+        with self.writer_factory() as t:
             c=t.capabilities()
             if c.get('namespace')!=self.writer_namespace or c.get('workflowAudioResultV1') is not True:
                 raise ValueError('WORKFLOW_AUDIO_WRITER_UNAVAILABLE')
@@ -89,12 +91,12 @@ class WorkflowAudio:
             p=payload(json.loads(row['payload']))
             need(row['payload']==canonical(p).decode() and digest(p)==claim['payloadSha256']
                  and row['task_input']==canonical({k:p[k] for k in ('kind','conceptId')}).decode())
-            yield ({**{k:claim[k] for k in ('officialRequestId','taskId','projectId','payloadSha256')},
-                    **{k:p[k] for k in ('kind','title','conceptId','durationSeconds')}},p.get('conceptText'))
+        yield ({**{k:claim[k] for k in ('officialRequestId','taskId','projectId','payloadSha256')},
+                **{k:p[k] for k in ('kind','title','conceptId','durationSeconds')}},p.get('conceptText'))
 
     def run(self,body,*,reading,started):
         need(type(body) is dict and set(body)==({'claim'} if reading else {'claim','source','artifact'}))
-        with self.selected(body['claim']) as (binding,concept_text),contextlib.ExitStack() as stack:
+        with self.selected(body['claim']) as (binding,concept_text), optionally_save(self.verifier,body['claim'],not reading),contextlib.ExitStack() as stack:
             direct_sha=hashlib.sha256(concept_text.encode('utf-8')).hexdigest() if concept_text is not None else None
             if reading:
                 if direct_sha is not None:

@@ -1,4 +1,5 @@
 """Bind CLI-authored assembly geometry to authoritative Filex sources and official claims."""
+from .workflow_save_reservation import optionally_save
 from .filex_read import canonical,digest
 from .filex_writer_binding import writer as connect
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,serve as serve_workflow
@@ -129,11 +130,11 @@ class WorkflowAssembly(WorkflowCinematic):
             with self.planner.snapshot() as db:
                 _,t,b=graph(db,oid);aid,rev=identity(oid,b)
                 need(t['status']=='completed' and t['result_ref']==ref(aid,rev))
-                existing=self.cine('revision',{'assemblyId':aid,'revision':rev})
-                self.check(oid,existing['updatedAt'],b,existing)
+            existing=self.cine('revision',{'assemblyId':aid,'revision':rev})
+            self.check(oid,existing['updatedAt'],b,existing)
             return {'ok':True,'resultRef':ref(aid,rev)}
         need(op in ('read','publish') and keys(p,('claim',) if op=='read' else ('claim','state')))
-        with exact_claim(self.planner,p['claim'],graph) as (oid,b):
+        with exact_claim(self.planner,p['claim'],graph) as (oid,b), optionally_save(self.planner,p['claim'],op=='publish'):
             expected,context,replay=self.candidate(oid,p['claim']['claimStamp'],b)
             if op=='read':return {'state':expected,**({'context':context} if context is not None else {})}
             submitted=p['state']

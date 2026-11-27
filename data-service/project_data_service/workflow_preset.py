@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import re
 import sqlite3
 
+from .workflow_save_reservation import save_handoff
 from .workflow_delete_claim import PrivatePlannerClaim,ClaimDenied
 
 from .filex_npc_authority import FilexCurrentNPC
@@ -83,7 +84,7 @@ class WorkflowPreset:
             a=envelope['artifact']; predecessor=envelope['predecessorReceiptRef']
             require(predecessor is None or type(predecessor) is str and
                     re.fullmatch(r'workflow\.task\.[a-f0-9]{64}',predecessor),'WORKFLOW_PRESET_PREDECESSOR')
-            with self.verify.authorized_preset(envelope['claim']) as (identity,character,legacy_delete,selected_poses):
+            with self.verify.authorized_preset(envelope['claim']) as (identity,character,legacy_delete,selected_poses), save_handoff(self.verify,envelope['claim']):
                 if legacy_delete is not None:
                     require(predecessor in (None,legacy_delete),'WORKFLOW_PRESET_PREDECESSOR')
                     predecessor=legacy_delete

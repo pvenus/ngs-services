@@ -4,6 +4,7 @@ import hashlib
 import re
 import sqlite3
 
+from .workflow_save_reservation import save_handoff
 from .filex_npc_authority import FilexCurrentNPC
 from .filex_read import digest, require
 from .pds_owned_transport import OwnedNPCTransport
@@ -48,7 +49,8 @@ class RepresentativePortrait:
                 'WORKFLOW_PORTRAIT_WRITER_REQUIRED')
 
     def capability(self):
-        with self.verifier.snapshot(), self.source.store.factory() as tx:
+        with self.verifier.snapshot():pass
+        with self.source.store.factory() as tx:
             self._writer(tx)
         return {'enabled':True,'schemaVersion':self.schema}
 
@@ -116,7 +118,7 @@ class RepresentativePortrait:
             require(all(a[k]==identity[k] for k in ('taskId','projectId','npcId')),'WORKFLOW_PORTRAIT_ID_BINDING')
             raw=base64.b64decode(a['base64'],validate=True)
             require(len(raw)<=MAX_PNG and hashlib.sha256(raw).hexdigest()==a['sha256'],'WORKFLOW_PORTRAIT_HASH')
-            with self.source.store.factory() as tx:
+            with save_handoff(self.verifier,envelope['claim']), self.source.store.factory() as tx:
                 self._writer(tx)
                 if identity.get('referenceStage'):
                     require(self._current(tx,identity,character)['basis']==b,'WORKFLOW_PORTRAIT_PIXEL_REFERENCE_CHANGED')
@@ -136,6 +138,7 @@ def serve(handler,mode='representative'):
         or handler.headers.get('Origin') is not None or handler.headers.get('Transfer-Encoding') is not None
         or method=='POST' and handler.headers.get('Content-Type')!='application/json'):
         return handler.respond(403,{'error':'WORKFLOW_PORTRAIT_INTERNAL_ONLY'})
+    payload=None
     try:
         if method=='GET':return handler.respond(200,service.capability())
         handler.connection.settimeout(8)
@@ -144,7 +147,21 @@ def serve(handler,mode='representative'):
         return handler.respond(200,service.read(payload) if reading else service.publish(payload))
     except ClaimDenied:
         return handler.respond(403,{'error':'WORKFLOW_PORTRAIT_CLAIM_DENIED'})
-    except (ValueError,KeyError,TypeError):
+    except (ValueError,KeyError,TypeError) as error:
+        safe={
+            'WORKFLOW_PORTRAIT_WRITER_REQUIRED','WORKFLOW_PORTRAIT_CURRENT_NPC',
+            'WORKFLOW_PORTRAIT_INCOMPATIBLE_SLOT','WORKFLOW_PORTRAIT_GENERATION',
+            'WORKFLOW_PORTRAIT_PLAN_REQUIRED','WORKFLOW_PORTRAIT_PIXEL_REFERENCE_LINEAGE',
+            'WORKFLOW_PORTRAIT_REFERENCE','WORKFLOW_PORTRAIT_REFERENCE_BYTES',
+            'WORKFLOW_PORTRAIT_PIXEL_REFERENCE_CHANGED','WORKFLOW_PORTRAIT_WRITE_NOT_CONFIRMED',
+            'FILEX_CAS_HTTP_503','FILEX_CAS_HTTP_404','KNOWLEDGE_SOURCE_CHANGED',
+        }
+        reason=error.args[0] if len(error.args)==1 and type(error.args[0]) is str and error.args[0] in safe else 'UNCLASSIFIED'
+        claim=payload.get('claim') if isinstance(payload,dict) else None
+        task=claim.get('taskId') if isinstance(claim,dict) else None
+        if type(task) is not str or not re.fullmatch(r'workflow\.task\.[0-9a-f]{64}',task):task='-'
+        handler.log_error('workflow_portrait task=%s mode=%s phase=%s status=409 reason=%s',
+                          task,mode,'read' if handler.path.endswith('/read') else 'save',reason)
         return handler.respond(409,{'error':'WORKFLOW_PORTRAIT_NOT_CONFIRMED'})
     except (OSError,sqlite3.Error):
         return handler.respond(503,{'error':'WORKFLOW_PORTRAIT_OUTCOME_UNCONFIRMED'})

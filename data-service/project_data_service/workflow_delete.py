@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import re
 import sqlite3
 
+from .workflow_save_reservation import save_handoff
 from .workflow_delete_claim import PrivatePlannerClaim,ClaimDenied
 
 from .filex_npc_authority import FilexCurrentNPC
@@ -31,16 +32,16 @@ class WorkflowDelete:
         self._folder_authorized=ContextVar('npc_storage_delete_authorized',default=None)
 
     def capability(self):
-        with self.verifier.snapshot():
-            with self.source.store.factory() as tx:
-                require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get('workflowExactNpcDeleteV1') is True,
+        with self.verifier.snapshot():pass
+        with self.source.store.factory() as tx:
+            require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get('workflowExactNpcDeleteV1') is True,
                         'WORKFLOW_DELETE_FILEX_CAPABILITY_REQUIRED')
         return {'enabled':True,'schemaVersion':'workflow.pds-delete-receipt.v1'}
 
     def apply(self,envelope):
         if isinstance(self.verifier,PrivatePlannerClaim):
             require(type(envelope) is dict and set(envelope)=={'claim'},'WORKFLOW_DELETE_ENVELOPE')
-            with self.verifier.authorized(envelope['claim']) as (identity,selection,pose_recipe):
+            with self.verifier.authorized(envelope['claim']) as (identity,selection,pose_recipe), save_handoff(self.verifier,envelope['claim']):
                 return self._commit(self._resolve(identity),selection=selection,pose_recipe=pose_recipe)
         require(type(envelope) is dict and set(envelope)=={'binding','claim'},'WORKFLOW_DELETE_ENVELOPE')
         b=envelope['binding']
@@ -99,7 +100,8 @@ class WorkflowDelete:
             raise ValueError('WORKFLOW_DELETE_PLANNER_PIN_REQUIRED')
 
         def ready():
-            with self.verifier.snapshot(),self.source.store.factory() as tx:
+            with self.verifier.snapshot():pass
+            with self.source.store.factory() as tx:
                 if not isinstance(tx,OwnedNPCTransport):return False
                 caps=tx.capabilities()
                 return caps.get('workflowExactNpcFolderDeleteV1') is True and caps.get('workflowAtomicNpcPresetV1') is True

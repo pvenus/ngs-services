@@ -125,6 +125,40 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.writer.snapshot()['sourceVersion'],before)
         self.assertFalse(self.writer.receipt_path(self.c['taskId']).exists())
 
+    def test_real_save_mode_holds_no_database_read_lock_over_filex(self):
+        from unittest.mock import patch
+        from project_data_service.pds_owned_transport import OwnedNPCTransport
+        svc=self.pds.workflow_portrait_representative
+        svc.verifier.file_save_handoff=True
+        with sqlite3.connect(self.db) as db:
+            db.execute('ALTER TABLE workflow_tasks ADD COLUMN save_started_at INTEGER')
+        _,value=self.read();basis=value['basis'];orig=OwnedNPCTransport.workflow_portrait_representative
+        def send(tx,binding,raw,**kw):
+            with sqlite3.connect(self.db,timeout=0) as db:
+                self.assertIsNotNone(db.execute('SELECT save_started_at FROM workflow_tasks WHERE task_id=?',(self.c['taskId'],)).fetchone()[0])
+                db.execute('UPDATE workflow_tasks SET updated_at=updated_at+1 WHERE task_id=?',(self.preset_id,))
+            self.assertEqual(self.publish(basis,png(2))[0],403)
+            return orig(tx,binding,raw,**kw)
+        with patch.object(OwnedNPCTransport,'workflow_portrait_representative',send):
+            self.assertEqual(self.publish(basis,png(1)),(200,{'ok':True}))
+        with sqlite3.connect(self.db) as db:
+            db.execute("UPDATE workflow_tasks SET status='completed',save_started_at=NULL WHERE task_id=?",(self.c['taskId'],))
+            self.assertEqual(db.execute('SELECT status,save_started_at FROM workflow_tasks WHERE task_id=?',(self.c['taskId'],)).fetchone(),('completed',None))
+
+    def test_filex_transport_loss_is_terminal_on_the_exact_portrait_attempt(self):
+        from unittest.mock import patch
+        from project_data_service.pds_owned_transport import OwnedNPCTransport
+        svc=self.pds.workflow_portrait_representative
+        svc.verifier.file_save_handoff=True
+        with sqlite3.connect(self.db) as db:
+            db.execute('ALTER TABLE workflow_tasks ADD COLUMN save_started_at INTEGER')
+        _,value=self.read();basis=value['basis']
+        with patch.object(OwnedNPCTransport,'workflow_portrait_representative',side_effect=TimeoutError) as write:
+            self.assertEqual(self.publish(basis,png(1))[0],503)
+            self.assertEqual(write.call_count,1)
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute('SELECT status,save_started_at FROM workflow_tasks WHERE task_id=?',(self.c['taskId'],)).fetchone(),('failed',None))
+
     def change_files(self,owner,modify):
         # Isolated concurrent publisher fixture, using the existing real Filex
         # current byte transaction and generating the same source/revision fence.

@@ -5,6 +5,7 @@ import base64
 import math
 import os
 
+from .workflow_save_reservation import optionally_save
 from .filex_read import digest
 from .workflow_cinematic import (
     WorkflowCinematic,READY_FILE as OLD_READY_FILE,serve as serve_cinematic,
@@ -190,7 +191,7 @@ def exact_claim(planner,claim,graph):
         need(r['reason'] is None and r['payload_sha256']==claim['payloadSha256'] and t['task_id']==claim['taskId'] and
              t['status']=='running' and t['result_ref'] is None and t['updated_at']==claim['claimStamp'] and
              0<=r['registered_at']<=claim['claimStamp'])
-        yield oid,inp
+    yield oid,inp
 
 
 class WorkflowCinematicSequence(WorkflowCinematic):
@@ -255,7 +256,7 @@ class WorkflowCinematicSequence(WorkflowCinematic):
             need(r['reason'] is None and r['payload_sha256']==claim['payloadSha256'] and t['task_id']==claim['taskId'] and
                  t['status']=='running' and t['result_ref'] is None and t['updated_at']==claim['claimStamp'] and
                  0<=r['registered_at']<=claim['claimStamp'])
-            yield save_id,inp,group,refs,stage
+        yield save_id,inp,group,refs,stage
 
     def operate(self,op,packet):
         if op=='background-status':return self.background_status(packet)
@@ -263,7 +264,8 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         if op=='result':return self.result(packet)
         need(op in ('read','asset','frame','publish') and keys(packet,
              ('claim','frame') if op=='frame' else ('claim','manifest') if op=='publish' else ('claim',)))
-        with self.render_claim(packet['claim']) as (oid,inp,group,refs,stage):
+        with self.render_claim(packet['claim']) as (oid,inp,group,refs,stage), optionally_save(
+                self.planner,packet['claim'],op in ('frame','publish'),continuation=True):
             if stage is not None and op in ('frame','publish'):need(stage=='publish')
             if op=='read':
                 if group is None:self.source_status({'sourceSha256':inp['sourceSha256']})
@@ -306,16 +308,16 @@ class WorkflowCinematicSequence(WorkflowCinematic):
                 tid='workflow.task.'+digest([group['requestId'],key])
                 _,task,inp,oid,expected,_,_=background_graph(db,group['requestId'],tid)
                 need(group==expected and packet['officialRequestId']==oid and task['status']=='completed' and task['result_ref']==ref(oid))
-                m=self.seq_call('/result',{'officialRequestId':oid},missing=True)
-                verify_manifest(m,oid,inp,group)
+            m=self.seq_call('/result',{'officialRequestId':oid},missing=True)
+            verify_manifest(m,oid,inp,group)
             return {'ok':True,'resultRef':ref(oid),'manifest':m}
         need(keys(packet,('officialRequestId',)) and match(packet['officialRequestId'],OFFICIAL))
         oid=packet['officialRequestId']
         with self.planner.snapshot() as db:
             _,t,inp=sequence_graph(db,oid)
             need(t['status']=='completed' and t['result_ref']==ref(oid))
-            m=self.seq_call('/result',packet,missing=True)
-            verify_manifest(m,oid,inp)
+        m=self.seq_call('/result',packet,missing=True)
+        verify_manifest(m,oid,inp)
         return {'ok':True,'resultRef':ref(oid),'manifest':m}
 
 

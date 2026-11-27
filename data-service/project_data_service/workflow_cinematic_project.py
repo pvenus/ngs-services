@@ -1,6 +1,7 @@
 """Scoped source-image publication and non-destructive sequence removal."""
 import base64
 from hashlib import sha256
+from .workflow_save_reservation import optionally_save
 from .filex_read import digest
 from .workflow_cinematic import (WorkflowCinematic, BAD_TEXT, JS_ENDS, HASH, OFFICIAL, need, keys, match,
                                  serve as serve_cinematic)
@@ -115,9 +116,9 @@ class WorkflowCinematicProject(WorkflowCinematic):
         with self.planner.snapshot() as db:
             _,task,_=graph(stage,db,oid)
             need(task['status']=='completed')
-            source_id=self.publication_id(oid,stage)
-            m=self.provider('/result',{'officialRequestId':source_id},missing=True)
-            need(task['result_ref']==source_result(m,source_id,inp['title']+PIXEL_SUFFIX[stage],stage))
+        source_id=self.publication_id(oid,stage)
+        m=self.provider('/result',{'officialRequestId':source_id},missing=True)
+        need(task['result_ref']==source_result(m,source_id,inp['title']+PIXEL_SUFFIX[stage],stage))
         return m['sha256']
 
     def pixel_source(self,digest,include_bytes=False):
@@ -138,21 +139,21 @@ class WorkflowCinematicProject(WorkflowCinematic):
         with self.planner.snapshot() as db:
             _,task,inp=self.graph(db,oid)
             need(task['status']=='completed')
-            if self.mode in SOURCE_MODES:
-                save_id=self.publication_id(oid,self.mode)
-                m=self.provider('/result',{'officialRequestId':save_id},missing=True)
-                title=inp['title']+PIXEL_SUFFIX.get(self.mode,'')
-                ref=source_result(m,save_id,title,self.mode);out={'manifest':m}
-            else:
-                expected={**p,**inp};need(self.provider('/result',expected,missing=True)==expected)
-                ref=RESULT_ARCHIVE;out={**inp}
-            need(task['result_ref']==ref)
+        if self.mode in SOURCE_MODES:
+            save_id=self.publication_id(oid,self.mode)
+            m=self.provider('/result',{'officialRequestId':save_id},missing=True)
+            title=inp['title']+PIXEL_SUFFIX.get(self.mode,'')
+            ref=source_result(m,save_id,title,self.mode);out={'manifest':m}
+        else:
+            expected={**p,**inp};need(self.provider('/result',expected,missing=True)==expected)
+            ref=RESULT_ARCHIVE;out={**inp}
+        need(task['result_ref']==ref)
         return {'ok':True,'resultRef':ref,**out}
     def operate(self,op,p):
         if op=='result':return self.result(p)
         need((op in ('read','asset','publish','reconcile') if self.mode in (DRAFT,PIXEL) else ('read','publish','reconcile') if self.mode in SOURCE_MODES else op=='publish') and
              keys(p,('claim','artifact') if self.mode in SOURCE_MODES and op=='publish' else ('claim',)))
-        with exact_claim(self.planner,p['claim'],self.graph) as (oid,inp):
+        with exact_claim(self.planner,p['claim'],self.graph) as (oid,inp), optionally_save(self.planner,p['claim'],op=='publish'):
             if op=='read':
                 if self.mode not in (DRAFT,PIXEL):return inp
                 previous=self.predecessor(oid,inp)

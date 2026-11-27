@@ -1,6 +1,7 @@
 """Official file-worker unpublish: immutable new prop revision without touching old pixels."""
 from hashlib import sha256
 
+from .workflow_save_reservation import save_handoff
 from .filex_read import digest
 from .filex_writer_binding import writer as scoped_writer
 from .workflow_cinematic import WorkflowCinematic, CinematicConflict, serve as serve_internal
@@ -83,13 +84,13 @@ class WorkflowPropAnimationRemove(WorkflowCinematic):
             with self.planner.snapshot() as db:
                 run,t,inp=graph(db,oid)
                 need(t['status']=='completed')
-                prior,draft,c=self.evidence(oid,inp,run['payload_sha256'])
-                need(t['result_ref']==c['resultRef'])
-                self.independent(prior,draft,c)
-                return {'ok':True,'resultRef':c['resultRef'],'motionIds':inp['motionIds'],'propId':inp['propId'],
-                        'revision':draft['revision']}
+            prior,draft,c=self.evidence(oid,inp,run['payload_sha256'])
+            need(t['result_ref']==c['resultRef'])
+            self.independent(prior,draft,c)
+            return {'ok':True,'resultRef':c['resultRef'],'motionIds':inp['motionIds'],'propId':inp['propId'],
+                    'revision':draft['revision']}
         need(op=='publish' and keys(p,('claim',)))
-        with exact_claim(self.planner,p['claim'],graph) as (oid,inp):
+        with exact_claim(self.planner,p['claim'],graph) as (oid,inp), save_handoff(self.planner,p['claim']):
             prior,draft,c=self.evidence(oid,inp,p['claim']['payloadSha256'])
             receipt=self.provider('',{'candidate':c,'manifest':draft,'media':{}})
             need(self.independent(prior,draft,c)==receipt)

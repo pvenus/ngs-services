@@ -4,6 +4,7 @@ import hashlib
 import re
 import sqlite3
 
+from .workflow_save_reservation import optionally_save
 from .database import DataError
 from .filex_npc_authority import FilexCurrentNPC
 from .filex_read import require
@@ -49,7 +50,8 @@ class NativeMedia:
                 'WORKFLOW_REGENERATE_SOURCE_PIN')
 
     def capability(self,kind):
-        with self.verifier.snapshot(),self.source.store.factory() as tx:self._check(tx,kind)
+        with self.verifier.snapshot():pass
+        with self.source.store.factory() as tx:self._check(tx,kind)
         return {'enabled':True,'schemaVersion':SCHEMAS[kind]}
 
     def run(self,kind,action,envelope):
@@ -65,7 +67,7 @@ class NativeMedia:
         selected='assetSetSha256' in binding
         regeneration=binding.get('regeneration') is True
         reference=self._selected_source(binding) if selected and action!='asset' else None
-        with self.source.store.factory() as tx:
+        with optionally_save(self.verifier,envelope['claim'],action=='publish'), self.source.store.factory() as tx:
             self._check(tx,kind,selected,regeneration,'portraitPose' in binding or
                         kind=='portrait-pixel' and binding['posePreset']=='combat')
             if action=='asset':

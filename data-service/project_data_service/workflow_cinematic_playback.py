@@ -1,5 +1,6 @@
 """Official non-GPU authoring lane: one claim-bound metadata CAS, no frame changes."""
 from hashlib import sha256
+from .workflow_save_reservation import optionally_save
 from .filex_read import digest
 from .workflow_cinematic import WorkflowCinematic, CinematicConflict, need, keys, match, serve as serve_cinematic
 from .workflow_cinematic_sequence import OFFICIAL, SAFE_INT, exact_claim, playback, strict_json, sequence_graph, ref as sequence_ref
@@ -79,11 +80,11 @@ class WorkflowCinematicPlayback(WorkflowCinematic):
             with self.planner.snapshot() as db:
                 _,t,inp=graph(db,oid)
                 need(t['status']=='completed' and t['result_ref']==result_ref(inp['sequenceId']))
-                value=self.provider('/result',{'officialRequestId':oid,**inp},missing=True)
-                need(state_matches(value,inp))
-                return {'ok':True,'resultRef':t['result_ref'],'state':value}
+            value=self.provider('/result',{'officialRequestId':oid,**inp},missing=True)
+            need(state_matches(value,inp))
+            return {'ok':True,'resultRef':t['result_ref'],'state':value}
         need(op=='publish' and keys(p,('claim',)))
-        with exact_claim(self.planner,p['claim'],graph) as (oid,inp):
+        with exact_claim(self.planner,p['claim'],graph) as (oid,inp), optionally_save(self.planner,p['claim'],op=='publish'):
             # Both the input identity and its exact published frame run are
             # authorized by the same dedicated Planner snapshot.
             with self.planner.snapshot() as db:

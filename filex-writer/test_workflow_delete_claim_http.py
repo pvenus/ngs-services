@@ -68,16 +68,12 @@ class Tests(DeleteFixture):
         self.assertFalse(self.writer.receipt_path(self.c['taskId']).exists())
         self.assertTrue(self.writer.owner_files('npc.test'))
 
-    def test_snapshot_blocks_competing_commit_and_denies_stale_stamp(self):
+    def test_proof_releases_snapshot_before_handoff_and_denies_stale_stamp(self):
         peer=sqlite3.connect(self.db,timeout=.05)
         try:
             with self.verifier.authorized(self.c):
                 peer.execute("UPDATE workflow_tasks SET updated_at=3")
-                with self.assertRaisesRegex(sqlite3.OperationalError,'locked'):
-                    peer.commit()
-                peer.rollback()
-            peer.execute("UPDATE workflow_tasks SET updated_at=3")
-            peer.commit()
+                peer.commit()
             self.assertEqual(self.production()[0],403)
         finally:peer.close()
 

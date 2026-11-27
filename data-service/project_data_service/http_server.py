@@ -640,6 +640,7 @@ def serve(storage_root: Path, host: str, port: int):
             raise ValueError('WORKFLOW_DELETE_LOCAL_CONFIG_REQUIRED')
         path,dev,inode=(os.environ[key] for key in claim_keys)
         planner=PrivatePlannerClaim(path,int(dev),int(inode))
+        planner.file_save_handoff=True
         server.workflow_delete=WorkflowDelete(app.domains.npcs,planner)
     npc_folder_delete=os.environ.get('PDS_WORKFLOW_NPC_FOLDER_DELETE','0')
     if npc_folder_delete not in ('0','1'):raise ValueError('WORKFLOW_NPC_FOLDER_DELETE_OPT_IN')
@@ -758,7 +759,7 @@ def serve(storage_root: Path, host: str, port: int):
             def assembly_delete_ready():
                 with writer('cinematics') as conn:return conn.capabilities().get('workflowPinnedAssemblyFolderDeleteV1') is True
             roots[ASSEMBLY_ROOT]=storage_provider(planner,lambda:writer('cinematics'),assembly_delete_ready,root=ASSEMBLY_ROOT)
-        server.single_target_delete=SingleTargetDelete(roots,dedicated=[k for k in roots if k in (BACKGROUND_ROOT,MAP_ROOT,ASSEMBLY_ROOT,'canonical-files/binari/cinematics')])
+        server.single_target_delete=SingleTargetDelete(roots,planner=planner,dedicated=[k for k in roots if k in (BACKGROUND_ROOT,MAP_ROOT,ASSEMBLY_ROOT,'canonical-files/binari/cinematics')])
     representative_enabled=os.environ.get('PDS_WORKFLOW_PLAN_REPRESENTATIVE','0')
     if representative_enabled not in ('0','1'):raise ValueError('WORKFLOW_REPRESENTATIVE_OPT_IN')
     if representative_enabled=='1':
@@ -879,14 +880,14 @@ def serve(storage_root: Path, host: str, port: int):
             previous_signals[sig] = signal.signal(sig, lambda *_: stopped.set())
     server.timeout = .5
     stop_heartbeat = None
-    if idle_plan_enabled == '1' or shared_plan == '1' or representative_enabled == '1':
+    if hasattr(server,'workflow_delete'):
         from .workflow_save_reservation import expire_document_saves
         from .workflow_delete_claim import ClaimDenied
         def watch_document_saves():
             while not stopped.wait(15):
                 try:
                     for task in expire_document_saves(planner):
-                        print(json.dumps({'event':'workflow_document_save_timeout_failed','taskId':task}),flush=True)
+                        print(json.dumps({'event':'workflow_save_timeout_failed','taskId':task}),flush=True)
                 except (ClaimDenied,OSError,ValueError,sqlite3.Error):
                     continue
         threading.Thread(target=watch_document_saves,name='document-save-timeouts',daemon=True).start()

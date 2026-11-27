@@ -1,5 +1,6 @@
 """One official full JSON metadata replacement, through typed storage adapters."""
 import time
+from .workflow_save_reservation import save_handoff
 from .filex_read import canonical,digest
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,keys,match,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json,OFFICIAL,SAFE_INT
@@ -158,7 +159,7 @@ class WorkflowFileUpdate(WorkflowCinematic):
             result=adapter.read(self,mid,rev)
         else:
             need(op=='publish' and keys(packet,('claim',)))
-            with exact_claim(self.planner,packet['claim'],planned) as (oid,(p,adapter)):
+            with exact_claim(self.planner,packet['claim'],planned) as (oid,(p,adapter)), save_handoff(self.planner,packet['claim']):
                 mid=p['target']['path'];rev=p['expected']['revision']+1
                 result_ref=adapter.result_ref(mid,rev)
                 result=adapter.write(self,oid,p)

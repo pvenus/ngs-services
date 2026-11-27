@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit
 
+from .workflow_save_reservation import optionally_save
 from .filex_read import canonical,digest
 from .filex_writer_binding import writer as scoped_writer
 from .prop_animation_ready import renderer_ready
@@ -122,12 +123,13 @@ class WorkflowCinematic:
              match(c['taskId'],r'workflow\.task\.[a-f0-9]{64}') and match(c['payloadSha256'],HASH) and
              type(c['claimStamp'])is int and 0<c['claimStamp']<=SAFE_INT)
         oid=c['officialRequestId']
-        # Keep the shared read transaction held until Filex read/write proof is returned.
+        # Check the exact claim before file I/O.
         with self.planner.snapshot() as db:
             r,t,inp=checked_graph(db,oid)
             need(r['reason'] is None and r['payload_sha256']==c['payloadSha256'] and
                  t['task_id']==c['taskId'] and t['status']=='running' and t['result_ref'] is None and
                  t['updated_at']==c['claimStamp'] and 0<=r['registered_at']<=c['claimStamp'])
+        with optionally_save(self.planner,c,op=='publish'):
             source=inp['sourceSha256']
             if op=='read':
                 self.source_status({'sourceSha256':source})
@@ -147,8 +149,8 @@ class WorkflowCinematic:
         with self.planner.snapshot() as db:
             _,t,inp=checked_graph(db,oid)
             need(t['status']=='completed' and t['result_ref']==result_ref(oid))
-            m=self.call('/result',packet,missing=True)
-            verify_manifest(m,oid,inp['sourceSha256'])
+        m=self.call('/result',packet,missing=True)
+        verify_manifest(m,oid,inp['sourceSha256'])
         return {'ok':True,'resultRef':result_ref(oid),'manifest':m}
 
 

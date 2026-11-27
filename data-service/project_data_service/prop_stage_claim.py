@@ -128,7 +128,8 @@ class PropClaimAuthority:
                     need(predecessor['status']=='completed' and valid_ref(predecessor['task_key'],predecessor['result_ref']))
                 if key==PUBLISH:
                     need(all(r['status']=='completed' and valid_ref(k,r['result_ref']) for k,r in rows.items() if k!=PUBLISH))
-                yield dict(run),p,rows,key
+                result=dict(run),p,rows,key
+            yield result
         except ClaimDenied:raise Denied('WORKFLOW_PROP_PACKAGE_DENIED') from None
     def authorized_pin(self,q):
         pin(q)

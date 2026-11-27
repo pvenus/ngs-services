@@ -4,6 +4,8 @@ from urllib.parse import urlsplit
 import re
 import sqlite3
 
+from .workflow_save_reservation import save_handoff
+from .workflow_delete_claim import ClaimDenied as PlannerClaimDenied
 from .database import DataError
 from .filex_cas_transport import PinnedDeleteRejected
 
@@ -45,7 +47,8 @@ def filex_ready(factory):
     with factory() as t:return t.capabilities().get('singleTargetRecoverableDeleteV1') is True
 
 class SingleTargetDelete:
-    def __init__(self,roots,*,dedicated=()):
+    def __init__(self,roots,*,dedicated=(),planner=None):
+        self.planner=planner
         if type(roots)is not dict or any(not path_string(k) or not isinstance(v,AuthorizedStorage)
             or not all(callable(f) for f in (v.authorize,v.execute,v.ready)) for k,v in roots.items()):
             raise ValueError('storage delete roots')
@@ -66,7 +69,11 @@ class SingleTargetDelete:
                 binding['target']!=target or type(binding['operationId'])is not str or not OPERATION.fullmatch(binding['operationId'])):
                 raise ClaimDenied()
             started.append(True)
-            receipt=provider.execute(binding)
+            if self.planner is not None:
+                with save_handoff(self.planner,envelope['claim']):
+                    receipt=provider.execute(binding)
+            else:
+                receipt=provider.execute(binding)
         if (type(receipt)is not dict or set(receipt)!={'ok','operationId','targetAbsent','recoveryId'} or
             receipt['ok'] is not True or receipt['targetAbsent'] is not True or receipt['operationId']!=binding['operationId'] or
             type(receipt['recoveryId'])is not str or not RECOVERY.fullmatch(receipt['recoveryId'])):
@@ -114,7 +121,7 @@ def serve(handler):
         handler.connection.settimeout(5)
         return handler.respond(200,svc.run(handler.read_json(max_body=8192),started))
     except PinnedDeleteRejected:return handler.respond(409,{'error':'STORAGE_DELETE_STALE_TARGET'})
-    except ClaimDenied:
+    except (ClaimDenied,PlannerClaimDenied):
         code,error=(409,'STORAGE_DELETE_NOT_CONFIRMED') if started else (403,'STORAGE_DELETE_CLAIM_DENIED')
         return handler.respond(code,{'error':error})
     except (ValueError,KeyError,TypeError,DataError):return handler.respond(409,{'error':'STORAGE_DELETE_NOT_CONFIRMED'})

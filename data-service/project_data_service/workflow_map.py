@@ -1,5 +1,6 @@
 """Document-worker metadata publication via the existing PDS/Filex writer."""
 import time
+from .workflow_save_reservation import optionally_save
 from .filex_read import canonical,digest
 from .filex_writer_binding import writer as connect
 from .assembly_contract import pin as prop_pin
@@ -228,7 +229,7 @@ class WorkflowMap(WorkflowCinematic):
             graph_matches(b,result['graph'],prior)
             return {'ok':True,'resultRef':ref(mid,rev)}
         need(op in ('read','publish','image') and keys(p,('claim',) if op=='read' else ('claim','imageSha256') if op=='image' else ('claim','graph')))
-        with exact_claim(self.planner,p['claim'],lambda db,oid:graph(db,oid,p['claim']['taskId'])) as (oid,(b,stage,prior)):
+        with exact_claim(self.planner,p['claim'],lambda db,oid:graph(db,oid,p['claim']['taskId'])) as (oid,(b,stage,prior)), optionally_save(self.planner,p['claim'],op=='publish'):
             if op=='image':
                 need('intent' in b and match(p['imageSha256'],r'[a-f0-9]{64}') and
                      p['imageSha256'] in {r['imageSha256'] for r in b['graph']['regions']})

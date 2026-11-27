@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import zlib
 
+from .workflow_save_reservation import optionally_save, save_handoff
 from .filex_read import canonical, digest, private_read
 from .motion_presets import ID, MotionPresets
 from .filex_cas_transport import FilexCASTransport
@@ -173,7 +174,7 @@ def claimed(verifier,claim):
             refs[frame_key]=predecessor(db,oid,p,frame_key)
         elif key==FINAL:
             refs.update((encode_key(d),predecessor(db,oid,p,encode_key(d))) for d in DIRECTIONS)
-        yield oid,key,p,refs
+    yield oid,key,p,refs
 
 
 def private_dir(path):
@@ -420,7 +421,7 @@ class WorkflowMotion2D:
         def guard():
             with claimed(self.verifier,claim) as fresh:
                 require(fresh==expected)
-                yield
+            yield
 
         creates=key==IMAGE and read
         with staging(self.root,oid,create=creates,direction=ALL_DIRECTIONS.get(key)) as folder:
@@ -440,7 +441,7 @@ class WorkflowMotion2D:
 
     def write_frames(self,reader,length):
         meta,body_size=incoming_header(reader,length)
-        with self.session(meta['claim'],keys=FRAME_DIRECTIONS) as (_,key,_,refs,guard,folder,source_hash,source):
+        with self.session(meta['claim'],keys=FRAME_DIRECTIONS) as (_,key,_,refs,guard,folder,source_hash,source), save_handoff(self.verifier,meta['claim']):
             direction,row=self.source_direction(source,key)
             self.frame_image(folder,refs)
             records=meta['frames']
@@ -489,7 +490,7 @@ class WorkflowMotion2D:
     def run(self,body,*,read,started):
         require(type(body) is dict and set(body)==({'claim'} if read else {'claim','artifact'}))
         keys=(IMAGE,FINAL,*FRAME_DIRECTIONS) if read else (IMAGE,FINAL,*ENCODE_DIRECTIONS)
-        with self.session(body['claim'],keys=keys,read=read) as (oid,key,p,refs,guard,folder,source_hash,source):
+        with self.session(body['claim'],keys=keys,read=read) as (oid,key,p,refs,guard,folder,source_hash,source), optionally_save(self.verifier,body['claim'],not read):
             proof={'sourcePresetHash':source_hash}
             if key==IMAGE:
                 if read:

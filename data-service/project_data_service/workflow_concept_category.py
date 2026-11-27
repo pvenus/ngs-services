@@ -7,6 +7,7 @@ import json
 import re
 import sqlite3
 
+from .workflow_save_reservation import optionally_save
 from .concept import ROOT,validate
 from .concept_filex import FilexConcept,join,split
 from .database import utc_now
@@ -76,7 +77,8 @@ class CategoryWorkflow:
         require(isinstance(source,FilexConcept) and isinstance(verifier,PrivatePlannerClaim),'CONCEPT_WORKFLOW_AUTHORITY')
         self.source,self.verifier=source,verifier
     def capability(self):
-        with self.verifier.snapshot(),self.source.factory() as t:
+        with self.verifier.snapshot():pass
+        with self.source.factory() as t:
             c=t.capabilities()
             require(c.get('conceptCategoryMarkdownV1') is True,'CONCEPT_WORKFLOW_WRITER_REQUIRED')
         return {'enabled':True,'schemaVersion':'workflow.concept-category-write.v1'}
@@ -166,9 +168,9 @@ class CategoryWorkflow:
                         raise StorageDenied()
                     binding={'operationId':claim['taskId'],'target':{'root':CONCEPT_ROOT,
                         'path':'sections/'+p['categoryId'],'kind':'directory'}}
-                    token=active.set(claim)
-                    try:yield binding
-                    finally:active.reset(token)
+                token=active.set(claim)
+                try:yield binding
+                finally:active.reset(token)
             except (Rejected,ClaimDenied) as e:
                 raise StorageDenied() from e
         def execute(binding):
@@ -176,7 +178,8 @@ class CategoryWorkflow:
             # primitive receives one folder, never a list of its files.
             return self.run({'claim':active.get()},False,[],storage_target=binding)
         def ready():
-            with self.verifier.snapshot(),self.source.factory() as t:
+            with self.verifier.snapshot():pass
+            with self.source.factory() as t:
                 return t.capabilities().get('conceptSingleTargetDeleteV1') is True
         return AuthorizedStorage(authorize,execute,ready)
 
@@ -187,6 +190,7 @@ class CategoryWorkflow:
         # Exact read-only Planner claim and role binding for the entire short PDS publish.
         with self.verifier.snapshot() as db:
             key,p,prev=self.auth(db,c);op=p['operation'];cid=p['categoryId']
+        with optionally_save(self.verifier,c,not reading and storage_target is None):
             if reading:
                 require(key=='category_generate' and op in ('migrate','replace','update'),'CONCEPT_WORKFLOW_READ_DENIED')
                 if op=='update':

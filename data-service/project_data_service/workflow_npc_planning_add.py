@@ -2,6 +2,7 @@
 import json
 import re
 
+from .workflow_save_reservation import optionally_save
 from .filex_read import canonical,digest
 from .workflow_concept_category import required_headings
 from .workflow_delete_claim import CLAIM_KEYS,IDENTITY,require,matches
@@ -54,6 +55,7 @@ class PlanningAdd(PlanningUpdate):
                  'NPC_PLANNING_ADD_ENVELOPE')
         with self.verifier.snapshot() as db:
             binding=self.authorize(db,envelope['claim'])
+        with optionally_save(self.verifier,envelope['claim'],not reading):
             with self.source.store.factory() as t:
                 self._writer(t)
                 if reading:

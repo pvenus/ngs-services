@@ -97,8 +97,7 @@ class MotionPresets:
     require(sealed['assetId']==aid and sealed['sha256']==row['sha256']and sealed['bytes']==row['bytes']
      and base64.b64decode(sealed['base64'],validate=True)==raw,'MOTION_PRESET_ASSET_READBACK')
    if old is None:
-    # Keep the fresh authorization fence only across this small catalog CAS;
-    # asset bytes/upload/readback never hold the Planner reader transaction.
+    # Check the exact claim again; the PDS saving stage owns the entire publish.
     with guarded_commit():
      t.call('POST','/v1/batch',{'requestId':request_id,'inputHash':ih,'files':files,'readSet':basis},
             timeout=WORKFLOW_CAS_TIMEOUT)
