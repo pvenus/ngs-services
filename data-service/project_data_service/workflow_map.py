@@ -71,7 +71,8 @@ def graph_matches(source,value,generate=False):
         return
     need(len(source['connections'])==len(value['connections']))
     masked={**value,'connections':[{**e,'hit':None,'spawn':None} for e in value['connections']]}
-    need(masked==source)
+    need({k:v for k,v in masked.items() if k!='colliders'}==
+         {k:v for k,v in source.items() if k!='colliders'})
 def identity(oid,p):return p.get('mapId',oid),p.get('expectedRevision',0)+1
 def ref(mid,rev):return f'binari/cinematics/maps/{mid}/{rev}.json'
 

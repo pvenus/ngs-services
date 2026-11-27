@@ -14,7 +14,7 @@ from project_data_service.workflow_delete_claim import PrivatePlannerClaim
 from project_data_service.workflow_map import WorkflowMap,PATH,CAP
 from project_data_service.single_target_delete import PATH as DELETE,MAP_CAPABILITY,SCHEMA,SingleTargetDelete
 from project_data_service.workflow_file_delete import MAP_ROOT,storage_provider
-from map_store import map_revision
+from map_store import encode,map_revision
 from server import Conflict
 from test_cinematic_sequence_http import REPO,png,sha
 from test_scope_registry import UnifiedFixture
@@ -76,12 +76,25 @@ s.close();"""
         h=regions[0]['imageSha256']
         self.assertEqual(sha(base64.b64decode(call('/image',{'claim':claim,'imageSha256':h})['base64'])),h)
         posted={**graph,'connections':[{**link,'hit':{'x':20,'y':750,'width':90,'height':120},'spawn':{'x':450,'y':850}} for link in links]}
+        generated_wall={'id':'wall-gen','regionId':'zone-1','shape':'rect','rotation':5,
+                        'rect':{'x':0,'y':15,'width':10,'height':90}}
+        posted={**posted,'colliders':[generated_wall]}
+        call('',{'claim':claim,'graph':{**posted,'colliders':[{**generated_wall,'regionId':'missing'}]}},403)
         mutated={**posted,'connections':[{**posted['connections'][0],'from':'zone-5'},*posted['connections'][1:]]}
         call('',{'claim':claim,'graph':mutated},403)
         result=call('',{'claim':claim,'graph':posted})
         self.assertEqual(result,{'ok':True,'resultRef':f'binari/cinematics/maps/{oid}/1.json'})
         f=self.data/'cinematics'/'maps'/oid/'1.json'
-        self.assertEqual(json.loads(f.read_text())['graph'],posted)
+        manifest=json.loads(f.read_text())
+        self.assertEqual(manifest['schemaVersion'],'ngs.map-group.v1')
+        self.assertEqual(set(manifest),{'schemaVersion','projectId','mapId','revision','updatedAt','officialRequestId','title','regions','parts'})
+        for name,value in {'start':{'startRegionId':'zone-1'},'portals':{'connections':posted['connections']},
+                           'collisions':{'colliders':[generated_wall]}}.items():
+            raw=f.with_name(f'1.{name}.json').read_bytes()
+            self.assertEqual(raw,encode(value))
+            self.assertEqual(manifest['parts'][name],sha(raw))
+        state=map_revision(store,{'mapId':oid,'revision':1})
+        self.assertEqual(state['graph'],posted)
         import sqlite3
         with sqlite3.connect(db) as conn:
             conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=?", (result['resultRef'],))
@@ -99,7 +112,7 @@ s.close();"""
         update_result=call('',{'claim':update_claim,'graph':changed})
         self.assertEqual(update_result,{'ok':True,'resultRef':f'binari/cinematics/maps/{oid}/2.json'})
         self.assertEqual(f.read_bytes(),original)
-        self.assertEqual(json.loads(f.with_name('2.json').read_text())['graph'],changed)
+        self.assertEqual(map_revision(store,{'mapId':oid,'revision':2})['graph'],changed)
         with sqlite3.connect(db) as conn:
             conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE official_request_id=?",
                 (update_result['resultRef'],update_id))
@@ -108,7 +121,7 @@ s.close();"""
         self.assertEqual(call(prefix=MAP_CAPABILITY),{'enabled':True,'schemaVersion':SCHEMA,'roots':[MAP_ROOT]})
         self.assertEqual(call(prefix=DELETE)['roots'],[],'dedicated map root is absent from generic readiness')
         survivor='request.official.'+'e'*64
-        other={**json.loads(f.read_text()),'mapId':survivor,'officialRequestId':survivor}
+        other={**state,'mapId':survivor,'officialRequestId':survivor}
         map_revision(store,other,True)
         bgdir=self.data/'cinematics'/'backgrounds'
         before_backgrounds=sorted(p.name for p in bgdir.iterdir())
@@ -136,6 +149,6 @@ s.close();"""
         self.assertTrue(f.parent.with_name(survivor).joinpath('1.json').exists())
         quarantined=f.parent.parent/'.storage-quarantine'/proof['recoveryId']/'target'
         self.assertEqual((quarantined/'1.json').read_bytes(),original)
-        self.assertEqual(json.loads((quarantined/'2.json').read_text())['graph'],changed)
-        with self.assertRaises(Conflict):map_revision(store,json.loads((quarantined/'1.json').read_text()),True)
-        with self.assertRaises(Conflict):map_revision(store,{**json.loads((quarantined/'2.json').read_text()),'revision':3},True)
+        self.assertEqual(json.loads((quarantined/'2.collisions.json').read_text())['colliders'],changed['colliders'])
+        with self.assertRaises(Conflict):map_revision(store,state,True)
+        with self.assertRaises(Conflict):map_revision(store,{**state,'graph':changed,'revision':3},True)

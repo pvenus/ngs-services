@@ -9,6 +9,10 @@ TASK=re.compile(r'workflow\.task\.[a-f0-9]{64}\Z')
 REVISION=re.compile(r'[1-9][0-9]{0,15}\.json\Z')
 OID=re.compile(r'request\.official\.[a-f0-9]{64}\Z')
 HASH=re.compile(r'[a-f0-9]{64}\Z')
+MAP_SCHEMA='ngs.map-metadata.v1'
+GROUP_SCHEMA='ngs.map-group.v1'
+METADATA={'schemaVersion','projectId','mapId','revision','updatedAt','officialRequestId'}
+PARTS={'start':'startRegionId','portals':'connections','collisions':'colliders'}
 KEY=re.compile(r'[a-z][a-z0-9-]{0,31}\Z')
 
 def match(v,p):return type(v) is str and p.fullmatch(v) is not None
@@ -76,11 +80,36 @@ def validate_colliders(graph):
         need(type(r)is dict and set(r)=={'x','y','width','height'} and all(type(x)is int for x in r.values()) and
              0<=r['x'] and 0<=r['y'] and 0<r['width']<=1000-r['x'] and 0<r['height']<=1000-r['y'])
         ids.add(c['id'])
+def encode(value):
+    return (json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()
+
+def part_path(base,n,part):
+    path=base/f'{n}.{part}.json'
+    need(not path.is_symlink())
+    return path
+
+def read_group(store,base,n,state):
+    need(set(state)==METADATA|{'title','regions','parts'} and state['projectId']=='binari' and
+         match(state['officialRequestId'],OID))
+    digests=state['parts']
+    need(type(digests)is dict and set(digests)==set(PARTS) and all(match(h,HASH) for h in digests.values()))
+    graph={'title':state['title'],'regions':state['regions']}
+    for part,field in PARTS.items():
+        try:raw=store._read(part_path(base,n,part),65536)
+        except FileNotFoundError as exc:raise ValueError('map revision part missing') from exc
+        need(sha256(raw).hexdigest()==digests[part])
+        value=json.loads(raw)
+        need(type(value)is dict and (set(value)=={field} or part=='collisions' and not value))
+        graph.update(value)
+    state={k:state[k] for k in METADATA}
+    return {**state,'schemaVersion':MAP_SCHEMA,'graph':graph}
+
 def read_revision(store,base,n):
     p=base/(str(n)+'.json')
     need(not p.is_symlink())
     state=json.loads(store._read(p,65536))
     need(type(state)is dict and state.get('revision')==n and state.get('mapId')==base.name)
+    if state.get('schemaVersion')==GROUP_SCHEMA:state=read_group(store,base,n,state)
     validate_colliders(state.get('graph'))
     return state
 def map_context(store,p):
@@ -112,9 +141,13 @@ def map_revision(store,p,write=False):
     if not write:return read_revision(store,base,n)
     need(set(p)=={'schemaVersion','projectId','mapId','revision','updatedAt','officialRequestId','graph'} and
          p['schemaVersion']=='ngs.map-metadata.v1' and p['projectId']=='binari' and match(p['officialRequestId'],OID))
-    validate_colliders(p['graph'])
-    raw=(json.dumps(p,ensure_ascii=False,sort_keys=True,separators=(',',':'))+'\n').encode()
-    need(len(raw)<65536)
+    graph=p['graph']; validate_colliders(graph)
+    required={'title','regions','startRegionId','connections'}
+    need(set(graph) in (required,required|{'colliders'}) and len(encode(p))<65536)
+    part_bytes={part:encode({field:graph[field]} if field in graph else {}) for part,field in PARTS.items()}
+    manifest={**{k:p[k] for k in METADATA},'schemaVersion':GROUP_SCHEMA,
+              'title':graph['title'],'regions':graph['regions'],
+              'parts':{part:sha256(raw).hexdigest() for part,raw in part_bytes.items()}}
     with store.lock():
         base=map_base(store,p['mapId'])
         if deletion_marker(store,p['mapId']).exists():raise Conflict('map retired')
@@ -127,5 +160,9 @@ def map_revision(store,p,write=False):
         if n>1:
             if not (base/(str(n-1)+'.json')).exists():raise Conflict('map revision changed')
             read_revision(store,base,n-1)
-        store.write(target,raw)
+        # Parts from an interrupted attempt are not published; replacing them is
+        # safe while the numeric commit marker is absent and this lock is held.
+        for part,raw in part_bytes.items():store.write(part_path(base,n,part),raw)
+        need(read_group(store,base,n,manifest)==p)
+        store.write(target,encode(manifest))
         return read_revision(store,base,n)
