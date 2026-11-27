@@ -81,7 +81,8 @@ s.close();"""
 
         original=f.read_bytes()
         box={'id':'wall-1','regionId':'zone-2','rect':{'x':10,'y':20,'width':130,'height':300}}
-        changed={**posted,'colliders':[box]}
+        round_wall={**box,'id':'round-1','shape':'ellipse','rotation':45}
+        changed={**posted,'colliders':[box,round_wall]}
         update_id='request.official.'+'b'*64
         update_claim=stage(update_id,{'schemaVersion':'ngs.map-update.v1','projectId':'binari','mapId':oid,
             'expectedRevision':1,'graph':changed},'map.update')

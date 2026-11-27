@@ -12,6 +12,12 @@ export const mapText=(v,max)=>typeof v==='string'&&v===v.trim()&&v.length>0&&v.l
 export const mapPoint=v=>mapFields(v,['x','y'])&&['x','y'].every(k=>Number.isInteger(v[k])&&v[k]>=0&&v[k]<=1000);
 export const mapRect=v=>mapFields(v,['x','y','width','height'])&&['x','y','width','height'].every(k=>Number.isInteger(v[k]))&&
  v.x>=0&&v.y>=0&&v.width>0&&v.height>0&&v.x+v.width<=1000&&v.y+v.height<=1000;
+// Legacy colliders are unrotated rectangles. A shape and rotation must arrive together.
+export const mapColliderShape=c=>c.shape??'rect';
+export const mapColliderRotation=c=>c.rotation??0;
+const mapCollider=c=>(mapFields(c,['id','regionId','rect'])||
+ (mapFields(c,['id','regionId','rect','shape','rotation'])&&['rect','ellipse'].includes(c.shape)&&
+  Number.isInteger(c.rotation)&&c.rotation>=0&&c.rotation<360))&&mapRect(c.rect);
 export const regionId=v=>typeof v==='string'&&/^[a-z][a-z0-9-]{0,31}$/.test(v);
 export const mapBackgroundIds=graph=>[...new Set(graph.regions.map(r=>r.backgroundId).filter(Boolean))];
 export function validMapGraph(v,{partial=false}={}){
@@ -25,8 +31,8 @@ export function validMapGraph(v,{partial=false}={}){
  if(withColliders){
   const colliderIds=new Set();
   if(!Array.isArray(v.colliders)||v.colliders.length>96||!v.colliders.every(c=>{
-   if(!mapFields(c,['id','regionId','rect'])||!regionId(c.id)||colliderIds.has(c.id)||
-      !ids.has(c.regionId)||!mapRect(c.rect))return false;
+   if(!mapCollider(c)||!regionId(c.id)||colliderIds.has(c.id)||
+      !ids.has(c.regionId))return false;
    colliderIds.add(c.id);return true;
   }))return false;
  }

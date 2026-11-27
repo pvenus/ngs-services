@@ -26,7 +26,9 @@ def validate_colliders(graph):
     region_ids={r['id'] for r in regions}
     ids=set()
     for c in colliders:
-        need(type(c)is dict and set(c)=={'id','regionId','rect'} and match(c['id'],KEY) and c['id'] not in ids and
+        fields={'id','regionId','rect'}
+        need(type(c)is dict and (set(c)==fields or (set(c)==fields|{'shape','rotation'} and
+             c['shape'] in ('rect','ellipse') and type(c['rotation']) is int and 0<=c['rotation']<360)) and match(c['id'],KEY) and c['id'] not in ids and
              match(c['regionId'],KEY) and c['regionId'] in region_ids)
         r=c['rect']
         need(type(r)is dict and set(r)=={'x','y','width','height'} and all(type(x)is int for x in r.values()) and

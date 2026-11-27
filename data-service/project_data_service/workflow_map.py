@@ -39,7 +39,10 @@ def graph_valid(v,partial=False):
     need(type(colliders)is list and len(colliders)<=96)
     collider_ids=set()
     for c in colliders:
-        need(keys(c,('id','regionId','rect')) and match(c['id'],r'[a-z][a-z0-9-]{0,31}') and
+        fields=('id','regionId','rect')
+        geometry=keys(c,fields) or (keys(c,(*fields,'shape','rotation')) and
+                    c['shape'] in ('rect','ellipse') and type(c['rotation']) is int and 0<=c['rotation']<360)
+        need(geometry and match(c['id'],r'[a-z][a-z0-9-]{0,31}') and
              c['id'] not in collider_ids and type(c['regionId'])is str and c['regionId'] in bg and rect(c['rect']))
         collider_ids.add(c['id'])
     return v

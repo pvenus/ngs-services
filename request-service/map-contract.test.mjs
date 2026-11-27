@@ -40,3 +40,13 @@ test('map generation remains layout-only and cannot add blocked areas',()=>{
  validate(generate({...initial,colliders:[]}),'map.generate',true);
  validate(generate({...initial,colliders:[wall]}),'map.generate',false);
 });
+
+test('both request and planner validate new shapes and strict optional legacy geometry',()=>{
+ const shape={...wall,shape:'ellipse',rotation:47};
+ validate(update({...graph,colliders:[wall,{...shape,id:'round'}]}),'map.update',true);
+ for(const bad of [{...wall,shape:'rect'},{...wall,rotation:0},{...shape,rotation:360},{...shape,shape:'triangle'}])
+  validate(update({...graph,colliders:[bad]}),'map.update',false);
+ const options=mapPayloadSchemas[1].properties.graph.properties.colliders.items.oneOf;
+ assert.deepEqual(options[1].properties.shape.enum,['rect','ellipse']);
+ assert.equal(options[1].properties.rotation.maximum,359);
+});
