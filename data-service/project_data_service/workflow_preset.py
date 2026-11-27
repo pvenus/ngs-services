@@ -99,6 +99,7 @@ class WorkflowPreset:
                 require(type(a.get('profile')) is dict and a['profile'].get('planningCategories')==categories,
                         'WORKFLOW_PRESET_REGISTRY_CATEGORIES')
                 supplied={**identity,'artifactSha256':digest(a),'predecessorReceiptRef':predecessor}
+                snapshot_basis=None
                 with self.source.store.factory() as tx:
                     require(isinstance(tx,OwnedNPCTransport),'WORKFLOW_PRESET_FILEX_AUTHORITY_REQUIRED')
                     prior=tx.receipt(identity['taskId'])
@@ -106,9 +107,10 @@ class WorkflowPreset:
                         b=prior.get('workflowPresetBinding',{})
                         require(set(b)==KEYS and all(b[k]==v for k,v in supplied.items()),'WORKFLOW_PRESET_REPLAY_BINDING')
                     else:
-                        snap,marker,_=self.source._read()
+                        snapshot_basis=self.source._read(documents_only=True)
+                        snap,marker,_=snapshot_basis
                         b={**supplied,'expectedSourceVersion':snap['sourceVersion'],'expectedRevision':marker['revision']}
-                return self._commit(b,a,pose_recipe=selected_poses is not None)
+                return self._commit(b,a,pose_recipe=selected_poses is not None,snapshot_basis=snapshot_basis)
         require(type(envelope) is dict and set(envelope)=={'binding','artifact','claim'},'WORKFLOW_PRESET_ENVELOPE')
         b=envelope['binding']
         require(type(b) is dict and set(b)==KEYS and type(envelope['claim']) is dict and b['projectId']=='binari'
@@ -124,15 +126,15 @@ class WorkflowPreset:
             raise Denied('WORKFLOW_PRESET_CLAIM_DENIED')
         return self._commit(b,envelope['artifact'])
 
-    def _commit(self,b,artifact,*,pose_recipe=False):
+    def _commit(self,b,artifact,*,pose_recipe=False,snapshot_basis=None):
         char=preset_character(b,artifact);rid=b['taskId'];bh=digest(b);files=None
         with self.source.store.factory() as tx:
             require(isinstance(tx,OwnedNPCTransport),'WORKFLOW_PRESET_FILEX_AUTHORITY_REQUIRED')
-            if tx.receipt(rid) is None:
+            if snapshot_basis is not None or tx.receipt(rid) is None:
                 if pose_recipe:
                     require(tx.capabilities().get('workflowCombatPortraitWriteV1') is True,
                             'WORKFLOW_POSE_RECIPES_NOT_READY')
-                snapshot,marker,old=self.source._read()
+                snapshot,marker,old=snapshot_basis or self.source._read(documents_only=True)
                 if snapshot['sourceVersion']!=b['expectedSourceVersion'] or marker['revision']!=b['expectedRevision']:
                     raise PresetPrewriteRejected('WORKFLOW_PRESET_SOURCE_CHANGED')
                 require(not any(row['id']==b['npcId'] for row in old['characters']),'WORKFLOW_PRESET_TARGET_EXISTS')

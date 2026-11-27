@@ -48,7 +48,7 @@ class IdlePlan:
     def _current(self,tx,identity,character,chain):
         owner=identity['npcId']
         preset='workflow.task.'+digest([identity['officialRequestId'],'preset'])
-        _,_,doc=self.source._read()
+        _,_,doc=self.source._read(documents_only=True)
         npc=next((c for c in doc['characters'] if c['id']==owner),None)
         require(npc is not None and npc.get('creationBasis',{}).get('requestId')==preset
                 and all(npc.get(k)==character[k] for k in ('name','role','slug'))

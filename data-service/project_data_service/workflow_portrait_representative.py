@@ -58,7 +58,7 @@ class RepresentativePortrait:
         owner=identity['npcId'];preset='workflow.task.'+digest([identity['officialRequestId'],'preset'])
         role='portrait.'+self.pose
         cid='category.preset.'+digest(['npc.standard','3',preset,role])[:32]
-        _,_,doc=self.source._read()
+        _,_,doc=self.source._read(documents_only=True)
         npc=next((n for n in doc['characters'] if n.get('id')==owner),None)
         require(npc is not None and npc.get('creationBasis',{}).get('requestId')==preset
                 and all(npc.get(k)==character[k] for k in ('name','role','slug'))

@@ -49,11 +49,11 @@ class FilexCASTransport:
     try:failure=json.loads(e.read(513))
     except (ValueError,OSError,HTTPException):failure=None
     if failure=={'error':'PINNED_DELETE_REJECTED_BEFORE_MOVE'}:raise PinnedDeleteRejected()from None
-   if e.code==503 and (path in ('/v1/workflow/preset','/v1/workflow/plan-current','/v1/workflow/plan-idle',
+   if e.code==503 and (path.split('?',1)[0] in ('/v1/workflow/preset','/v1/workflow/plan-current','/v1/workflow/plan-idle',
             '/v1/workflow/plan-representative','/v1/workflow/portrait-representative',
             '/v1/workflow/portrait-idle-reference','/v1/workflow/portrait-direction',
             '/v1/workflow/portrait-combat-reference','/v1/workflow/portrait-combat-direction',
-            '/v1/snapshot','/v1/capabilities') or path.startswith('/v1/generation/')):
+            '/v1/snapshot','/v1/capabilities','/v1/generation','/v1/asset') or path.startswith(('/v1/generation/','/v1/requests/'))):
     try:failure=json.loads(e.read(512))
     except (ValueError,OSError,HTTPException):failure=None
     for code in ('FILEX_WRITE_BUSY','STORAGE_FAILURE'):

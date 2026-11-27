@@ -60,7 +60,7 @@ class RepresentativePlan:
     def _current(self,tx,identity,character):
         owner=identity['npcId'];preset='workflow.task.'+digest([identity['officialRequestId'],'preset'])
         cid='category.preset.'+digest(['npc.standard','3',preset,'portrait.representative'])[:32]
-        snap,marker,doc=self.source._read()
+        snap,marker,doc=self.source._read(documents_only=True)
         npc=next((c for c in doc['characters'] if c['id']==owner),None)
         require(npc is not None and npc.get('creationBasis',{}).get('requestId')==preset
                 and all(npc.get(k)==character[k] for k in ('name','role','slug'))

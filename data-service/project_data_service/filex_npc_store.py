@@ -16,11 +16,11 @@ class NPCTransport(FilexCASTransport):
 
 class FilexNPCStore:
  def __init__(self,transport_factory):self.factory=transport_factory
- def snapshot(self):
+ def snapshot(self,*,documents_only=False):
   with self.factory() as t:
    capabilities=t.capabilities()
    require(capabilities.get('lockedBatch') is True and capabilities.get('namespace')==PREFIX,'NPC_BATCH_CAPABILITY_REQUIRED')
-   s=t.snapshot()
+   s=t.call('GET','/v1/snapshot?documentsOnly=1') if documents_only else t.snapshot()
   require(s.get('hashMode')=='canonical-json','NPC_HASH_MODE_INVALID')
   require(s.get('hashes')=={p:digest(v)for p,v in s['documents'].items()} and s.get('sourceVersion')==digest(s['hashes']),'NPC_SNAPSHOT_HASH_MISMATCH')
   changed_files(s['documents'],s['documents'],s['hashes']) # validate paths

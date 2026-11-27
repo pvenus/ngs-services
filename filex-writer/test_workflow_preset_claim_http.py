@@ -68,6 +68,20 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.writer.generation('npc.fresh')['activeLeases'],0)
         self.assertEqual(self.db.read_bytes(),before)
 
+    def test_preset_needs_one_document_snapshot_not_a_project_asset_scan(self):
+        from unittest.mock import patch
+        from project_data_service.pds_owned_transport import OwnedNPCTransport
+        self.plan()
+        captures=[]
+        real=OwnedNPCTransport.call
+        def capture(transport,method,path,*args,**kwargs):
+            if path.startswith('/v1/snapshot'):captures.append(path)
+            return real(transport,method,path,*args,**kwargs)
+        with patch.object(OwnedNPCTransport,'call',capture), \
+             patch.object(self.writer,'asset_path',side_effect=AssertionError('project asset scan')):
+            self.assertEqual(self.preset()[0],200)
+        self.assertEqual(captures,['/v1/snapshot?documentsOnly=1'])
+
     def test_replacement_storage_view_only_and_no_dependency_recheck(self):
         self.assertEqual(self.post()[0],200)
         self.plan('npc.test',replace=True)

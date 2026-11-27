@@ -20,8 +20,8 @@ class FilexCurrentNPC:
         self.external_inventory = external_inventory
         self.replacement_reader = replacement_reader
 
-    def _read(self):
-        snapshot = self.store.snapshot()
+    def _read(self,*,documents_only=False):
+        snapshot = self.store.snapshot(documents_only=True) if documents_only else self.store.snapshot()
         files = copy.deepcopy(snapshot["documents"])
         marker = files["metadata.json"].pop(MARKER, None)
         require(isinstance(marker, dict) and type(marker.get("revision")) is int,
