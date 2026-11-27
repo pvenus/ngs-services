@@ -70,10 +70,10 @@ class WorkflowPreset:
         self.source,self.verify=source,verify
 
     def capability(self):
-        with self.verify.snapshot():
-            with self.source.store.factory() as tx:
-                require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get('workflowAtomicNpcPresetV1') is True,
-                        'WORKFLOW_PRESET_WRITER_CAPABILITY_REQUIRED')
+        with self.verify.snapshot():pass
+        with self.source.store.factory() as tx:
+            require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get('workflowAtomicNpcPresetV1') is True,
+                    'WORKFLOW_PRESET_WRITER_CAPABILITY_REQUIRED')
         return {'enabled':True,'schemaVersion':'workflow.preset-publication-receipt.v1'}
 
     def apply(self,envelope):

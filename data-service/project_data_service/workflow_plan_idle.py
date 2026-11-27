@@ -39,7 +39,8 @@ class IdlePlan:
                 'WORKFLOW_IDLE_PLAN_WRITER_REQUIRED')
 
     def capability(self):
-        with self.verifier.snapshot(), self.source.store.factory() as tx:
+        with self.verifier.snapshot():pass
+        with self.source.store.factory() as tx:
             self._writer(tx)
         return {'enabled':True,'schemaVersion':self.schema}
 
@@ -90,8 +91,9 @@ class IdlePlan:
     def read(self,envelope):
         require(type(envelope) is dict and set(envelope)=={'claim','inputMode'}
                 and envelope['inputMode']==FOLDER_INPUT,'WORKFLOW_IDLE_PLAN_READ')
-        with self.verifier.authorized_document_chain(envelope['claim'],self.stage) as (identity,character,chain):
-            return self.read_authorized(identity,character,chain)
+        with self.verifier.authorized_document_chain(envelope['claim'],self.stage) as pinned:
+            identity,character,chain=pinned
+        return self.read_authorized(identity,character,chain)
 
     def publish_authorized(self,identity,b,a,chain):
         require(type(b) is dict and set(b)==BASIS

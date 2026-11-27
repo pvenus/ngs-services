@@ -49,11 +49,11 @@ class RepresentativePlan:
         self.source,self.verifier,self.concept=source,verifier,concept
 
     def capability(self,*,folder_snapshot=False):
-        with self.verifier.snapshot():
-            if not folder_snapshot:concept_context(self.concept)
-            with self.source.store.factory() as tx:
-                require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get('workflowRepresentativePlanWriteV1') is True,
-                        'WORKFLOW_REPRESENTATIVE_WRITER_CAPABILITY')
+        with self.verifier.snapshot():pass
+        if not folder_snapshot:concept_context(self.concept)
+        with self.source.store.factory() as tx:
+            require(isinstance(tx,OwnedNPCTransport) and tx.capabilities().get('workflowRepresentativePlanWriteV1') is True,
+                    'WORKFLOW_REPRESENTATIVE_WRITER_CAPABILITY')
         return {'enabled':True,'schemaVersion':WRITE_SCHEMA}
 
     def _current(self,tx,identity,character):
@@ -78,21 +78,23 @@ class RepresentativePlan:
         folder_snapshot=set(envelope)=={'claim','inputMode'} and envelope['inputMode']==FOLDER_INPUT
         require(set(envelope)=={'claim'} or folder_snapshot,'WORKFLOW_REPRESENTATIVE_READ')
         with self.verifier.authorized_document_chain(envelope['claim'],'representative') as (identity,character,chain):
-            if chain:
-                require(folder_snapshot,'WORKFLOW_REPRESENTATIVE_FOLDER_REQUIRED')
-                from .workflow_plan_idle import IdlePlan
-                return IdlePlan(self.source,self.verifier,stage='representative').read_authorized(identity,character,True)
-            with self.source.store.factory() as tx:
-                require(isinstance(tx,OwnedNPCTransport),'WORKFLOW_REPRESENTATIVE_FILEX_AUTHORITY')
-                _,doc,category,basis=self._current(tx,identity,character)
-            npc=next(c for c in doc['characters'] if c['id']==identity['npcId'])
-            # Project only fresh creation metadata; no prior principle text, siblings or assets.
-            preset=canonical({'creationBasis':npc['creationBasis'],'planningPreset':npc['planningPreset'],
-                              'category':{**category,'content':''},'chapters':npc['chapters'],'status':npc['status']}).decode()
-            require(0<len(preset)<=8000,'WORKFLOW_REPRESENTATIVE_PRESET_LIMIT')
-            result={'basis':basis,'character':character}
-            if not folder_snapshot:result['conceptContext']=concept_context(self.concept)
-            return {**result,'presetContext':preset}
+            pinned=(identity,character,chain)
+        identity,character,chain=pinned
+        if chain:
+            require(folder_snapshot,'WORKFLOW_REPRESENTATIVE_FOLDER_REQUIRED')
+            from .workflow_plan_idle import IdlePlan
+            return IdlePlan(self.source,self.verifier,stage='representative').read_authorized(identity,character,True)
+        with self.source.store.factory() as tx:
+            require(isinstance(tx,OwnedNPCTransport),'WORKFLOW_REPRESENTATIVE_FILEX_AUTHORITY')
+            _,doc,category,basis=self._current(tx,identity,character)
+        npc=next(c for c in doc['characters'] if c['id']==identity['npcId'])
+        # Project only fresh creation metadata; no prior principle text, siblings or assets.
+        preset=canonical({'creationBasis':npc['creationBasis'],'planningPreset':npc['planningPreset'],
+                          'category':{**category,'content':''},'chapters':npc['chapters'],'status':npc['status']}).decode()
+        require(0<len(preset)<=8000,'WORKFLOW_REPRESENTATIVE_PRESET_LIMIT')
+        result={'basis':basis,'character':character}
+        if not folder_snapshot:result['conceptContext']=concept_context(self.concept)
+        return {**result,'presetContext':preset}
 
     def publish(self,envelope):
         require(type(envelope) is dict and set(envelope)=={'claim','basis','artifact'},
