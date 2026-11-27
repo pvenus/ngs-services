@@ -474,8 +474,9 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         routes.update({MAP_ROUTE:lambda p:map_revision(store,p,True),
                           MAP_ROUTE+'/context':lambda p:map_context(store,p),
                           MAP_ROUTE+'/revision':lambda p:map_revision(store,p)})
-                    from assembly_store import ASSEMBLY,call as assembly_call
-                    if hasattr(store,'cinematic_source_generate'):
+                    ASSEMBLY='/v1/workflow/assemblies'
+                    if url.path==ASSEMBLY or url.path.startswith(ASSEMBLY+'/'):
+                        from assembly_store import call as assembly_call
                         routes.update({ASSEMBLY:lambda p:assembly_call(store,'publish',p),
                          **{ASSEMBLY+'/'+op:(lambda p,op=op:assembly_call(store,op,p)) for op in ('head','revision','list','map')}})
                     action=routes.get(url.path)

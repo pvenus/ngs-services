@@ -43,7 +43,15 @@ PROP_FILES = ("prop_package_contract.py", "prop_package_store.py")
 PROP_CLOSURE = CLOSURE | set(PROP_FILES)
 LEGACY_UNIFIED_CLOSURE = PROP_CLOSURE | {'scope_registry.py', 'scopes.json'}
 UNIFIED_CLOSURE = LEGACY_UNIFIED_CLOSURE | {'map_store.py'}
-UNIFIED_CLOSURES = (LEGACY_UNIFIED_CLOSURE, UNIFIED_CLOSURE)
+ASSEMBLY_FILES = ("assembly_store.py", "assembly_contract.py")
+ASSEMBLY_UNIFIED_CLOSURE = UNIFIED_CLOSURE | set(ASSEMBLY_FILES)
+# These two already-published proofs omitted the assembly modules. Keep their
+# exact proof replay compatible without allowing new releases to omit them.
+LEGACY_ASSEMBLY_PACKAGING = frozenset((
+    'bc6cbeedbd179e786ba3b07e8013ffcea3a7191a',
+    '8bd27ca7db30c2e039e877428f719048f4c78554',
+))
+UNIFIED_CLOSURES = (LEGACY_UNIFIED_CLOSURE, UNIFIED_CLOSURE, ASSEMBLY_UNIFIED_CLOSURE)
 # This discriminator binds smoke and target kind, not the registry itself.
 # The exact registry blob is always separately covered by the source proof.
 UNIFIED_CAP_DIGEST = digest(b'ngs.filex-writer-scopes.v1')
@@ -69,7 +77,7 @@ def closure(repo, head):
         path = path.decode()
         need(path.startswith(PREFIX), "FILEX_SOURCE_SCOPE_INVALID")
         name = path.removeprefix(PREFIX)
-        if name not in UNIFIED_CLOSURE:
+        if name not in (UNIFIED_CLOSURE if head in LEGACY_ASSEMBLY_PACKAGING else ASSEMBLY_UNIFIED_CLOSURE):
             continue
         mode, kind, oid = flags.decode().split()
         need(mode == "100644" and kind == "blob" and matches(SHA, oid)
@@ -90,7 +98,11 @@ def closure(repo, head):
         registry(blobs['scopes.json'])
         has_map = 'map_store.py' in blobs
         need(has_map == (b'from map_store import ' in blobs['server.py']), 'FILEX_MAP_SOURCE_MISSING')
-        need(blobs['Dockerfile']==dockerfile('python:3.12-slim',unified=True,map_workflow=has_map),'FILEX_DOCKERFILE_DRIFT')
+        has_assembly='assembly_store.py' in blobs
+        need(has_assembly == (b'from assembly_store import ' in blobs['server.py']) or
+             not has_assembly and head in LEGACY_ASSEMBLY_PACKAGING, 'FILEX_ASSEMBLY_SOURCE_MISSING')
+        need(blobs['Dockerfile']==dockerfile('python:3.12-slim',unified=True,map_workflow=has_map,
+                                            assembly_workflow=has_assembly),'FILEX_DOCKERFILE_DRIFT')
         return root, blobs
     scoped = set(blobs) == PROP_CLOSURE
     need(scoped == (declared_capabilities(blobs["server.py"]) == PROP_CAP_DIGEST), "FILEX_SOURCE_CAPABILITIES_INVALID")
@@ -98,10 +110,10 @@ def closure(repo, head):
     return root, blobs
 
 
-def dockerfile(base, *, prop=False, unified=False, map_workflow=False):
+def dockerfile(base, *, prop=False, unified=False, map_workflow=False, assembly_workflow=False):
     if unified:
         return (f"FROM {base}\nWORKDIR /app\n"
-                f"COPY server.py scope_registry.py scopes.json {' '.join(FILES[1:] + PROP_FILES + (('map_store.py',) if map_workflow else ()))} /app/\n"
+                f"COPY server.py scope_registry.py scopes.json {' '.join(FILES[1:] + PROP_FILES + (('map_store.py',) if map_workflow else ()) + (ASSEMBLY_FILES if assembly_workflow else ()))} /app/\n"
                 "ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1\n"
                 "USER 1000:1000\n"
                 'CMD ["python", "-B", "/app/server.py"]\n').encode()
@@ -251,9 +263,9 @@ def capability_smoke(profile):
             repr(PROP_ENV if profile == PROP_CAP_DIGEST else {}) + "\n").encode() + SMOKE
 
 
-def unified_smoke(rows):
+def unified_smoke(rows, *, assembly=False):
     # No deployment secret or Filex host bind is visible to this isolated probe.
-    header = 'SCOPES = ' + repr(rows) + '\n'
+    header = 'SCOPES = ' + repr(rows) + '\nASSEMBLY = ' + repr(assembly) + '\n'
     return (header + '''
 import hashlib,json,os,subprocess,sys,time
 from pathlib import Path
@@ -267,8 +279,10 @@ for k,v in tokens.items():
     with os.fdopen(fd,'w') as f:
         f.write(v)
 child=subprocess.Popen([sys.executable,'-B','/app/server.py'])
-def probe(path,token=None):
-    req=Request('http://127.0.0.1:8093'+path,headers={'Authorization':'Bearer '+token} if token else {})
+def probe(path,token=None,body=None):
+    headers={'Authorization':'Bearer '+token} if token else {}
+    if body is not None:headers['Content-Type']='application/json'
+    req=Request('http://127.0.0.1:8093'+path,headers=headers,data=None if body is None else json.dumps(body).encode())
     try:
         with urlopen(req,timeout=1) as response:
             return response.status,json.load(response)
@@ -293,6 +307,13 @@ try:
         assert status==200 and body['namespace']=='canonical-files/binari/'+r['folder']+'/'
         wrong=next((v for k,v in tokens.items() if k!=r['credential']),None)
         assert wrong is None or probe(path,wrong)[0]==401
+    if ASSEMBLY:
+        cinema=next(r for r in SCOPES if r['id']=='cinematics')
+        props=next(r for r in SCOPES if r['id']=='props')
+        assert probe('/v1/scopes/cinematics/workflow/assemblies/list',tokens[cinema['credential']],{})==(200,{'assemblies':[]})
+        assert probe('/v1/scopes/cinematics/workflow/assemblies/revision',tokens[cinema['credential']],
+                    {'assemblyId':'request.official.'+'0'*64,'revision':1})[0]==404
+        assert probe('/v1/scopes/props/workflow/props/assembly-bindings',tokens[props['credential']],{})[0]==404
 finally:
     child.terminate()
     child.wait(5)
@@ -350,7 +371,7 @@ class IsolatedDocker:
             rows = registry((context/'scopes.json').read_bytes())
             tmpfs = ['/canonical/'+row['folder'] for row in rows]
             tmpfs += ['/run/secrets/'+name for name in sorted({row['credential'] for row in rows})]
-            smoke = unified_smoke(rows)
+            smoke = unified_smoke(rows,assembly=(context/'assembly_store.py').is_file())
         else:
             tmpfs = ["/"+path for path in (("canonical", "audio", "tmp", "props") if capability == PROP_CAP_DIGEST else ("canonical", "audio", "tmp"))]
             smoke = capability_smoke(capability)
@@ -418,7 +439,7 @@ def stage(github, repo, control, base, docker):
             context = Path(temp) / "context"
             context.mkdir(mode=0o700)
             sources["Dockerfile"] = dockerfile(base, prop=profile==PROP_CAP_DIGEST, unified=profile==UNIFIED_CAP_DIGEST,
-                                               map_workflow='map_store.py' in sources)
+                                               map_workflow='map_store.py' in sources,assembly_workflow='assembly_store.py' in sources)
             for name, data in sources.items():
                 p = context / name
                 p.write_bytes(data)
