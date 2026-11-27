@@ -220,6 +220,25 @@ s.close();"""
         self.call('/v1/scopes/props/workflow/props','concept',{k:layered[k] for k in ('candidate','manifest','media')})
         pin={'propId':'ghost-fixture','revision':1,'sha256':digest(manifest)}
         spirit={**spirit,'bindings':{'spirit':pin}}
+        v3={**{k:v for k,v in g.items() if k!='puzzleType'},'schemaVersion':'ngs.assembly-generate.v3',
+            'puzzles':[{'id':'test-water','type':g['puzzleType'],'intent':'우물'},
+                       {'id':'test-spirit','type':spirit['type'],'intent':'그림자','prop':pin}]}
+        missing_lane=stage('d3',{**v3,'puzzles':[v3['puzzles'][0],{**v3['puzzles'][1],'prop':legacy_pin}]},'assembly.generate',20)
+        self.assertEqual(call('/read',{'claim':missing_lane},409),{'error':'ASSEMBLY_PROP_UNAVAILABLE'})
+        mixed=stage('c3',v3,'assembly.generate',20)
+        prepared=call('/read',{'claim':mixed})['state']
+        self.assertEqual(prepared['puzzles'][1]['bindings']['spirit'],pin)
+        self.assertNotEqual(prepared['puzzles'][1]['layout'],spirit['layout'])
+        authored={**prepared,'puzzles':[prepared['puzzles'][0],{**spirit,'id':'test-spirit'}]}
+        wrong_pin={**authored,'puzzles':[authored['puzzles'][0],{**authored['puzzles'][1],'bindings':{'spirit':legacy_pin}}]}
+        self.assertEqual(call('',{'claim':mixed,'state':wrong_pin},409),{'error':'ASSEMBLY_INPUT_CHANGED'})
+        unreachable={**authored,'puzzles':[authored['puzzles'][0],{**authored['puzzles'][1],
+            'layout':{'spirit':{'regionId':'not-on-map','x':44,'y':67}}}]}
+        self.assertEqual(call('',{'claim':mixed,'state':unreachable},409),{'error':'ASSEMBLY_ROUTE_NOT_PLAYABLE'})
+        mixed_receipt=call('',{'claim':mixed,'state':authored})
+        self.assertEqual(call('',{'claim':mixed,'state':authored}),mixed_receipt)
+        complete(mixed,mixed_receipt)
+        self.assertEqual(call('/result',{'officialRequestId':authored['assemblyId']}),mixed_receipt)
         # A valid region need not be symmetric, but must be reachable from start.
         bad_station={**spirit,'layout':{'spirit':{**spirit['layout']['spirit'],'regionId':'not-on-map'}}}
         blocked=file_update('a5',expected,[bad_station])
@@ -240,7 +259,7 @@ s.close();"""
         clear=stage('f',{**u,'expectedRevision':2,'puzzles':[]},'assembly.update',17)
         empty=call('/read',{'claim':clear})['state'];self.assertEqual(empty['puzzles'],[])
         call('',{'claim':clear,'state':empty})
-        self.assertEqual(call('/list',{}),{'assemblies':[batch,empty]})
+        self.assertEqual(call('/list',{}),{'assemblies':[batch,authored,empty]})
 
         self.assertEqual(call(base=ASSEMBLY_CAPABILITY),{'enabled':True,'roots':[ASSEMBLY_ROOT],'schemaVersion':SCHEMA})
         self.assertEqual(call(base=DELETE)['roots'],[])
@@ -260,7 +279,7 @@ s.close();"""
         self.assertTrue(receipt['targetAbsent'])
         self.assertFalse(root.exists())
         self.assertEqual(call(packet=command,base=DELETE),receipt)
-        self.assertEqual(call('/list',{}),{'assemblies':[batch]})
+        self.assertEqual(call('/list',{}),{'assemblies':[batch,authored]})
         self.assertEqual(call('/read',{'claim':clear},409),{'error':'ASSEMBLY_REVISION_CONFLICT'})
         self.call('/v1/scopes/cinematics/workflow/assemblies','media',st1,status=409)
         self.assertTrue((self.data/'cinematics'/'maps'/map_id/'1.json').is_file())

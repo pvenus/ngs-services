@@ -3,7 +3,7 @@ from .filex_read import canonical,digest
 from .filex_writer_binding import writer as connect
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json
-from .assembly_contract import KINDS,V2,OID,keys,match,payload,state,graph_reaches,playable
+from .assembly_contract import KINDS,V2,V3,TYPE,SPIRIT_TYPE,OID,keys,match,payload,state,graph_reaches,playable
 
 PATH='/v1/assemblies/ownership/workflow-assembly'
 CAP='workflow.assembly.v1'
@@ -38,7 +38,7 @@ def default_puzzle(graph,bindings,puzzle):
             'attachments':{'bowl':{'x':5,'y':-10},'lid':{'x':5,'y':-10}},'bindings':bindings}
 
 def expected_puzzles(p):
-    if p['schemaVersion']==V2:return p['puzzles']
+    if p['schemaVersion'] in (V2,V3):return p['puzzles']
     return [{'id':'ritual-well-water','type':p['puzzleType']}]
 
 class WorkflowAssembly(WorkflowCinematic):
@@ -71,6 +71,8 @@ class WorkflowAssembly(WorkflowCinematic):
         else:
             need(existing['title']==p['title'] and existing['map']['mapId']==p['mapId'] and
                  [(x['id'],x['type']) for x in existing['puzzles']]==[(x['id'],x['type']) for x in expected_puzzles(p)])
+            for row,entry in zip(existing['puzzles'],expected_puzzles(p)):
+                if entry['type']==SPIRIT_TYPE:need(row['bindings']['spirit']==entry['prop'] and 'scale' in row)
         return existing
     def candidate(self,oid,stamp,p):
         aid,rev=identity(oid,p)
@@ -92,8 +94,20 @@ class WorkflowAssembly(WorkflowCinematic):
         else:
             m=self.cine('map',{'mapId':p['mapId']});title=p['title']
             mapping={k:m[k] for k in ('mapId','revision','officialRequestId')}
-            out=self.prop({});need(keys(out,('bindings',)))
-            rows=[default_puzzle(m['graph'],out['bindings'],x) for x in expected_puzzles(p)]
+            entries=expected_puzzles(p)
+            well_bindings=None
+            if any(x['type']==TYPE for x in entries):
+                out=self.prop({});need(keys(out,('bindings',)))
+                well_bindings=out['bindings']
+            spirit_pins={x['prop']['propId']+':'+str(x['prop']['revision'])+':'+x['prop']['sha256']:x['prop']
+                         for x in entries if x['type']==SPIRIT_TYPE}
+            if spirit_pins:
+                need(self.prop({'decorationPins':[{'prop':v,'visibility':'both'} for v in spirit_pins.values()]})=={'ok':True})
+            rows=[default_puzzle(m['graph'],well_bindings,x) if x['type']==TYPE else
+                  {'id':x['id'],'type':SPIRIT_TYPE,
+                   'layout':{'spirit':{'regionId':m['graph']['startRegionId'],'x':50,'y':60}},
+                   'attachments':{},'bindings':{'spirit':x['prop']},'scale':{'spirit':100}}
+                  for x in entries]
             need(playable(m['graph'],rows))
         result=self.check(oid,stamp,p,{'schemaVersion':'ngs.assembly.v1','projectId':'binari','assemblyId':aid,
             'revision':rev,'updatedAt':stamp,'officialRequestId':oid,'title':title,'map':mapping,'puzzles':rows})
@@ -124,10 +138,13 @@ class WorkflowAssembly(WorkflowCinematic):
                 if submitted!=expected:raise CinematicConflict('ASSEMBLY_INPUT_CHANGED')
             else:
                 immutable=lambda value:{**value,'puzzles':[
-                    {k:v for k,v in puzzle.items() if k not in ('layout','attachments')} for puzzle in value['puzzles']]}
+                    {k:v for k,v in puzzle.items() if k not in
+                     (('layout','scale') if puzzle['type']==SPIRIT_TYPE and b['schemaVersion']==V3 else ('layout','attachments'))}
+                    for puzzle in value['puzzles']]}
                 if immutable(submitted)!=immutable(expected):raise CinematicConflict('ASSEMBLY_INPUT_CHANGED')
+                self.check(oid,submitted['updatedAt'],b,submitted)
                 if not playable(context,submitted['puzzles']):raise CinematicConflict('ASSEMBLY_ROUTE_NOT_PLAYABLE')
-            need(self.cine('',submitted)==submitted)
+            need(self.cine('',{'generation':b,'state':submitted} if b['schemaVersion']==V3 else submitted)==submitted)
             return {'ok':True,'resultRef':ref(submitted['assemblyId'],submitted['revision'])}
 
 def serve(handler):

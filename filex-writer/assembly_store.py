@@ -1,6 +1,6 @@
 """Atomic assembly publication on the existing cinematic store and lock."""
 import json
-from assembly_contract import LIMIT,OID,int_range,keys,match,playable,state,wire,MAX_REV,puzzles,affected_conditions_exist,condition_index
+from assembly_contract import LIMIT,OID,V3,SPIRIT_TYPE,payload,int_range,keys,match,playable,state,wire,MAX_REV,puzzles,affected_conditions_exist,condition_index
 from map_store import map_base,read_revision,REVISION,deletion_marker
 from server import Conflict
 
@@ -76,7 +76,14 @@ def map_state(store,v):
     return m
 def call(store,operation,body):
     need(type(body)is dict)
-    expected=None
+    expected=None; generation=None
+    if operation=='publish' and keys(body,('generation','state')):
+        generation=body['generation'];body=body['state']
+        need(payload(generation,'assembly.generate') and generation['schemaVersion']==V3 and state(body) and body['revision']==1 and
+             body['title']==generation['title'] and body['map']['mapId']==generation['mapId'] and
+             [(x['id'],x['type']) for x in body['puzzles']]==[(x['id'],x['type']) for x in generation['puzzles']] and
+             all(x['type']!=SPIRIT_TYPE or (x['bindings']['spirit']==p['prop'] and 'scale' in x)
+                 for x,p in zip(body['puzzles'],generation['puzzles'])))
     if operation=='metadata-update':
         need(keys(body,('expected','state')) and keys(body['expected'],('revision','officialRequestId')) and
              int_range(body['expected']['revision'],1,MAX_REV-1) and match(body['expected']['officialRequestId'],OID))
@@ -133,7 +140,7 @@ def call(store,operation,body):
             elif not affected_conditions_exist(previous['puzzles'],body['puzzles'],m['graph']):
                 raise Conflict('assembly portal condition target changed')
         else:
-            need(puzzles(body['puzzles'],well_only=True) and not condition_index(body['puzzles']))
+            need(puzzles(body['puzzles'],well_only=generation is None) and not condition_index(body['puzzles']))
             need(body['assemblyId']==body['officialRequestId'])
             m=map_state(store,{'mapId':body['map']['mapId']})
             if any(m[k]!=body['map'][k] for k in ('mapId','revision','officialRequestId')):raise Conflict('assembly map pin stale')

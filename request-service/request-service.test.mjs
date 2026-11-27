@@ -986,6 +986,14 @@ test('assembly official request families advertise exact schemas and accept remo
  }
  assert.equal((await api.submit(batch)).result.structuredContent.status,'registered');
  const slot=(propId,i)=>({propId,revision:1,sha256:String(i).repeat(64)});
+ const pick={id:'visual-spirit',type:'binari.ritual-spirit-manifestation',intent:'안쪽에 유령',prop:slot('ghost',7)};
+ const mixed={...batch,idempotencyKey:'assembly-v3',payload:{...batch.payload,schemaVersion:'ngs.assembly-generate.v3',puzzles:[entry,pick]}};
+ const v3=schema.oneOf.find(r=>r.properties?.payload?.properties?.schemaVersion?.const===mixed.payload.schemaVersion);
+ assert.equal(v3.properties.payload.properties.puzzles.items.oneOf.length,2);
+ assert.equal((await api.submit(mixed)).result.structuredContent.status,'registered');
+ for(const payload of [{...mixed.payload,schemaVersion:batch.payload.schemaVersion},{...mixed.payload,puzzles:[{...pick,prop:{...pick.prop,revision:0}}]}]){
+  assert.equal((await api.submit({...mixed,idempotencyKey:'invalid-spirit',payload})).result.structuredContent.error,'NGS_ASSEMBLY_PAYLOAD_INVALID');
+ }
  const puzzle={id:'water-test',type:puzzleType,layout:{altar:{regionId:'zone-one',x:10,y:90},well:{regionId:'zone-one',x:90,y:10}},
   attachments:{bowl:{x:0,y:-12},lid:{x:12,y:0}},bindings:{table:slot('table',1),bowl:slot('bowl',2),well:slot('well',3),lid:slot('lid',4)}};
  const scale={table:10,bowl:100,well:300,lid:100};
