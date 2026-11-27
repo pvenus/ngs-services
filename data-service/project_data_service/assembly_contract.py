@@ -27,8 +27,11 @@ def offset(v):return keys(v,('x','y')) and xy(v,-12,12)
 def puzzles(v):
     if type(v)is not list or not 0<=len(v)<=32:return False
     ids=set()
+    fields=('id','type','layout','attachments','bindings')
     for p in v:
-        if not (keys(p,('id','type','layout','attachments','bindings')) and slug(p['id']) and p['id'] not in ids and p['type']==TYPE and
+        has_scale=type(p)is dict and 'scale' in p
+        if has_scale and not (keys(p['scale'],ROLES) and all(int_range(x,10,300) for x in p['scale'].values())):return False
+        if not (keys(p,fields+('scale',) if has_scale else fields) and slug(p['id']) and p['id'] not in ids and p['type']==TYPE and
                 keys(p['layout'],('altar','well')) and all(station(x) for x in p['layout'].values()) and
                 keys(p['attachments'],('bowl','lid')) and all(offset(x) for x in p['attachments'].values()) and
                 keys(p['bindings'],ROLES) and all(pin(x) for x in p['bindings'].values()) and

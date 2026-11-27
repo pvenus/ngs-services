@@ -962,6 +962,20 @@ test('assembly official request families advertise exact schemas and accept remo
   assert.equal(bad.error,'NGS_ASSEMBLY_PAYLOAD_INVALID');
  }
  assert.equal((await api.submit(batch)).result.structuredContent.status,'registered');
+ const slot=(propId,i)=>({propId,revision:1,sha256:String(i).repeat(64)});
+ const puzzle={id:'water-test',type:puzzleType,layout:{altar:{regionId:'zone-one',x:10,y:90},well:{regionId:'zone-one',x:90,y:10}},
+  attachments:{bowl:{x:0,y:-12},lid:{x:12,y:0}},bindings:{table:slot('table',1),bowl:slot('bowl',2),well:slot('well',3),lid:slot('lid',4)}};
+ const scale={table:10,bowl:100,well:300,lid:100};
+ const scaled={...update,idempotencyKey:'assembly-scale',payload:{...update.payload,puzzles:[{...puzzle,scale}]}};
+ const updateSchema=schema.oneOf.find(r=>r.properties?.payload?.properties?.schemaVersion?.const===update.payload.schemaVersion);
+ assert.deepEqual(updateSchema.properties.payload.properties.puzzles.items.properties.scale.required,['table','bowl','well','lid']);
+ assert.equal(updateSchema.properties.payload.properties.puzzles.items.required.includes('scale'),false);
+ for(const badScale of [null,{...scale,well:301},{...scale,lid:9},{...scale,table:10.5},{...scale,lid:true},
+  {table:10,bowl:100,well:300},{...scale,door:100}]){
+  const bad=(await api.submit({...scaled,payload:{...scaled.payload,puzzles:[{...puzzle,scale:badScale}]}})).result.structuredContent;
+  assert.equal(bad.error,'NGS_ASSEMBLY_PAYLOAD_INVALID');
+ }
+ assert.equal((await api.submit(scaled)).result.structuredContent.status,'registered');
  const rows=(await api.workflow({limit:10})).result.structuredContent.requests;
  assert.deepEqual(new Set(rows.map(x=>x.requestType)),new Set(['assembly.generate','assembly.update']));
 });

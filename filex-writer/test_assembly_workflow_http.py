@@ -78,6 +78,9 @@ s.close();"""
         call('',{'claim':gen,'state':{**st1,'puzzles':[]}},409)
         changed_pin={**model,'bindings':{**model['bindings'],'bowl':{**model['bindings']['bowl'],'sha256':'a'*64}}}
         self.assertEqual(call('',{'claim':gen,'state':{**draft,'puzzles':[changed_pin]}},409),{'error':'ASSEMBLY_INPUT_CHANGED'})
+        scale={'table':110,'bowl':85,'well':165,'lid':80}
+        self.assertEqual(call('',{'claim':gen,'state':{**draft,'puzzles':[{**model,'scale':scale}]}},409),
+            {'error':'ASSEMBLY_INPUT_CHANGED'})
         failed_route={**model,'layout':{**model['layout'],'well':{**model['layout']['well'],'regionId':'zone-4'}}}
         self.assertEqual(call('',{'claim':gen,'state':{**draft,'puzzles':[failed_route]}},409),{'error':'ASSEMBLY_ROUTE_NOT_PLAYABLE'})
         self.assertEqual(call('/list',{}),{'assemblies':[]})
@@ -120,10 +123,12 @@ s.close();"""
         bad={**puzzle,'layout':{**puzzle['layout'],'well':{**puzzle['layout']['well'],'regionId':'zone-4'}}}
         bad_claim=stage('b',{**u,'puzzles':[bad]},'assembly.update',13)
         self.assertEqual(call('/read',{'claim':bad_claim},409),{'error':'ASSEMBLY_ROUTE_NOT_PLAYABLE'})
-        good={**puzzle,'layout':{**puzzle['layout'],'well':{**puzzle['layout']['well'],'x':71}}}
+        good={**puzzle,'scale':scale,'layout':{**puzzle['layout'],'well':{**puzzle['layout']['well'],'x':71}}}
         edit=stage('c',{**u,'puzzles':[good]},'assembly.update',14)
         prepared=call('/read',{'claim':edit})['state'];second=call('',{'claim':edit,'state':prepared})
         complete(edit,second)
+        self.assertEqual(json.loads((root/'2.json').read_text())['puzzles'][0]['scale'],scale)
+        self.assertNotIn('scale',json.loads((root/'1.json').read_text())['puzzles'][0])
         self.assertEqual(call('/result',{'officialRequestId':edit['officialRequestId']}),second)
         self.assertEqual((root/'1.json').read_bytes(),initial)
         stale=stage('d',{**u,'puzzles':[]},'assembly.update',15)

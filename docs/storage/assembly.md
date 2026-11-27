@@ -19,7 +19,11 @@ are never changed. To keep the test playable from the map start, the input sugge
 can place the altar and well in the same region when the directed portal graph
 lacks a return path. Manual edits retain the exact map pin, reject unreachable
 stations and missing prop bytes, and may remove every puzzle without removing
-the assembly. Older intact immutable prop releases remain eligible.
+the assembly. Older intact immutable prop releases remain eligible. A manual update can
+persist a puzzle's optional `scale` object with all four role percentages
+(`table`, `bowl`, `well`, `lid`) in the integer range 10–300. If absent, the
+client displays each prop at 100%. Generation does not author scale and
+metadata changes never resample the prop files.
 
 The canonical location is
 `binari/cinematics/assemblies/<assemblyId>/<revision>.json` with
