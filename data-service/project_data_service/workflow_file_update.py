@@ -1,9 +1,9 @@
 """One official full JSON metadata replacement, through typed storage adapters."""
 import time
 from .filex_read import canonical,digest
-from .workflow_cinematic import CinematicConflict,need,keys,match,serve as serve_workflow
+from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,keys,match,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json,OFFICIAL,SAFE_INT
-from .workflow_map import WorkflowMap,graph_valid,ref as map_ref
+from .workflow_map import WRITER as MAP_WRITER,graph_valid,ref as map_ref
 
 PATH='/v1/storage/workflow-file-update'
 CAP='workflow.file-update.v1'
@@ -17,21 +17,26 @@ def valid_pin(p):
     return keys(p,('revision','officialRequestId')) and type(p['revision']) is int and 1<=p['revision']<SAFE_INT and match(p['officialRequestId'],OFFICIAL)
 
 class MapMetadata:
+    def accepts_id(self,mid):
+        return match(mid,OFFICIAL)
     def validate(self,content):
         return graph_valid(content)
     def result_ref(self,mid,rev):
         return map_ref(mid,rev)
     def read(self,provider,mid,rev):
-        return provider.call_map('/revision',{'mapId':mid,'revision':rev})
+        return provider.storage(MAP_WRITER+'/revision',{'mapId':mid,'revision':rev})
     def write(self,provider,oid,p):
         content=p['content'];mid=p['target']['path'];expected=p['expected']
         ids=list(dict.fromkeys(r['backgroundId'] for r in content['regions']))
-        refs=provider.call_map('/context',{'backgroundIds':ids})
+        refs=provider.storage(MAP_WRITER+'/context',{'backgroundIds':ids})
         by_id={r['id']:r['sha256'] for r in refs['backgrounds']}
         need(all(by_id.get(r['backgroundId'])==r['imageSha256'] for r in content['regions']))
         result={'schemaVersion':'ngs.map-metadata.v1','projectId':'binari','mapId':mid,'revision':expected['revision']+1,
                 'updatedAt':int(time.time()*1000),'officialRequestId':oid,'graph':content}
-        return provider.call_map('/metadata-update',{'expected':expected,'state':result})
+        return provider.storage(MAP_WRITER+'/metadata-update',{'expected':expected,'state':result})
+    def matches(self,result,oid,mid,rev,content):
+        return (type(result) is dict and result.get('mapId')==mid and result.get('revision')==rev and
+                result.get('officialRequestId')==oid and result.get('graph')==content)
 
 ADAPTERS={MAP_ROOT:MapMetadata()}
 
@@ -46,8 +51,9 @@ def planned(db,oid):
          p['schemaVersion']==SCHEMA and p['projectId']=='binari' and canonical(p)==raw and digest(p)==run['payload_sha256'])
     target=p['target']
     need(keys(target,('root','path','kind')) and type(target['root']) is str and target['root'] in ADAPTERS and
-         target['kind']=='metadata' and match(target['path'],OFFICIAL) and target['path']!=oid and valid_pin(p['expected']))
+         target['kind']=='metadata' and target['path']!=oid and valid_pin(p['expected']))
     adapter=ADAPTERS[target['root']]
+    need(adapter.accepts_id(target['path']))
     adapter.validate(p['content'])
     tasks=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 2',(oid,)).fetchall()
     need(len(tasks)==1);task=tasks[0]
@@ -57,7 +63,13 @@ def planned(db,oid):
          task['task_input'].encode()==canonical({k:p[k] for k in ('target','expected','content')}))
     return run,task,(p,adapter)
 
-class WorkflowFileUpdate(WorkflowMap):
+class WorkflowFileUpdate(WorkflowCinematic):
+    def storage(self,path,data):
+        with self.writer_factory() as tx:
+            try:return tx.call('POST',path,data)
+            except ValueError as e:
+                if str(e)=='KNOWLEDGE_SOURCE_CHANGED':raise CinematicConflict('FILE_UPDATE_REVISION_CONFLICT') from None
+                raise
     def ready(self):
         with self.planner.snapshot():pass
         with self.writer_factory() as tx:return tx.capabilities().get('workflowFileUpdateV1') is True
@@ -76,11 +88,8 @@ class WorkflowFileUpdate(WorkflowMap):
             with exact_claim(self.planner,packet['claim'],planned) as (oid,(p,adapter)):
                 mid=p['target']['path'];rev=p['expected']['revision']+1
                 result_ref=adapter.result_ref(mid,rev)
-                try:result=adapter.write(self,oid,p)
-                except CinematicConflict as e:
-                    if str(e)=='MAP_REVISION_CONFLICT':raise CinematicConflict('FILE_UPDATE_REVISION_CONFLICT') from None
-                    raise
-        need(result.get('mapId')==mid and result.get('revision')==rev and result.get('officialRequestId')==oid and result.get('graph')==p['content'])
+                result=adapter.write(self,oid,p)
+        need(adapter.matches(result,oid,mid,rev,p['content']))
         return {'ok':True,'resultRef':result_ref}
 
 def serve(handler):
