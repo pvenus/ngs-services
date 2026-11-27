@@ -75,6 +75,14 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
         {'type':'string','const':'ngs.'+mode.replace('.','-')+'.v1'}) or
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or policy.get('apply')!='authorized-mutation'):
     raise ValueError('LAYA_MAP_DOCUMENT_ADAPTER_CONTRACT')
+  elif worker=='file':
+   mode=action['id']
+   if (mode!='file.update' or action.get('modelCalls')!=0 or action.get('dependsOn')!=[] or
+       registry['requestTypes'].get(mode,{}).get('stageIds')!=[mode] or
+       action.get('requestRequirements',{}).get('schemaVersion')!={'type':'string','const':'ngs.file-update.v1'} or
+       policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
+       policy.get('apply')!='authorized-mutation'):
+    raise ValueError('LAYA_FILE_METADATA_ADAPTER_CONTRACT')
   elif worker=='animation':
    stage_ids=['background.animation-cinematic','background.animation-pixel']
    pixel=action['id']=='background.animation-pixel'

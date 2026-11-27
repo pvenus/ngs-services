@@ -2088,6 +2088,22 @@
 {
   "candidateCount": 1,
   "dependsOn": [],
+  "description": "확정된 메타데이터 전체를 등록된 대상에 저장한다. 기존 버전과 작성 요청 ID가 일치해야 하며 모델 호출은 없다.",
+  "generationKind": "structure",
+  "id": "file.update",
+  "inputs": ["authorized file update request", "complete metadata", "exact existing revision and writer request ID"],
+  "modelCalls": 0,
+  "outputPolicy": {"kind":"single-result","count":1,"selection":"none","apply":"authorized-mutation","authorization":"same-authorized-actor-target-and-action-or-fail"},
+  "outputs": ["confirmed immutable metadata revision reference"],
+  "provides": ["file.metadata.updated"],
+  "requires": [],
+  "selectable": true,
+  "workerId": "file",
+  "requestRequirements": {"schemaVersion":{"type":"string","const":"ngs.file-update.v1"},"projectId":{"type":"string","const":"binari"}}
+},
+{
+  "candidateCount": 1,
+  "dependsOn": [],
   "description": "이미 게시된 맵과 프랍을 고정하고, Codex CLI가 전체 요청 사항과 퍼즐별 요청 사항을 한 번에 읽어 각 퍼즐의 양방향 이동이 가능한 배치와 부착 좌표를 생성한다. 생성 실패 시 기본안으로 게시하지 않는다.",
   "generationKind": "structure",
   "id": "assembly.generate",
@@ -2168,6 +2184,7 @@
     "assembly.generate":{"stageIds":["assembly.generate"],"eligibleStageIds":["assembly.generate"]},
     "assembly.update":{"stageIds":["assembly.update"],"eligibleStageIds":["assembly.update"]},
     "map.generate":{"stageIds":["map.generate"],"eligibleStageIds":["map.generate"]},
+    "file.update":{"stageIds":["file.update"],"eligibleStageIds":["file.update"]},
     "map.update":{"stageIds":["map.update"],"eligibleStageIds":["map.update"]},
   "background.animation.workflow": {
     "eligibleStageIds": [

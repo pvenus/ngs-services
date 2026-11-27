@@ -1,3 +1,4 @@
+import {fileUpdateType} from './file-update-envelope.mjs';
 import {assemblyTypes} from './assembly-contract.mjs';
 import {mapTypes} from './map-contract.mjs';
 /** Operator views and bounded Planner handoff of the official request ledger. */
@@ -66,6 +67,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${assemblyTypes[1]}' THEN json_extract(payload_json,'$.assemblyId')
    WHEN '${mapTypes[0]}' THEN official_request_id
    WHEN '${mapTypes[1]}' THEN json_extract(payload_json,'$.mapId')
+   WHEN '${fileUpdateType}' THEN json_extract(payload_json,'$.target.path')
    ELSE json_extract(payload_json,'$.character.npcId') END END AS targetNpcId,
   CASE WHEN ${terminalReason}='${unsupportedReason}' THEN '지원 종료 요청'
   ELSE CASE request_type WHEN '${conceptCategoryRequestType}' THEN json_extract(payload_json,'$.title')
@@ -83,6 +85,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${assemblyTypes[1]}' THEN '조립·플레이 수정'
    WHEN '${mapTypes[0]}' THEN json_extract(payload_json,'$.graph.title')
    WHEN '${mapTypes[1]}' THEN json_extract(payload_json,'$.graph.title')
+   WHEN '${fileUpdateType}' THEN '파일 수정 · '||json_extract(payload_json,'$.content.title')
    WHEN '${propRegenerateType}' THEN '프랍 재생성'
    WHEN '${propAnimationType}' THEN '프랍 애니메이션 추가'
    WHEN '${cinematicType}' THEN '시네마틱 영상 생성'

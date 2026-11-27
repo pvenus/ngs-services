@@ -73,6 +73,8 @@ class Handler(DomainHandler):
         if media_path in sequence_routes:return cinematic_sequence(self)
         from .workflow_map import ROUTES as map_routes,serve as map_workflow
         if media_path in map_routes:return map_workflow(self)
+        from .workflow_file_update import ROUTES as update_routes,serve as file_update
+        if media_path in update_routes:return file_update(self)
         from .workflow_assembly import ROUTES as assembly_routes,serve as assembly_workflow
         if media_path in assembly_routes:return assembly_workflow(self)
         from .workflow_cinematic_playback import ROUTES as playback_routes,serve as cinematic_playback
@@ -831,6 +833,8 @@ def serve(storage_root: Path, host: str, port: int):
         server.workflow_cinematic_playback=WorkflowCinematicPlayback(planner)
         from .workflow_map import WorkflowMap
         server.workflow_map=WorkflowMap(planner)
+        from .workflow_file_update import WorkflowFileUpdate
+        server.workflow_file_update=WorkflowFileUpdate(planner)
         from .workflow_assembly import WorkflowAssembly
         server.workflow_assembly=WorkflowAssembly(planner)
         from .workflow_cinematic_project import WorkflowCinematicProject,SOURCE,BACKGROUND,CINE_BG,DRAFT,PIXEL,ARCHIVE

@@ -140,7 +140,7 @@ def map_context(store,p):
         need(row['id'] not in found);found[row['id']]=row
         if len(found)==len(ids):return {'backgrounds':[found[v] for v in ids]}
     raise FileNotFoundError('map background not found')
-def map_revision(store,p,write=False):
+def map_revision(store,p,write=False,expected=None):
     from server import Conflict
     need(type(p)is dict and match(p.get('mapId'),OID) and type(p.get('revision'))is int and 1<=p['revision']<2**53)
     base=map_base(store,p['mapId']); n=p['revision']
@@ -166,10 +166,19 @@ def map_revision(store,p,write=False):
             raise Conflict('map revision changed')
         if n>1:
             if not (base/(str(n-1)+'.json')).exists():raise Conflict('map revision changed')
-            read_revision(store,base,n-1)
+            prior=read_revision(store,base,n-1)
+            if expected is not None and (expected['revision']!=prior['revision'] or expected['officialRequestId']!=prior['officialRequestId'] or
+               graph['title']!=prior['graph']['title']):raise Conflict('map revision changed')
         # Parts from an interrupted attempt are not published; replacing them is
         # safe while the numeric commit marker is absent and this lock is held.
         for part,raw in part_bytes.items():store.write(part_path(base,n,part),raw)
         need(read_group(store,base,n,manifest)==p)
         store.write(target,encode(manifest))
         return read_revision(store,base,n)
+
+
+def update_map_metadata(store,p):
+    need(type(p) is dict and set(p)=={'expected','state'} and type(p['expected']) is dict and set(p['expected'])=={'revision','officialRequestId'})
+    e=p['expected'];state=p['state']
+    need(type(e['revision']) is int and e['revision']>=1 and match(e['officialRequestId'],OID) and type(state) is dict and state.get('revision')==e['revision']+1)
+    return map_revision(store,state,True,e)

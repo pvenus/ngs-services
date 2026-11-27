@@ -455,7 +455,7 @@ const conceptExisting=(operation,categoryId='concept.test-fixture')=>({...legacy
 test('exact concept envelopes reject mismatched families, unsafe placement, legacy extras and malformed text',async t=>{
  const {directory,path}=folder(t),{submit,rpc}=await listener(t,directory);
  const schema=(await rpc('tools/list',{})).result.tools[0].inputSchema;
- assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','audio.separate','motion-preset.convert-2d','npc.animation.regenerate','map.generate','map.update','assembly.generate','assembly.update']);
+ assert.deepEqual(schema.properties.requestType.enum,['npc.workflow','concept.category.workflow','npc.planning.update','npc.planning.add','audio.generate','audio.delete','audio.separate','motion-preset.convert-2d','npc.animation.regenerate','map.generate','map.update','assembly.generate','assembly.update','file.update']);
  assert.deepEqual(schema.oneOf[1].properties.payload.required,['schemaVersion','projectId','operation','categoryId','groupId','title','outline','requirements']);
  const expected={error:'NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID',status:400};
  for(const bad of [
@@ -921,7 +921,7 @@ test(folderKind+' deletion advertises only its dedicated capability and pins a s
  const expected={revision:2,officialRequestId:'request.official.'+'2'.repeat(64)};
  const payload={schemaVersion:'ngs.file-delete.v1',projectId:'binari',target,expected};
  const submit=payload=>rpc('tools/call',{name:'request_submit',arguments:{sourceId:'local',requestType:'file.delete',idempotencyKey:'one-map',payload}});
- assert.equal(JSON.stringify((await rpc('tools/list')).result).includes(root),false);
+ assert.equal((await rpc('tools/list')).result.tools[0].inputSchema.oneOf.some(x=>x.properties.requestType.const==='file.delete'&&JSON.stringify(x).includes(root)),false);
  assert.match(JSON.stringify(await submit(payload)),/NGS_FILE_DELETE_UNAVAILABLE/);
  ready=true;
  const shapes=(await rpc('tools/list')).result.tools[0].inputSchema.oneOf;

@@ -1,3 +1,4 @@
+import {fileUpdateType,fileUpdateSchema,mapUpdateRoot} from './file-update-envelope.mjs';
 import {assemblyTypes,assemblyPayloadSchemas} from './assembly-contract.mjs';
 import {mapTypes,mapPayloadSchemas} from './map-contract.mjs';
 import {fileDeleteType,fileDeleteSchema,propDeleteRoot,npcDeleteRoot,backgroundDeleteRoot,cinematicDeleteRoot,mapDeleteRoot,assemblyDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
@@ -145,10 +146,19 @@ const motion2DPayload={type:'object',properties:{
  sourcePresetId:{type:'string',pattern:motionPresetIdPattern},variantPresetId:{type:'string',pattern:variantPresetIdPattern},
  label:{type:'string',minLength:1,maxLength:motion2DLabelLimit},
  },required:['schemaVersion','projectId','sourcePresetId','variantPresetId','label'],additionalProperties:false};
+const metadataId={type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'};
+const exactObject=properties=>({type:'object',additionalProperties:false,required:Object.keys(properties),properties});
+const fileUpdatePayload=exactObject({
+ schemaVersion:{const:fileUpdateSchema},projectId:{const:'binari'},
+ target:exactObject({root:{const:mapUpdateRoot},path:metadataId,kind:{const:'metadata'}}),
+ expected:exactObject({revision:{type:'integer',minimum:1,maximum:Number.MAX_SAFE_INTEGER-1},officialRequestId:metadataId}),
+ content:mapPayloadSchemas[1].properties.graph,
+});
+
 const tool={
  name:submitTool,description:'Register an exact typed NPC, NPC document add/update, concept category, BGM generation, BGM removal, BGM separation, 2D motion-preset conversion, selected NPC animation, or local map/assembly workflow without executing it.',
  inputSchema:{type:'object',properties:{
-  sourceId:{const:'local'},requestType:{enum:['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,...mapTypes,...assemblyTypes]},
+  sourceId:{const:'local'},requestType:{enum:['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,...mapTypes,...assemblyTypes,fileUpdateType]},
   idempotencyKey:{type:'string',minLength:1,maxLength:200},payload:{type:'object'},
  },required:['sourceId','requestType','idempotencyKey','payload'],additionalProperties:false,
  oneOf:[{properties:{requestType:{const:'npc.workflow'},payload:{oneOf:[npcLegacyPayload,npcSelectionPayload,npcBasicPayload]}}},
@@ -161,6 +171,7 @@ const tool={
   {properties:{requestType:{const:motion2DRequestType},payload:motion2DPayload}},
   {properties:{requestType:{const:npcAnimationRegenerateType},payload:npcAnimationRegeneratePayload}},
   ...[...assemblyTypes,assemblyTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:assemblyPayloadSchemas[i]}})),
+  {properties:{requestType:{const:fileUpdateType},payload:fileUpdatePayload}},
   ...[...mapTypes,mapTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:mapPayloadSchemas[i]}}))]},
  outputSchema:{type:'object',properties:{officialRequestId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
   status:{const:'registered'}},required:['officialRequestId','status'],additionalProperties:false},

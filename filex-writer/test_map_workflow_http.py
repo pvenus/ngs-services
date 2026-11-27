@@ -12,6 +12,7 @@ from project_data_service.filex_cas_transport import FilexCASTransport
 from project_data_service.http_server import Handler
 from project_data_service.workflow_delete_claim import PrivatePlannerClaim
 from project_data_service.workflow_map import WorkflowMap,PATH,CAP
+from project_data_service.workflow_file_update import WorkflowFileUpdate,PATH as UPDATE,CAP as UPDATE_CAP
 from project_data_service.single_target_delete import PATH as DELETE,MAP_CAPABILITY,SCHEMA,SingleTargetDelete
 from project_data_service.workflow_file_delete import MAP_ROOT,storage_provider
 from map_store import encode,map_revision
@@ -57,6 +58,7 @@ s.close();"""
                 'endpoint':self.origin,'tokenFile':str(self.secret/'media'/'writer_token'),'writerScope':'cinematics'})
         app=ThreadingHTTPServer(('127.0.0.1',0),Handler)
         app.workflow_map=WorkflowMap(planner,writer_factory=factory)
+        app.workflow_file_update=WorkflowFileUpdate(planner,writer_factory=factory)
         def ready():
             with factory() as conn:return conn.capabilities().get('workflowPinnedMapFolderDeleteV1') is True
         app.single_target_delete=SingleTargetDelete(
@@ -167,6 +169,25 @@ s.close();"""
         survivor='request.official.'+'e'*64
         other={**state,'mapId':survivor,'officialRequestId':survivor}
         map_revision(store,other,True)
+        # New edit path replaces the entire known metadata document, not raw paths.
+        self.assertEqual(call(prefix=UPDATE),{'enabled':True,'schemaVersion':UPDATE_CAP})
+        patch={**changed,'connections':[{**e,'spawn':{'x':440+i,'y':840}} for i,e in enumerate(changed['connections'])]}
+        command={'schemaVersion':'ngs.file-update.v1','projectId':'binari',
+                 'target':{'root':MAP_ROOT,'path':survivor,'kind':'metadata'},
+                 'expected':{'revision':1,'officialRequestId':survivor},'content':patch}
+        reject=stage('request.official.'+'6'*64,{**command,'expected':{'revision':1,'officialRequestId':oid}},'file.update')
+        self.assertEqual(call(packet={'claim':reject},status=409,prefix=UPDATE),{'error':'FILE_UPDATE_REVISION_CONFLICT'})
+        self.assertFalse(f.parent.with_name(survivor).joinpath('2.json').exists())
+        edit=stage('request.official.'+'7'*64,command,'file.update')
+        call(packet={'claim':edit,'content':posted},status=403,prefix=UPDATE)
+        new_output=call(packet={'claim':edit},prefix=UPDATE)
+        self.assertEqual(new_output,{'ok':True,'resultRef':f'binari/cinematics/maps/{survivor}/2.json'})
+        self.assertEqual(call(packet={'claim':edit},prefix=UPDATE),new_output)
+        self.assertEqual(map_revision(store,{'mapId':survivor,'revision':2})['graph'],patch)
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?",
+                         (new_output['resultRef'],edit['taskId']))
+        self.assertEqual(call('/result',{'officialRequestId':edit['officialRequestId']},prefix=UPDATE),new_output)
         bgdir=self.data/'cinematics'/'backgrounds'
         before_backgrounds=sorted(p.name for p in bgdir.iterdir())
         target={'root':MAP_ROOT,'path':oid,'kind':'directory'}

@@ -1,3 +1,4 @@
+import {fileUpdateType,fileUpdatePds} from './file-update-envelope.mjs';
 import {assemblyTypes,assemblyPds} from './assembly-contract.mjs';
 import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
 import {mapTypes,mapPds} from './map-contract.mjs';
@@ -5,7 +6,7 @@ import {canonical} from './envelope.mjs';
 
 export async function readCinematicPublication({officialRequestId,family,group}){
  const route=family==='cinematic-sequence'?'workflow-sequence':family==='cinematic-playback'?'workflow-playback':'workflow';
- const path=assemblyTypes.includes(family)?assemblyPds:mapTypes.includes(family)?mapPds:family===backgroundAnimationType?'/v1/cinematics/ownership/workflow-sequence':Object.hasOwn(extraCinematicRequests,family)?extraCinematicRequests[family].route:'/v1/cinematics/ownership/'+route;
+ const path=family===fileUpdateType?fileUpdatePds:assemblyTypes.includes(family)?assemblyPds:mapTypes.includes(family)?mapPds:family===backgroundAnimationType?'/v1/cinematics/ownership/workflow-sequence':Object.hasOwn(extraCinematicRequests,family)?extraCinematicRequests[family].route:'/v1/cinematics/ownership/'+route;
  const r=await fetch('http://127.0.0.1:8030'+path+'/result',{
   method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(family===backgroundAnimationType?{officialRequestId,group}:{officialRequestId}),
   signal:AbortSignal.timeout(family===backgroundAnimationType?20_000:5000),redirect:'error',cache:'no-store',

@@ -473,11 +473,12 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                                        BACKGROUND_ROUTE+'/asset':store.background_pixel_source,
                                        BACKGROUND_ROUTE+'/reconcile':lambda p:store.cinematic_source_reconcile(p,background=True),
                                        ARCHIVE_ROUTE:store.cinematic_sequences_archive,ARCHIVE_ROUTE+'/result':store.cinematic_sequences_archive_result})
-                    from map_store import MAP_ROUTE,map_context,map_revision
+                    from map_store import MAP_ROUTE,map_context,map_revision,update_map_metadata
                     if hasattr(store,'cinematic_source_generate'):
                         routes.update({MAP_ROUTE:lambda p:map_revision(store,p,True),
                           MAP_ROUTE+'/context':lambda p:map_context(store,p),
-                          MAP_ROUTE+'/revision':lambda p:map_revision(store,p)})
+                          MAP_ROUTE+'/revision':lambda p:map_revision(store,p),
+                          MAP_ROUTE+'/metadata-update':lambda p:update_map_metadata(store,p)})
                     ASSEMBLY='/v1/workflow/assemblies'
                     if url.path==ASSEMBLY or url.path.startswith(ASSEMBLY+'/'):
                         from assembly_store import call as assembly_call
@@ -488,7 +489,7 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     n=self.headers.get('Content-Length','')
                     if (url.query or self.headers.get('Origin') is not None or self.headers.get('Transfer-Encoding') is not None or
                         self.headers.get('Content-Type')!='application/json' or not n.isascii() or not n.isdecimal() or
-                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path in (CINEMATIC_ROUTE,SOURCE_ROUTE,BACKGROUND_ROUTE) else 6*1024*1024 if url.path==SEQUENCE_ROUTE+'/frame' else 64*1024 if url.path in (SEQUENCE_ROUTE,PLAYBACK_ROUTE,PLAYBACK_ROUTE+'/result',MAP_ROUTE,ASSEMBLY) else 4096)):
+                        len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path in (CINEMATIC_ROUTE,SOURCE_ROUTE,BACKGROUND_ROUTE) else 6*1024*1024 if url.path==SEQUENCE_ROUTE+'/frame' else 64*1024 if url.path in (SEQUENCE_ROUTE,PLAYBACK_ROUTE,PLAYBACK_ROUTE+'/result',MAP_ROUTE,MAP_ROUTE+'/metadata-update',ASSEMBLY) else 4096)):
                         raise ValueError('cinematic transport')
                     def distinct(values):
                         out=dict(values)
