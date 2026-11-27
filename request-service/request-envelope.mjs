@@ -26,7 +26,7 @@ const fields=['sourceId','requestType','idempotencyKey','payload'];
 const workflowFamilies=new Map([
  ...assemblyTypes.map((type,i)=>[type,{schemas:i===0?[assemblySchemas[0],assemblySchemas[2]]:[assemblySchemas[1]],validate:v=>validateAssembly(v,type)}]),
  [fileUpdateType,{schemas:[fileUpdateSchema],validate:validateFileUpdate}],
- ...mapTypes.map((type,i)=>[type,{schemas:i===0?[mapSchemas[0],mapSchemas[2]]:[mapSchemas[1]],validate:(v)=>{if(!validMapRequest(v,type))throw Error('NGS_MAP_PAYLOAD_INVALID');return mapCanonical(v);}}]),
+ ...mapTypes.map((type,i)=>[type,{schemas:i===0?[mapSchemas[0],...mapSchemas.slice(2)]:[mapSchemas[1]],validate:(v)=>{if(!validMapRequest(v,type))throw Error('NGS_MAP_PAYLOAD_INVALID');return mapCanonical(v);}}]),
  [fileDeleteType,{schemas:[fileDeleteSchema],validate:validateFileDelete}],
  ...extraCinematicTypes.map(type=>[type,{schemas:[extraCinematicRequests[type].schema,...(type===backgroundAnimationType?[backgroundAnimationStageSchema]:[])],
   validate:(payload,project)=>validateExtraCinematic(payload,project,type)}]),

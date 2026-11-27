@@ -2,6 +2,7 @@
 import json
 import re
 from hashlib import sha256
+from assembly_contract import pin as prop_pin
 
 MAP_ROUTE='/v1/workflow/maps'
 MAP_DELETE_ROOT='canonical-files/binari/cinematics/maps'
@@ -93,13 +94,28 @@ def validate_start(graph):
     pt=graph['startPoint']
     need(type(pt)is dict and set(pt)=={'x','y'} and all(type(v)is int and 0<=v<=1000 for v in pt.values()))
 
+def validate_decorations(graph):
+    if 'decorations' not in graph:return
+    d=graph['decorations'];regions=graph['regions']
+    need(type(d)is list and len(d)<=48 and type(regions)is list)
+    ids={r.get('id') for r in regions if type(r)is dict}
+    found=set()
+    for row in d:
+        need(type(row)is dict and set(row)=={'id','regionId','prop','anchor','scale','visibility'} and
+             match(row['id'],KEY) and row['id'] not in found and match(row['regionId'],KEY) and row['regionId'] in ids and
+             prop_pin(row['prop']) and type(row['scale'])is int and 10<=row['scale']<=300 and
+             row['visibility'] in ('both','pixel','cinematic'))
+        pt=row['anchor'];need(type(pt)is dict and set(pt)=={'x','y'} and all(type(v)is int and 0<=v<=1000 for v in pt.values()))
+        found.add(row['id'])
+
 def read_group(store,base,n,state):
     need(set(state)==METADATA|{'title','regions','parts'} and state['projectId']=='binari' and
          match(state['officialRequestId'],OID))
     digests=state['parts']
-    need(type(digests)is dict and set(digests)==set(PARTS) and all(match(h,HASH) for h in digests.values()))
+    need(type(digests)is dict and set(digests) in (set(PARTS),set(PARTS)|{'decorations'}) and all(match(h,HASH) for h in digests.values()))
     graph={'title':state['title'],'regions':state['regions']}
-    for part,field in PARTS.items():
+    members={**PARTS,**({'decorations':'decorations'} if 'decorations' in digests else {})}
+    for part,field in members.items():
         try:raw=store._read(part_path(base,n,part),65536)
         except FileNotFoundError as exc:raise ValueError('map revision part missing') from exc
         need(sha256(raw).hexdigest()==digests[part])
@@ -116,7 +132,7 @@ def read_revision(store,base,n):
     state=json.loads(store._read(p,65536))
     need(type(state)is dict and state.get('revision')==n and state.get('mapId')==base.name)
     if state.get('schemaVersion')==GROUP_SCHEMA:state=read_group(store,base,n,state)
-    validate_colliders(state.get('graph')); validate_start(state['graph'])
+    validate_colliders(state.get('graph')); validate_start(state['graph']);validate_decorations(state['graph'])
     return state
 def map_context(store,p):
     ids=p.get('backgroundIds') if type(p)is dict else None
@@ -147,10 +163,11 @@ def map_revision(store,p,write=False,expected=None):
     if not write:return read_revision(store,base,n)
     need(set(p)=={'schemaVersion','projectId','mapId','revision','updatedAt','officialRequestId','graph'} and
          p['schemaVersion']=='ngs.map-metadata.v1' and p['projectId']=='binari' and match(p['officialRequestId'],OID))
-    graph=p['graph']; validate_colliders(graph); validate_start(graph)
+    graph=p['graph']; validate_colliders(graph); validate_start(graph);validate_decorations(graph)
     required={'title','regions','startRegionId','connections'}
-    need(required<=set(graph)<=required|{'colliders','startPoint'} and len(encode(p))<65536)
+    need(required<=set(graph)<=required|{'colliders','startPoint','decorations'} and len(encode(p))<65536)
     part_bytes={part:encode({field:graph[field]} if field in graph else {}) for part,field in PARTS.items()}
+    if 'decorations' in graph:part_bytes['decorations']=encode({'decorations':graph['decorations']})
     if 'startPoint' in graph:part_bytes['start']=encode({'startRegionId':graph['startRegionId'],'startPoint':graph['startPoint']})
     manifest={**{k:p[k] for k in METADATA},'schemaVersion':GROUP_SCHEMA,
               'title':graph['title'],'regions':graph['regions'],
@@ -167,6 +184,8 @@ def map_revision(store,p,write=False,expected=None):
         if n>1:
             if not (base/(str(n-1)+'.json')).exists():raise Conflict('map revision changed')
             prior=read_revision(store,base,n-1)
+            if 'decorations' in prior['graph'] and 'decorations' not in graph:
+                raise Conflict('map decorations omitted')
             if expected is not None and (expected['revision']!=prior['revision'] or expected['officialRequestId']!=prior['officialRequestId'] or
                graph['title']!=prior['graph']['title']):raise Conflict('map revision changed')
         # Parts from an interrupted attempt are not published; replacing them is

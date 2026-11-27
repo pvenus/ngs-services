@@ -905,6 +905,28 @@ test('local map request contracts are discoverable and the valid queued payload 
   const bad=(await api.submit({...v2,payload:{...v2.payload,design}})).result.structuredContent;
   assert.equal(bad.error,'NGS_MAP_PAYLOAD_INVALID');
  }
+ const prop={propId:'lantern',revision:1,sha256:'d'.repeat(64)};
+ const decorationDesign={mode:'suggest',notes:'',candidates:[{prop,visibility:'both'}]};
+ const v3={...v2,idempotencyKey:'map-v3-decorate',payload:{...v2.payload,schemaVersion:'ngs.map-generate.v3',decorationDesign}};
+ assert.ok(advertised.oneOf.some(x=>x.properties?.payload?.properties?.schemaVersion?.const==='ngs.map-generate.v3'));
+ for(const body of [
+  {...v3.payload,decorationDesign:{...decorationDesign,mode:'none'}},
+  {...v3.payload,decorationDesign:{...decorationDesign,candidates:[]}},
+  {...v3.payload,decorationDesign:{...decorationDesign,candidates:[...decorationDesign.candidates,...decorationDesign.candidates]}},
+  {...v3.payload,graph:{...v3.payload.graph,decorations:[]}},
+ ])assert.equal((await api.submit({...v3,payload:body})).result.structuredContent.error,'NGS_MAP_PAYLOAD_INVALID');
+ assert.equal((await api.submit(v3)).result.structuredContent.status,'registered');
+ const none={...v3,idempotencyKey:'map-v3-none',payload:{...v3.payload,decorationDesign:{mode:'none',notes:'',candidates:[]}}};
+ assert.equal((await api.submit(none)).result.structuredContent.status,'registered');
+ const {buildPlan}=await import('../workflow-planner/planner.mjs');
+ const rows=(await api.workflow({limit:10})).result.structuredContent.requests.filter(r=>r.schemaVersion==='ngs.map-generate.v3');
+ for(const r of rows){
+  const tasks=buildPlan(r).tasks;
+  assert.equal(tasks.length,r.payload.decorationDesign.mode==='suggest'?4:3);
+  assert.equal(tasks.at(-1).key,r.payload.decorationDesign.mode==='suggest'?'map_decorations':'map_collisions');
+  assert.equal(tasks.at(-1).dependsOn,tasks.at(-2).id);
+ }
+
 });
 
 for(const folderKind of ['maps','assemblies'])

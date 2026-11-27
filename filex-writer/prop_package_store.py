@@ -162,18 +162,29 @@ class PropPackageStore(Store):
     def assembly_bindings(self,query):
         from assembly_contract import ROLES,pin as assembly_pin
         generate=keys(query,())
-        need(generate or keys(query,('pins',)) and type(query['pins']) is list and len(query['pins'])<=128 and
+        decorate=keys(query,('decorationPins',))
+        if decorate:
+            rows=query['decorationPins']
+            need(type(rows)is list and len(rows)<=48 and all(
+                keys(row,('prop','visibility')) and assembly_pin(row['prop']) and
+                row['visibility'] in ('both','pixel','cinematic') for row in rows))
+        need(generate or decorate or keys(query,('pins',)) and type(query['pins']) is list and len(query['pins'])<=128 and
              all(assembly_pin(q) for q in query['pins']))
         with self.lock():
             self.check_root()
-            def verified(q,head):
+            def verified(q,head,lanes=('pixel',)):
                 m=self.release_locked(q,head)
-                self.asset_locked(q['propId'],m,m['media']['pixel']['assetId'])
+                for lane in lanes:
+                    if lane not in m['media']:raise FileNotFoundError('decoration prop lane missing')
+                    self.asset_locked(q['propId'],m,m['media'][lane]['assetId'])
                 return q
             if not generate:
-                for q in query['pins']:
-                    if not self.verify_managed(self.beneath(q['propId'])):raise FileNotFoundError('assembly prop missing')
-                    verified(q,self.head_locked(q['propId']))
+                rows=query['decorationPins'] if decorate else [{'prop':q,'visibility':'pixel'} for q in query['pins']]
+                for row in rows:
+                    q=row['prop'];v=row['visibility']
+                    if not self.verify_managed(self.beneath(q['propId'])):raise FileNotFoundError('bound prop missing')
+                    lanes=('pixel','spirit') if v=='both' else ('spirit',) if v=='cinematic' else ('pixel',)
+                    verified(q,self.head_locked(q['propId']),lanes)
                 return {'ok':True}
             candidates={k:[] for k in ROLES}
             for dir in self.root.iterdir():

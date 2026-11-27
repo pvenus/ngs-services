@@ -1,6 +1,6 @@
 import {fileUpdateType,fileUpdateTaskKey,fileUpdateRef,validateFileUpdate} from './file-update-envelope.mjs';
 import {assemblyTypes,assemblyStage,assemblyRef,validateAssembly} from './assembly-contract.mjs';
-import {mapTypes,mapSchemas,mapGenerateStages,mapStage,validMapRequest,mapCanonical,mapRoot} from './map-contract.mjs';
+import {mapTypes,mapSchemas,mapStagesFor,validMapRequest,mapCanonical,mapRoot} from './map-contract.mjs';
 import {fileDeleteType,fileDeleteTaskKey,validateFileDelete} from './file-delete-envelope.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {canonical,sha,validateOneStop,isReplaceSchema,isSelectionSchema,isPoseSelectionSchema,isBasicSchema,motionSelectionSlot,motionPoseRegistry,motionSelectionPoses} from './envelope.mjs';
@@ -83,7 +83,7 @@ function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false
   workerType:'document',dependsOn:null,input:row.payload,
  }]};
  if(mapTypes.includes(row.requestType)){
-  const stages=row.schemaVersion===mapSchemas[2]?mapGenerateStages:[mapStage];
+  const stages=mapStagesFor(row.payload);
   const id=key=>'workflow.task.'+sha(canonical([row.officialRequestId,key]));
   return {payload,tasks:stages.map((key,i)=>({
    id:id(key),key,type:row.requestType,workerType:'document',dependsOn:i?id(stages[i-1]):null,input:row.payload,
@@ -328,8 +328,8 @@ function mapStageProof(row){
   row.result_ref==='workflow.map-stage.'+sha(row.map_part_json);}catch{return false;}
 }
 function hasExhaustedMapGraph(run,readTasks){
- if(run.schema_version!==mapSchemas[2])return hasExhaustedSingleTask(run,readTasks);
- const plan=restoreStoredPlan(run),rows=readTasks.all(run.official_request_id,4);
+ if(!mapSchemas.slice(2).includes(run.schema_version))return hasExhaustedSingleTask(run,readTasks);
+ const plan=restoreStoredPlan(run),rows=readTasks.all(run.official_request_id,5);
  if(!plan||rows.length!==plan.tasks.length||!rows.some(exhausted))return false;
  let blocked=false;
  return plan.tasks.every((task,i)=>{
@@ -508,7 +508,7 @@ export class PlannerStore{
      continue;
     }
     if(mapTypes.includes(row.request_type)){
-     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,4);
+     const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,5);
      if(!plan||rows.length!==plan.tasks.length||!plan.tasks.every((t,i)=>rows.some(r=>
       exactStoredTask(r,t)&&(i===plan.tasks.length-1||mapStageProof(r)))))continue;
      const {mapId=row.official_request_id,expectedRevision=0}=plan.tasks[0].input;

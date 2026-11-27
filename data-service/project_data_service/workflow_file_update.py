@@ -6,7 +6,7 @@ from .workflow_cinematic_sequence import exact_claim,strict_json,OFFICIAL,SAFE_I
 from .filex_writer_binding import writer as connect
 from .assembly_contract import content as assembly_content,MAX_REV as ASSEMBLY_MAX_REV,playable,affected_conditions_exist,state as assembly_state
 from .workflow_assembly import WRITER as ASSEMBLY_WRITER,ref as assembly_ref
-from .workflow_map import WRITER as MAP_WRITER,graph_valid,ref as map_ref
+from .workflow_map import WRITER as MAP_WRITER,graph_valid,changed_decoration_pins,ref as map_ref
 
 PATH='/v1/storage/workflow-file-update'
 CAP='workflow.file-update.v1'
@@ -29,16 +29,33 @@ class MapMetadata:
         return map_ref(mid,rev)
     def read(self,provider,mid,rev):
         return provider.storage(MAP_WRITER+'/revision',{'mapId':mid,'revision':rev})
+    def logical_content(self,prior,content):
+        result=dict(content)
+        if 'decorations' in prior and 'decorations' not in result:result['decorations']=prior['decorations']
+        return graph_valid(result)
     def write(self,provider,oid,p):
-        content=p['content'];mid=p['target']['path'];expected=p['expected']
+        mid=p['target']['path'];expected=p['expected'];rev=expected['revision']+1
+        prior=provider.storage(MAP_WRITER+'/revision',{'mapId':mid,'revision':rev-1},missing=True)
+        if prior is None or prior['officialRequestId']!=expected['officialRequestId']:
+            raise CinematicConflict('FILE_UPDATE_REVISION_CONFLICT')
+        content=self.logical_content(prior['graph'],p['content'])
+        replay=provider.storage(MAP_WRITER+'/revision',{'mapId':mid,'revision':rev},missing=True)
+        if replay is not None:
+            if not self.matches(replay,oid,mid,rev,content):raise CinematicConflict('FILE_UPDATE_REVISION_CONFLICT')
+            return replay
         ids=list(dict.fromkeys(r['backgroundId'] for r in content['regions']))
         refs=provider.storage(MAP_WRITER+'/context',{'backgroundIds':ids})
         by_id={r['id']:r['sha256'] for r in refs['backgrounds']}
         need(all(by_id.get(r['backgroundId'])==r['imageSha256'] for r in content['regions']))
-        result={'schemaVersion':'ngs.map-metadata.v1','projectId':'binari','mapId':mid,'revision':expected['revision']+1,
+        provider.verify_prop_pins(changed_decoration_pins(prior['graph'],content),
+                                 unavailable='FILE_UPDATE_MAP_DECORATION_PROP_UNAVAILABLE',decorations=True)
+        result={'schemaVersion':'ngs.map-metadata.v1','projectId':'binari','mapId':mid,'revision':rev,
                 'updatedAt':int(time.time()*1000),'officialRequestId':oid,'graph':content}
         return provider.storage(MAP_WRITER+'/metadata-update',{'expected':expected,'state':result})
-    def matches(self,result,oid,mid,rev,content):
+    def matches(self,result,oid,mid,rev,content,*,provider=None):
+        if provider is not None and 'decorations' not in content:
+            prior=self.read(provider,mid,rev-1)
+            content=self.logical_content(prior['graph'],content)
         return (type(result) is dict and result.get('mapId')==mid and result.get('revision')==rev and
                 result.get('officialRequestId')==oid and result.get('graph')==content)
 
@@ -51,7 +68,7 @@ class AssemblyMetadata:
         return assembly_ref(aid,rev)
     def read(self,provider,aid,rev):
         return provider.storage(ASSEMBLY_WRITER+'/revision',{'assemblyId':aid,'revision':rev})
-    def matches(self,result,oid,aid,rev,content):
+    def matches(self,result,oid,aid,rev,content,*,provider=None):
         return (assembly_state(result) and result['assemblyId']==aid and result['revision']==rev and
                 result['officialRequestId']==oid and result['title']==content['title'] and
                 result['map']['mapId']==content['mapId'] and result['puzzles']==content['puzzles'])
@@ -107,11 +124,11 @@ class WorkflowFileUpdate(WorkflowCinematic):
     def __init__(self,planner,*,writer_factory=None,prop_factory=None):
         super().__init__(planner,writer_factory=writer_factory)
         self.prop_factory=prop_factory or (lambda:connect('props'))
-    def verify_prop_pins(self,pins):
+    def verify_prop_pins(self,pins,*,unavailable='FILE_UPDATE_ASSEMBLY_PROP_UNAVAILABLE',decorations=False):
         if not pins:return
         with self.prop_factory() as tx:
-            out=tx.call('POST','/v1/workflow/props/assembly-bindings',{'pins':pins},missing=True)
-        if out is None:raise CinematicConflict('FILE_UPDATE_ASSEMBLY_PROP_UNAVAILABLE')
+            out=tx.call('POST','/v1/workflow/props/assembly-bindings',{'decorationPins' if decorations else 'pins':pins},missing=True)
+        if out is None:raise CinematicConflict(unavailable)
         need(out=={'ok':True})
     def storage(self,path,data,*,missing=False):
         with self.writer_factory() as tx:
@@ -138,7 +155,7 @@ class WorkflowFileUpdate(WorkflowCinematic):
                 mid=p['target']['path'];rev=p['expected']['revision']+1
                 result_ref=adapter.result_ref(mid,rev)
                 result=adapter.write(self,oid,p)
-        need(adapter.matches(result,oid,mid,rev,p['content']))
+        need(adapter.matches(result,oid,mid,rev,p['content'],provider=self))
         return {'ok':True,'resultRef':result_ref}
 
 def serve(handler):

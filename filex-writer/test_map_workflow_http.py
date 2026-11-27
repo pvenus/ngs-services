@@ -19,6 +19,7 @@ from map_store import encode,map_revision
 from server import Conflict
 from test_cinematic_sequence_http import REPO,png,sha
 from test_scope_registry import UnifiedFixture
+from test_prop_package_http import make,artifact_store
 
 class MapWorkflowFixture(UnifiedFixture):
     def test_map_roundtrip_via_real_pds_and_scoped_writer(self):
@@ -57,8 +58,11 @@ s.close();"""
             return FilexCASTransport({'schemaVersion':'pds-filex-cas.v1','projectId':'binari','enabled':True,
                 'endpoint':self.origin,'tokenFile':str(self.secret/'media'/'writer_token'),'writerScope':'cinematics'})
         app=ThreadingHTTPServer(('127.0.0.1',0),Handler)
-        app.workflow_map=WorkflowMap(planner,writer_factory=factory)
-        app.workflow_file_update=WorkflowFileUpdate(planner,writer_factory=factory)
+        def props():
+            return FilexCASTransport({'schemaVersion':'pds-filex-cas.v1','projectId':'binari','enabled':True,
+                'endpoint':self.origin,'tokenFile':str(self.secret/'concept'/'writer_token'),'writerScope':'props'})
+        app.workflow_map=WorkflowMap(planner,writer_factory=factory,prop_factory=props)
+        app.workflow_file_update=WorkflowFileUpdate(planner,writer_factory=factory,prop_factory=props)
         def ready():
             with factory() as conn:return conn.capabilities().get('workflowPinnedMapFolderDeleteV1') is True
         app.single_target_delete=SingleTargetDelete(
@@ -163,6 +167,86 @@ s.close();"""
         with sqlite3.connect(db) as conn:
             conn.execute("UPDATE workflow_tasks SET map_part_json='{}' WHERE task_id=?",(b,))
         call('/result',{'officialRequestId':split_id},403)
+
+        # Initial v3 generation only accepts predeclared candidates and exact model outputs.
+        fixture=make('0')
+        self.call('/v1/scopes/props/workflow/props','concept',{k:fixture[k] for k in ('candidate','manifest','media')})
+        prop={'propId':fixture['manifest']['propId'],'revision':1,'sha256':fixture['candidate']['manifestSha256']}
+        self.call('/v1/scopes/props/workflow/props/assembly-bindings','concept',{'decorationPins':[{'prop':prop,'visibility':'both'}]},status=404)
+        self.call('/v1/scopes/props/workflow/props/assembly-bindings','concept',{'decorationPins':[{'prop':prop,'visibility':'cinematic'}]},status=404)
+        layered=make('9',prop_id='layered-lantern')
+        package=layered['manifest'];candidate=layered['candidate']
+        for i,lane in enumerate(('pixel','spirit')):
+            media,bytes_png=artifact_store(6,6,105+i)
+            package['media'][lane]=media
+            layered['media'][media['assetId']]=base64.b64encode(bytes_png).decode()
+            if lane=='pixel':
+                candidate['members'][-1]['ref']='prop.pixel-rgba.'+media['sha256']
+            else:
+                tkey='prop_spirit'
+                candidate['members'].append({'key':tkey,'taskId':'workflow.task.'+digest([package['officialRequestId'],tkey]),
+                    'ref':'prop.spirit-rgba.'+media['sha256']})
+        candidate['scope']['presentationProfile']='spirit-v1'
+        candidate['manifestSha256']=digest(package);candidate['resultRef']='prop.package.'+digest(package)
+        old_assets={m['assetId'] for m in package['media'].values()}
+        layered['media']={k:v for k,v in layered['media'].items() if k in old_assets}
+        self.call('/v1/scopes/props/workflow/props','concept',{k:layered[k] for k in ('candidate','manifest','media')})
+        layered_pin={'propId':'layered-lantern','revision':1,'sha256':digest(package)}
+        self.assertEqual(json.loads(self.call('/v1/scopes/props/workflow/props/assembly-bindings','concept',
+             {'decorationPins':[{'prop':layered_pin,'visibility':'both'}]})),{'ok':True})
+        def init_decor(i,mode):
+            mid='request.official.'+i*64
+            b3={**staged,'schemaVersion':'ngs.map-generate.v3','decorationDesign':{'mode':mode,'notes':'',
+                'candidates':[] if mode=='none' else [{'prop':prop,'visibility':'pixel'}]}}
+            ticket=stage(mid,b3,'map.generate')
+            keys=('map_start','map_portals','map_collisions')+(() if mode=='none' else ('map_decorations',))
+            tids=['workflow.task.'+digest([mid,k]) for k in keys]
+            complete(tids[0],start);complete(tids[1],coordinates)
+            if mode=='suggest':
+                call('/read',{'claim':{**ticket,'taskId':tids[-1]}},403)
+                complete(tids[2],{'colliders':[]})
+                call('',{'claim':{**ticket,'taskId':tids[2]},'graph':{**valid,'decorations':[]}},403)
+            with sqlite3.connect(db) as conn:
+                self.assertEqual(conn.execute('SELECT count(*) FROM workflow_tasks WHERE official_request_id=?',(mid,)).fetchone()[0],len(keys))
+            return mid,{**ticket,'taskId':tids[-1]}
+        none_id,empty_claim=init_decor('0','none')
+        call('',{'claim':empty_claim,'graph':valid},403)
+        call('',{'claim':empty_claim,'graph':{**valid,'decorations':[]}})
+        self.assertEqual(json.loads((store.root/'maps'/none_id/'1.decorations.json').read_text()),{'decorations':[]})
+        decor_id,decor_claim=init_decor('1','suggest')
+        self.assertEqual(call('/read',{'claim':decor_claim})['backgrounds'],call('/read',{'claim':empty_claim})['backgrounds'])
+        decoration={'id':'lantern','regionId':'zone-2','prop':prop,'anchor':{'x':200,'y':800},'scale':100,'visibility':'pixel'}
+        call('',{'claim':decor_claim,'graph':{**valid,'decorations':[{**decoration,'visibility':'cinematic'}]}},403)
+        final_graph={**valid,'decorations':[decoration]}
+        result3=call('',{'claim':decor_claim,'graph':final_graph})
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?",
+                (result3['resultRef'],decor_claim['taskId']))
+        self.assertEqual(call('/result',{'officialRequestId':decor_id}),result3)
+        base_dir=store.root/'maps'/decor_id
+        side=base_dir/'1.decorations.json'
+        self.assertEqual(sha(side.read_bytes()),json.loads((base_dir/'1.json').read_text())['parts']['decorations'])
+        self.assertEqual(map_revision(store,{'mapId':decor_id,'revision':1})['graph'],final_graph)
+
+        def move_decor(ch,rev,publisher,content):
+            return stage('request.official.'+ch*64,{'schemaVersion':'ngs.file-update.v1','projectId':'binari',
+                'target':{'root':MAP_ROOT,'path':decor_id,'kind':'metadata'},
+                'expected':{'revision':rev,'officialRequestId':publisher},'content':content},'file.update')
+        changed_visibility=move_decor('2',1,decor_id,{**valid,'decorations':[{**decoration,'visibility':'both'}]})
+        self.assertEqual(call(packet={'claim':changed_visibility},prefix=UPDATE,status=409),
+            {'error':'FILE_UPDATE_MAP_DECORATION_PROP_UNAVAILABLE'})
+        omission=move_decor('3',1,decor_id,valid)
+        output=call(packet={'claim':omission},prefix=UPDATE)
+        self.assertEqual(call(packet={'claim':omission},prefix=UPDATE),output)
+        self.assertEqual(map_revision(store,{'mapId':decor_id,'revision':2})['graph']['decorations'],[decoration])
+        orphan=move_decor('4',2,omission['officialRequestId'],{**valid,
+            'regions':[row for row in valid['regions'] if row['id']!='zone-2'],
+            'connections':[edge for edge in valid['connections'] if not ('zone-2' in (edge['from'],edge['to']))]})
+        call(packet={'claim':orphan},prefix=UPDATE,status=403)
+        self.assertFalse((base_dir/'3.json').exists())
+        clear=move_decor('5',2,omission['officialRequestId'],{**valid,'decorations':[]})
+        call(packet={'claim':clear},prefix=UPDATE)
+        self.assertEqual(map_revision(store,{'mapId':decor_id,'revision':3})['graph']['decorations'],[])
 
         self.assertEqual(call(prefix=MAP_CAPABILITY),{'enabled':True,'schemaVersion':SCHEMA,'roots':[MAP_ROOT]})
         self.assertEqual(call(prefix=DELETE)['roots'],[],'dedicated map root is absent from generic readiness')

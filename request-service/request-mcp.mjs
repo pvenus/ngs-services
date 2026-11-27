@@ -174,7 +174,7 @@ const tool={
   {properties:{requestType:{const:fileUpdateType},payload:{oneOf:[
     typedFileUpdatePayload(mapUpdateRoot,mapPayloadSchemas[1].properties.graph),typedFileUpdatePayload(assemblyUpdateRoot,assemblyContentSchema),
   ]}}},
-  ...[...mapTypes,mapTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:mapPayloadSchemas[i]}}))]},
+  ...[...mapTypes,mapTypes[0],mapTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:mapPayloadSchemas[i]}}))]},
  outputSchema:{type:'object',properties:{officialRequestId:{type:'string',pattern:'^request\\.official\\.[a-f0-9]{64}$'},
   status:{const:'registered'}},required:['officialRequestId','status'],additionalProperties:false},
  annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
