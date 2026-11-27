@@ -2088,7 +2088,7 @@
 {
   "candidateCount": 1,
   "dependsOn": [],
-  "description": "이미 게시된 맵과 프랍을 고정해 양방향 이동이 가능한 우물 퍼즐을 결정적으로 조립한다. 모델을 호출하지 않는다.",
+  "description": "이미 게시된 맵과 프랍을 고정하고, Codex CLI가 요청에 맞춰 양방향 이동이 가능한 퍼즐 배치와 부착 좌표를 생성한다. 생성 실패 시 기본안으로 게시하지 않는다.",
   "generationKind": "structure",
   "id": "assembly.generate",
   "inputs": [
@@ -2096,7 +2096,7 @@
     "published map revision",
     "published prop asset digests"
   ],
-  "modelCalls": 0,
+  "modelCalls": 1,
   "outputPolicy": {
     "kind": "single-result",
     "count": 1,

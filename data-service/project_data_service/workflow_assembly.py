@@ -1,4 +1,4 @@
-"""Deterministic assembly planning and publication through authenticated Filex."""
+"""Bind CLI-authored assembly geometry to authoritative Filex sources and official claims."""
 from .filex_read import canonical,digest
 from .filex_writer_binding import writer as connect
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,serve as serve_workflow
@@ -73,7 +73,9 @@ class WorkflowAssembly(WorkflowCinematic):
         existing=self.cine('revision',{'assemblyId':aid,'revision':rev},missing=True)
         if existing is not None:
             if existing['officialRequestId']!=oid:raise CinematicConflict('ASSEMBLY_REVISION_CONFLICT')
-            return self.check(oid,existing['updatedAt'],p,existing)
+            context=self.model_context(self.cine('map',existing['map'])) if 'puzzles' not in p else None
+            need(existing['updatedAt']<=stamp)
+            return self.check(oid,existing['updatedAt'],p,existing),context,True
         if 'puzzles' in p:
             prior=self.cine('head',{'assemblyId':aid},missing=True)
             if prior is None or prior['revision']!=p['expectedRevision']:raise CinematicConflict('ASSEMBLY_REVISION_CONFLICT')
@@ -88,8 +90,12 @@ class WorkflowAssembly(WorkflowCinematic):
             out=self.prop({});need(keys(out,('bindings',)))
             rows=[default_puzzle(m['graph'],out['bindings'],p['puzzleType'])]
             need(playable(m['graph'],rows))
-        return self.check(oid,stamp,p,{'schemaVersion':'ngs.assembly.v1','projectId':'binari','assemblyId':aid,
+        result=self.check(oid,stamp,p,{'schemaVersion':'ngs.assembly.v1','projectId':'binari','assemblyId':aid,
             'revision':rev,'updatedAt':stamp,'officialRequestId':oid,'title':title,'map':mapping,'puzzles':rows})
+        return result,self.model_context(m) if 'puzzles' not in p else None,False
+    @staticmethod
+    def model_context(m):
+        return {k:m['graph'][k] for k in ('regions','connections','startRegionId')}
     def operate(self,op,p):
         if op=='list':
             need(keys(p,()))
@@ -105,11 +111,19 @@ class WorkflowAssembly(WorkflowCinematic):
             return {'ok':True,'resultRef':ref(aid,rev)}
         need(op in ('read','publish') and keys(p,('claim',) if op=='read' else ('claim','state')))
         with exact_claim(self.planner,p['claim'],graph) as (oid,b):
-            expected=self.candidate(oid,p['claim']['claimStamp'],b)
-            if op=='read':return {'state':expected}
-            if not state(p['state']) or p['state']!=expected:raise CinematicConflict('ASSEMBLY_INPUT_CHANGED')
-            need(self.cine('',expected)==expected)
-            return {'ok':True,'resultRef':ref(expected['assemblyId'],expected['revision'])}
+            expected,context,replay=self.candidate(oid,p['claim']['claimStamp'],b)
+            if op=='read':return {'state':expected,**({'context':context} if context is not None else {})}
+            submitted=p['state']
+            if not state(submitted):raise CinematicConflict('ASSEMBLY_INPUT_CHANGED')
+            if replay or context is None:
+                if submitted!=expected:raise CinematicConflict('ASSEMBLY_INPUT_CHANGED')
+            else:
+                immutable=lambda value:{**value,'puzzles':[
+                    {k:v for k,v in puzzle.items() if k not in ('layout','attachments')} for puzzle in value['puzzles']]}
+                if immutable(submitted)!=immutable(expected):raise CinematicConflict('ASSEMBLY_INPUT_CHANGED')
+                if not playable(context,submitted['puzzles']):raise CinematicConflict('ASSEMBLY_ROUTE_NOT_PLAYABLE')
+            need(self.cine('',submitted)==submitted)
+            return {'ok':True,'resultRef':ref(submitted['assemblyId'],submitted['revision'])}
 
 def serve(handler):
     return serve_workflow(handler,attribute='workflow_assembly',path=PATH,capability=CAP,body_limits={PATH:65536})

@@ -65,13 +65,22 @@ s.close();"""
         self.assertEqual(call(),{'enabled':True,'schemaVersion':CAP})
         self.assertEqual(call('/list',{}),{'assemblies':[]})
         call('/read',{'claim':{**gen,'claimStamp':6}},403)
-        st1=call('/read',{'claim':gen})['state']
-        aid=st1['assemblyId'];puzzle=st1['puzzles'][0]
+        generated=call('/read',{'claim':gen})
+        self.assertEqual(generated['context'],{k:graph[k] for k in ('regions','connections','startRegionId')})
+        draft=generated['state'];puzzle= draft['puzzles'][0];aid=draft['assemblyId']
+        model={**puzzle,'layout':{**puzzle['layout'],'altar':{**puzzle['layout']['altar'],'x':46}},
+               'attachments':{**puzzle['attachments'],'lid':{'x':6,'y':-11}}}
+        st1={**draft,'puzzles':[model]}
         self.assertEqual(aid,gen['officialRequestId'])
         self.assertEqual([x['regionId'] for x in puzzle['layout'].values()],['zone-2','zone-2'])
         self.assertEqual(st1['map'],{'mapId':map_id,'officialRequestId':map_id,'revision':1})
         self.assertEqual({k:v['propId'] for k,v in puzzle['bindings'].items()},{k:e['manifest']['propId'] for k,e in live_props.items()})
         call('',{'claim':gen,'state':{**st1,'puzzles':[]}},409)
+        changed_pin={**model,'bindings':{**model['bindings'],'bowl':{**model['bindings']['bowl'],'sha256':'a'*64}}}
+        self.assertEqual(call('',{'claim':gen,'state':{**draft,'puzzles':[changed_pin]}},409),{'error':'ASSEMBLY_INPUT_CHANGED'})
+        failed_route={**model,'layout':{**model['layout'],'well':{**model['layout']['well'],'regionId':'zone-4'}}}
+        self.assertEqual(call('',{'claim':gen,'state':{**draft,'puzzles':[failed_route]}},409),{'error':'ASSEMBLY_ROUTE_NOT_PLAYABLE'})
+        self.assertEqual(call('/list',{}),{'assemblies':[]})
         first=call('',{'claim':gen,'state':st1})
         self.assertEqual(first['resultRef'],f'binari/cinematics/assemblies/{aid}/1.json')
         root=self.data/'cinematics'/'assemblies'/aid
@@ -79,8 +88,9 @@ s.close();"""
         self.assertEqual(json.loads((root/'revision.json').read_text()),{'revision':1,'officialRequestId':aid})
         with sqlite3.connect(db) as conn:
             conn.execute('UPDATE workflow_tasks SET updated_at=12 WHERE task_id=?',(gen['taskId'],))
-        self.assertEqual(call('/read',{'claim':{**gen,'claimStamp':12}})['state'],st1)
+        self.assertEqual(call('/read',{'claim':{**gen,'claimStamp':12}}),{**generated,'state':st1})
         self.assertEqual(call('',{'claim':{**gen,'claimStamp':12},'state':st1}),first)
+        self.assertEqual(call('',{'claim':{**gen,'claimStamp':12},'state':draft},409),{'error':'ASSEMBLY_INPUT_CHANGED'})
         def complete(claim,receipt):
             with sqlite3.connect(db) as conn:
                 conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?",(receipt['resultRef'],claim['taskId']))
