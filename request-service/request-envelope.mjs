@@ -1,7 +1,7 @@
 import {fileUpdateType,fileUpdateSchema,validateFileUpdate} from './file-update-envelope.mjs';
 import {assemblyTypes,assemblySchemas,validateAssembly} from './assembly-contract.mjs';
 import {mapTypes,mapSchemas,validMapRequest,mapCanonical} from './map-contract.mjs';
-import {fileDeleteType,fileDeleteSchema,mapDeleteRoot,assemblyDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
+import {fileDeleteType,fileDeleteSchema,mapDeleteRoot,assemblyDeleteRoot,npcDeleteRoot,propDeleteRoot,backgroundDeleteRoot,validateFileDelete} from './file-delete-envelope.mjs';
 /** Known typed workflow families accepted by the Request Service MCP. */
 import {ident,oneStopSchemas,requestType as npcRequestType,sha,validateOneStop} from './one-stop-envelope.mjs';
 import {conceptCategoryRequestType,conceptCategorySchema,validateConceptCategory} from './concept-category-envelope.mjs';
@@ -78,7 +78,7 @@ function validateSubmit(value,sourceId,allowedType){
 
 export const validateOfficialSubmit=value=>validateSubmit(value,'local',()=>true);
 // This entry point accepts only the independent Site lookup's snapshot. Keep
-// the shared file deletion operation narrowed to the two protected folders;
-// both still pass the exact pin validator and the MCP's dedicated readiness.
+// the shared file deletion operation restricted to protected roster targets.
+// Each still passes the exact pin validator and the MCP's dedicated readiness.
 export const validateVerifiedSpaceSubmit=value=>validateSubmit(value,'space',type=>
- type!==fileDeleteType||[mapDeleteRoot,assemblyDeleteRoot].includes(value?.payload?.target?.root));
+ type!==fileDeleteType||[mapDeleteRoot,assemblyDeleteRoot,npcDeleteRoot,propDeleteRoot,backgroundDeleteRoot].includes(value?.payload?.target?.root));

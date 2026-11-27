@@ -268,8 +268,12 @@ test('owner-refetched Space map and assembly tickets use exact Local contracts a
  const assemblyUpdate={...bases,schemaVersion:'ngs.assembly-update.v1',assemblyId,expectedRevision:2,puzzles:[]};
  const deletion=(root,path,expected=pins)=>({...bases,schemaVersion:'ngs.file-delete.v1',target:{root,path,kind:'directory'},expected});
  const mapDelete=deletion(mapRoot,mapId),assemblyDelete=deletion(assemblyRoot,assemblyId);
+ const npcDelete=deletion('canonical-files/binari/npcs','character.fixture',{creationTaskId:'workflow.task.'+'d'.repeat(64)});
+ const propDelete=deletion('canonical-files/binari/props','asset',{revision:1,sha256:'a'.repeat(64)});
+ const backgroundDelete={...deletion('canonical-files/binari/cinematics/backgrounds','b'.repeat(64)+'.png',{sourceRequestId:mapId})};
+ backgroundDelete.target.kind='file';
  const records=[['map.generate',mapGeneration],['map.update',mapUpdate],['assembly.generate',assemblyGeneration],
-  ['assembly.update',assemblyUpdate],['assembly.generate',assemblyV1],['file.delete',mapDelete],['file.delete',assemblyDelete]];
+  ['assembly.update',assemblyUpdate],['assembly.generate',assemblyV1],['file.delete',mapDelete],['file.delete',assemblyDelete],['file.delete',npcDelete],['file.delete',propDelete],['file.delete',backgroundDelete]];
  const snapshots=new Map(records.map(([type,payload],i)=>['space-parity-'+i,spaceQueue('space-parity-'+i,type,payload)]));
  let ready=false,reads=0,probed=[];
  const {call}=await fixture(t,async id=>{reads++;return snapshots.get(id);},{fileDeleteReadiness:async root=>{
@@ -293,7 +297,8 @@ test('owner-refetched Space map and assembly tickets use exact Local contracts a
   ['bad-assembly','assembly.generate',{...assemblyGeneration,puzzles:[]}],
   ['bad-delete','file.delete',deletion(assemblyRoot,'../'+assemblyId)],
   ['no-pin','file.delete',deletion(mapRoot,mapId,{revision:1})],
-  ['prop-delete','file.delete',deletion('canonical-files/binari/props','asset',{revision:1,sha256:'a'.repeat(64)})],
+  ['stale-shape','file.delete',deletion('canonical-files/binari/npcs','character.fixture',{creationTaskId:'missing'})],
+  ['cinematic-delete','file.delete',deletion('canonical-files/binari/cinematics','sequences/'+assemblyId,{sourceSha256:'a'.repeat(64)})],
  ]) {
   snapshots.set(id,spaceQueue(id,t,p));assert.equal((await submit(id)).status,400,id);
  }
@@ -311,7 +316,6 @@ test('owner-refetched Space map and assembly tickets use exact Local contracts a
   assert.equal(plan.tasks[0].workerType,row.requestType==='file.delete'?'file':'document');
  }
  // The preexisting explicit Local typed prop delete remains available.
- const propDelete=deletion('canonical-files/binari/props','asset',{revision:1,sha256:'a'.repeat(64)});
  assert.equal((await call('request_submit',{sourceId:'local',requestType:'file.delete',idempotencyKey:'local-prop-delete',
   payload:propDelete})).status,'registered');
 });
