@@ -170,7 +170,7 @@ const tool={
   {properties:{requestType:{const:audioSeparateType},payload:audioSeparatePayload}},
   {properties:{requestType:{const:motion2DRequestType},payload:motion2DPayload}},
   {properties:{requestType:{const:npcAnimationRegenerateType},payload:npcAnimationRegeneratePayload}},
-  ...[...assemblyTypes,assemblyTypes[0],assemblyTypes[0]].map((type,i)=>({properties:{requestType:{const:type},payload:assemblyPayloadSchemas[i]}})),
+  ...assemblyPayloadSchemas.map((payload,i)=>({properties:{requestType:{const:assemblyTypes[i===1?1:0]},payload}})),
   {properties:{requestType:{const:fileUpdateType},payload:{oneOf:[
     typedFileUpdatePayload(mapUpdateRoot,mapPayloadSchemas[1].properties.graph),typedFileUpdatePayload(assemblyUpdateRoot,assemblyContentSchema),
   ]}}},

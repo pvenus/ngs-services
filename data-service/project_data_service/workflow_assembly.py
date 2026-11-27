@@ -3,7 +3,7 @@ from .filex_read import canonical,digest
 from .filex_writer_binding import writer as connect
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json
-from .assembly_contract import KINDS,V2,V3,TYPE,SPIRIT_TYPE,OID,keys,match,payload,state,graph_reaches,playable
+from .assembly_contract import KINDS,V2,V3,V4,TYPE,SPIRIT_TYPE,definitions_preserved,OID,keys,match,payload,state,graph_reaches,playable
 
 PATH='/v1/assemblies/ownership/workflow-assembly'
 CAP='workflow.assembly.v1'
@@ -38,7 +38,7 @@ def default_puzzle(graph,bindings,puzzle):
             'attachments':{'bowl':{'x':5,'y':-10},'lid':{'x':5,'y':-10}},'bindings':bindings}
 
 def expected_puzzles(p):
-    if p['schemaVersion'] in (V2,V3):return p['puzzles']
+    if p['schemaVersion'] in (V2,V3,V4):return p['puzzles']
     return [{'id':'ritual-well-water','type':p['puzzleType']}]
 
 class WorkflowAssembly(WorkflowCinematic):
@@ -63,7 +63,7 @@ class WorkflowAssembly(WorkflowCinematic):
             out=tx.call('POST','/v1/workflow/props/assembly-bindings',p,missing=True)
             if out is None:raise CinematicConflict('ASSEMBLY_PROP_UNAVAILABLE')
             return out
-    def check(self,oid,stamp,p,existing):
+    def check(self,oid,stamp,p,existing,*,scaffold=False):
         aid,rev=identity(oid,p)
         need(state(existing) and existing['officialRequestId']==oid and existing['updatedAt']==stamp and
              existing['assemblyId']==aid and existing['revision']==rev)
@@ -73,6 +73,8 @@ class WorkflowAssembly(WorkflowCinematic):
                  [(x['id'],x['type']) for x in existing['puzzles']]==[(x['id'],x['type']) for x in expected_puzzles(p)])
             for row,entry in zip(existing['puzzles'],expected_puzzles(p)):
                 if entry['type']==SPIRIT_TYPE:need(row['bindings']['spirit']==entry['prop'] and 'scale' in row)
+            if not scaffold:
+                need(all(('definition' in x)==(p['schemaVersion']==V4) for x in existing['puzzles']))
         return existing
     def candidate(self,oid,stamp,p):
         aid,rev=identity(oid,p)
@@ -86,6 +88,8 @@ class WorkflowAssembly(WorkflowCinematic):
             prior=self.cine('head',{'assemblyId':aid},missing=True)
             if prior is None or prior['revision']!=p['expectedRevision']:raise CinematicConflict('ASSEMBLY_REVISION_CONFLICT')
             title=prior['title'];mapping=prior['map'];rows=p['puzzles']
+            if not definitions_preserved(prior['puzzles'],rows):
+                raise CinematicConflict('ASSEMBLY_DEFINITION_IMMUTABLE')
             # The stored revision is publication provenance, not the live map dependency.
             m=self.cine('map',{'mapId':mapping['mapId']})
             if not playable(m['graph'],rows):raise CinematicConflict('ASSEMBLY_ROUTE_NOT_PLAYABLE')
@@ -110,7 +114,7 @@ class WorkflowAssembly(WorkflowCinematic):
                   for x in entries]
             need(playable(m['graph'],rows))
         result=self.check(oid,stamp,p,{'schemaVersion':'ngs.assembly.v1','projectId':'binari','assemblyId':aid,
-            'revision':rev,'updatedAt':stamp,'officialRequestId':oid,'title':title,'map':mapping,'puzzles':rows})
+            'revision':rev,'updatedAt':stamp,'officialRequestId':oid,'title':title,'map':mapping,'puzzles':rows},scaffold=True)
         return result,self.model_context(m) if 'assemblyId' not in p else None,False
     @staticmethod
     def model_context(m):
@@ -139,12 +143,15 @@ class WorkflowAssembly(WorkflowCinematic):
             else:
                 immutable=lambda value:{**value,'puzzles':[
                     {k:v for k,v in puzzle.items() if k not in
-                     (('layout','scale') if puzzle['type']==SPIRIT_TYPE and b['schemaVersion']==V3 else ('layout','attachments'))}
+                     (('layout','scale') if puzzle['type']==SPIRIT_TYPE and b['schemaVersion']==V3 else
+                      ('layout','attachments','definition') if b['schemaVersion']==V4 else ('layout','attachments'))}
                     for puzzle in value['puzzles']]}
                 if immutable(submitted)!=immutable(expected):raise CinematicConflict('ASSEMBLY_INPUT_CHANGED')
+                if b['schemaVersion']==V4 and any('definition' not in x for x in submitted['puzzles']):
+                    raise CinematicConflict('ASSEMBLY_INPUT_CHANGED')
                 self.check(oid,submitted['updatedAt'],b,submitted)
                 if not playable(context,submitted['puzzles']):raise CinematicConflict('ASSEMBLY_ROUTE_NOT_PLAYABLE')
-            need(self.cine('',{'generation':b,'state':submitted} if b['schemaVersion']==V3 else submitted)==submitted)
+            need(self.cine('',{'generation':b,'state':submitted} if b['schemaVersion'] in (V3,V4) else submitted)==submitted)
             return {'ok':True,'resultRef':ref(submitted['assemblyId'],submitted['revision'])}
 
 def serve(handler):

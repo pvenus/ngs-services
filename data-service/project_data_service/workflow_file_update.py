@@ -4,7 +4,7 @@ from .filex_read import canonical,digest
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,keys,match,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json,OFFICIAL,SAFE_INT
 from .filex_writer_binding import writer as connect
-from .assembly_contract import content as assembly_content,MAX_REV as ASSEMBLY_MAX_REV,SPIRIT_TYPE,playable,affected_conditions_exist,state as assembly_state
+from .assembly_contract import content as assembly_content,MAX_REV as ASSEMBLY_MAX_REV,SPIRIT_TYPE,playable,affected_conditions_exist,definitions_preserved,state as assembly_state
 from .workflow_assembly import WRITER as ASSEMBLY_WRITER,ref as assembly_ref
 from .workflow_map import WRITER as MAP_WRITER,graph_valid,changed_decoration_pins,ref as map_ref
 
@@ -85,6 +85,8 @@ class AssemblyMetadata:
                 raise CinematicConflict('FILE_UPDATE_REVISION_CONFLICT')
             return replay
         rows=content['puzzles'];mid=content['mapId']
+        if not definitions_preserved(prior['puzzles'],rows):
+            raise CinematicConflict('FILE_UPDATE_ASSEMBLY_DEFINITION_IMMUTABLE')
         graph=provider.storage(ASSEMBLY_WRITER+'/map',{'mapId':mid})['graph']
         if not affected_conditions_exist(prior['puzzles'],rows,graph):
             raise CinematicConflict('FILE_UPDATE_ASSEMBLY_PORTAL_MISSING')

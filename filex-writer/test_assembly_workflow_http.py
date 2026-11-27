@@ -286,3 +286,40 @@ s.close();"""
         self.assertTrue((self.data/'props'/bowl['propId']/'metadata.json').is_file())
         recovery=root.parent/'.storage-quarantine'/receipt['recoveryId']/'target'
         self.assertEqual((recovery/'1.json').read_bytes(),initial)
+
+        # A v4 official request has a fresh identity and cannot publish its scaffold.
+        from assembly_contract import WATER_STATES,WATER_RULES
+        v4={**v3,'schemaVersion':'ngs.assembly-generate.v4','puzzles':[v3['puzzles'][0]]}
+        v4_claim=stage('e4',v4,'assembly.generate',30)
+        draft=call('/read',{'claim':v4_claim})['state']
+        self.assertEqual(call('',{'claim':v4_claim,'state':draft},409),{'error':'ASSEMBLY_INPUT_CHANGED'})
+        rules=[{'module':module,'action':{'kind':kind,'target':target,'item':item},
+                'from':{'role':role,'state':source},'to':{'role':role,'state':destination},
+                'requires':[{'role':k,'state':v} for k,v in conditions]}
+               for module,kind,target,item,role,source,destination,conditions in WATER_RULES]
+        definition={'schemaVersion':'ngs.puzzle-definition.v1',
+                    'entities':[{'role':role,'initial':next(iter(states)),
+                                 'states':[{'id':i,'held':h,'payload':p} for i,(h,p) in states.items()]}
+                                for role,states in WATER_STATES.items()],
+                    'rules':rules,'goal':{'role':'bowl','state':'altar-filled'},
+                    'solution':[r['action'] for r in rules]}
+        row={**draft['puzzles'][0],'definition':definition}
+        made={**draft,'puzzles':[row]}
+        self.call('/v1/scopes/cinematics/workflow/assemblies','media',made,status=400) # no v4 envelope
+        cheated={**made,'puzzles':[{**row,'definition':{**definition,'solution':list(reversed(definition['solution']))}}]}
+        self.assertEqual(call('',{'claim':v4_claim,'state':cheated},409),{'error':'ASSEMBLY_INPUT_CHANGED'})
+        v4_receipt=call('',{'claim':v4_claim,'state':made})
+        complete(v4_claim,v4_receipt)
+        self.assertEqual(call('/result',{'officialRequestId':made['assemblyId']}),v4_receipt)
+        def edit_v4(i,rows):
+            return stage(i,{'schemaVersion':'ngs.file-update.v1','projectId':'binari',
+                'target':{'root':ASSEMBLY_ROOT,'path':made['assemblyId'],'kind':'metadata'},
+                'expected':{'revision':1,'officialRequestId':made['officialRequestId']},
+                'content':{'title':made['title'],'mapId':map_id,'puzzles':rows}},'file.update',31)
+        missing=edit_v4('a4',draft['puzzles'])
+        self.assertEqual(call(packet={'claim':missing},expect=409,base=UPDATE),
+                         {'error':'FILE_UPDATE_ASSEMBLY_DEFINITION_IMMUTABLE'})
+        moved={**row,'attachments':{**row['attachments'],'lid':{'x':3,'y':-9}}}
+        ok_edit=edit_v4('b4',[moved])
+        call(packet={'claim':ok_edit},base=UPDATE)
+        self.assertEqual(json.loads((self.data/'cinematics'/'assemblies'/made['assemblyId']/'2.json').read_text())['puzzles'],[moved])

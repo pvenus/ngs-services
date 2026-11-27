@@ -1,6 +1,6 @@
 """Atomic assembly publication on the existing cinematic store and lock."""
 import json
-from assembly_contract import LIMIT,OID,V3,SPIRIT_TYPE,payload,int_range,keys,match,playable,state,wire,MAX_REV,puzzles,affected_conditions_exist,condition_index
+from assembly_contract import LIMIT,OID,V3,V4,SPIRIT_TYPE,payload,definitions_preserved,int_range,keys,match,playable,state,wire,MAX_REV,puzzles,affected_conditions_exist,condition_index
 from map_store import map_base,read_revision,REVISION,deletion_marker
 from server import Conflict
 
@@ -79,11 +79,12 @@ def call(store,operation,body):
     expected=None; generation=None
     if operation=='publish' and keys(body,('generation','state')):
         generation=body['generation'];body=body['state']
-        need(payload(generation,'assembly.generate') and generation['schemaVersion']==V3 and state(body) and body['revision']==1 and
+        need(payload(generation,'assembly.generate') and generation['schemaVersion'] in (V3,V4) and state(body) and body['revision']==1 and
              body['title']==generation['title'] and body['map']['mapId']==generation['mapId'] and
              [(x['id'],x['type']) for x in body['puzzles']]==[(x['id'],x['type']) for x in generation['puzzles']] and
              all(x['type']!=SPIRIT_TYPE or (x['bindings']['spirit']==p['prop'] and 'scale' in x)
-                 for x,p in zip(body['puzzles'],generation['puzzles'])))
+                 for x,p in zip(body['puzzles'],generation['puzzles'])) and
+             all(('definition' in x)==(generation['schemaVersion']==V4) for x in body['puzzles']))
     if operation=='metadata-update':
         need(keys(body,('expected','state')) and keys(body['expected'],('revision','officialRequestId')) and
              int_range(body['expected']['revision'],1,MAX_REV-1) and match(body['expected']['officialRequestId'],OID))
@@ -130,6 +131,7 @@ def call(store,operation,body):
         if h:
             previous=revision(store,p,h['revision'])
             need(previous['officialRequestId']==h['officialRequestId'] and previous['title']==body['title'] and previous['map']==body['map'])
+            if not definitions_preserved(previous['puzzles'],body['puzzles']):raise Conflict('assembly definition changed')
             # Check the current map while holding the same storage lock as publication.
             m=map_state(store,{'mapId':body['map']['mapId']})
             if expected is None:
@@ -141,7 +143,8 @@ def call(store,operation,body):
                 raise Conflict('assembly portal condition target changed')
         else:
             need(puzzles(body['puzzles'],well_only=generation is None) and not condition_index(body['puzzles']))
-            need(body['assemblyId']==body['officialRequestId'])
+            need(body['assemblyId']==body['officialRequestId'] and (generation is not None or
+                 all('definition' not in x for x in body['puzzles'])))
             m=map_state(store,{'mapId':body['map']['mapId']})
             if any(m[k]!=body['map'][k] for k in ('mapId','revision','officialRequestId')):raise Conflict('assembly map pin stale')
         need(playable(m['graph'],body['puzzles']))

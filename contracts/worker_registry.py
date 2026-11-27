@@ -71,7 +71,7 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
        action.get('dependsOn')!=[] or registry['requestTypes'].get(mode,{}).get('stageIds')!=[mode] or
        action.get('requestRequirements',{}).get('schemaVersion')!=(
         {'type':'string','enum':['ngs.map-generate.v1','ngs.map-generate.v2','ngs.map-generate.v3']} if mode=='map.generate' else
-        {'type':'string','enum':['ngs.assembly-generate.v1','ngs.assembly-generate.v2', 'ngs.assembly-generate.v3']} if mode=='assembly.generate' else
+        {'type':'string','enum':['ngs.assembly-generate.v1','ngs.assembly-generate.v2', 'ngs.assembly-generate.v3', 'ngs.assembly-generate.v4']} if mode=='assembly.generate' else
         {'type':'string','const':'ngs.'+mode.replace('.','-')+'.v1'}) or
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or policy.get('apply')!='authorized-mutation'):
     raise ValueError('LAYA_MAP_DOCUMENT_ADAPTER_CONTRACT')
