@@ -12,9 +12,15 @@ LOG=logging.getLogger(__name__)
 _ACTIVE=set()
 _ACTIVE_LOCK=threading.Lock()
 
-def _in_flight(task):
+def _try_enter(task):
     with _ACTIVE_LOCK:
-        return task in _ACTIVE
+        if task in _ACTIVE:return False
+        _ACTIVE.add(task)
+        return True
+
+def _leave(task):
+    with _ACTIVE_LOCK:
+        _ACTIVE.remove(task)
 
 class SaveReservation:
     def __init__(self, verifier, claim):
@@ -88,9 +94,7 @@ def save_handoff(verifier, claim, *, continuation=False):
         yield
         return
     task=claim['taskId']
-    with _ACTIVE_LOCK:
-        require(task not in _ACTIVE)
-        _ACTIVE.add(task)
+    require(_try_enter(task))
     reservation=SaveReservation(verifier,claim)
     try:
         reservation.enter(document=False,continuation=continuation)
@@ -107,8 +111,7 @@ def save_handoff(verifier, claim, *, continuation=False):
                     LOG.warning('save failure deferred to expiry for task %s',task)
             raise
     finally:
-        with _ACTIVE_LOCK:
-            _ACTIVE.remove(task)
+        _leave(task)
 
 def optionally_save(verifier, claim, saving, *, continuation=False):
     return save_handoff(verifier,claim,continuation=continuation) if saving else nullcontext()
@@ -127,7 +130,8 @@ def expire_document_saves(verifier, *, now_ms=None):
               AND save_started_at<=? ORDER BY save_started_at LIMIT 10""",(now-DOCUMENT_SAVE_TIMEOUT_MS,))]
     released=[]
     for row in pending:
-        if _in_flight(row['task_id']):continue
+        task=row['task_id']
+        if not _try_enter(task):continue
         try:
             changed=SaveReservation(verifier,None)._change("""UPDATE workflow_tasks
                 SET save_started_at=NULL,status='failed',updated_at=?
@@ -137,8 +141,10 @@ def expire_document_saves(verifier, *, now_ms=None):
             if changed:released.append(row['task_id'])
         except sqlite3.Error as error:
             code=getattr(error,'sqlite_errorcode',0) or 0
-            LOG.warning('document save expiry state write deferred reason=%s',
+            LOG.warning('save expiry state write deferred reason=%s',
                         'SQLITE_BUSY' if code&255==sqlite3.SQLITE_BUSY else 'SQLITE_ERROR')
         except (OSError,ValueError):
-            LOG.warning('document save expiry state write deferred reason=WORKFLOW_DB_UNAVAILABLE')
+            LOG.warning('save expiry state write deferred reason=WORKFLOW_DB_UNAVAILABLE')
+        finally:
+            _leave(task)
     return released

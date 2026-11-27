@@ -126,7 +126,9 @@ class Tests(unittest.TestCase):
         self.assertFalse(self.writer.receipt_path(self.c['taskId']).exists())
 
     def test_real_save_mode_holds_no_database_read_lock_over_filex(self):
+        from time import time
         from unittest.mock import patch
+        from project_data_service.workflow_save_reservation import expire_document_saves
         from project_data_service.pds_owned_transport import OwnedNPCTransport
         svc=self.pds.workflow_portrait_representative
         svc.verifier.file_save_handoff=True
@@ -137,6 +139,7 @@ class Tests(unittest.TestCase):
             with sqlite3.connect(self.db,timeout=0) as db:
                 self.assertIsNotNone(db.execute('SELECT save_started_at FROM workflow_tasks WHERE task_id=?',(self.c['taskId'],)).fetchone()[0])
                 db.execute('UPDATE workflow_tasks SET updated_at=updated_at+1 WHERE task_id=?',(self.preset_id,))
+            self.assertEqual(expire_document_saves(svc.verifier,now_ms=int(time()*1000)+181000),[])
             self.assertEqual(self.publish(basis,png(2))[0],403)
             return orig(tx,binding,raw,**kw)
         with patch.object(OwnedNPCTransport,'workflow_portrait_representative',send):
