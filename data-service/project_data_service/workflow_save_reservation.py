@@ -11,10 +11,6 @@ class SaveReservation:
         self.claim=claim
         self.started=None
 
-    def supports(self):
-        with self.verifier.snapshot() as db:
-            return any(row['name']=='save_started_at' for row in db.execute('PRAGMA table_info(workflow_tasks)'))
-
     def _change(self, sql, args):
         self.verifier.check_path()
         with closing(sqlite3.connect(self.verifier.path.as_uri()+'?mode=rw', uri=True, timeout=5, isolation_level=None)) as db:

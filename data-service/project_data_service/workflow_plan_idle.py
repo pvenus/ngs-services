@@ -118,8 +118,7 @@ class IdlePlan:
     def publish(self,envelope):
         require(type(envelope) is dict and set(envelope)=={'claim','basis','artifact'},'WORKFLOW_IDLE_PLAN_PUBLISH')
         reservation=SaveReservation(self.verifier,envelope['claim'])
-        enabled=reservation.supports()
-        with self.verifier.authorized_document_chain(envelope['claim'],self.stage) as (identity,_,chain):
+        with self.verifier.authorized_document_chain(envelope['claim'],self.stage,read_save_support=True) as (identity,_,chain,enabled):
             if not enabled:
                 return self.publish_authorized(identity,envelope['basis'],envelope['artifact'],chain)
         return publish_reserved(reservation,self.source,

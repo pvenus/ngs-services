@@ -107,8 +107,7 @@ class RepresentativePlan:
                 return IdlePlan(self.source,self.verifier,stage='representative').publish_authorized(identity,b,a,True,fence)
             return self._publish_legacy(identity,character,b,a,fence)
         reservation=SaveReservation(self.verifier,envelope['claim'])
-        enabled=reservation.supports()
-        with self.verifier.authorized_document_chain(envelope['claim'],'representative') as (identity,character,chain):
+        with self.verifier.authorized_document_chain(envelope['claim'],'representative',read_save_support=True) as (identity,character,chain,enabled):
             if not enabled:return publish()
         return publish_reserved(reservation,self.source,publish)
 

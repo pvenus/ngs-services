@@ -126,10 +126,10 @@ class PrivatePlannerClaim:
             yield authenticated
 
     @contextmanager
-    def authorized_document_chain(self,claim,stage):
+    def authorized_document_chain(self,claim,stage,*,read_save_support=False):
         key={'overview':'planning_overview','portrait-art':'planning_portrait_art',
              'representative':'planning_representative','idle':'planning_idle','combat':'planning_combat'}[stage]
-        with self._selected(claim,key,chain_result=True) as authenticated:
+        with self._selected(claim,key,chain_result=True,read_save_support=read_save_support) as authenticated:
             yield authenticated
 
     @contextmanager
@@ -187,7 +187,7 @@ class PrivatePlannerClaim:
             yield {**identity,'posePreset':pose,'direction':direction}
 
     @contextmanager
-    def _selected(self,claim,key,*,media=None,direction=None,chain_result=False,pixel=None,pose='idle'):
+    def _selected(self,claim,key,*,media=None,direction=None,chain_result=False,pixel=None,pose='idle',read_save_support=False):
         is_npc_task=key!='delete'
         gated_pose=(pixel[0] if pixel else pose if direction is not None else
                     next((name for name,r in POSE_RECIPES.items() if key in (r.plan_key,r.reference_key)),None))
@@ -446,6 +446,7 @@ class PrivatePlannerClaim:
             elif media_binding is not None:
                 yield identity,c,media_binding
             elif chain_result:
-                yield identity,c,pixel_direction if direction else chain
+                base=(identity,c,pixel_direction if direction else chain)
+                yield (*base,'save_started_at' in row.keys()) if read_save_support else base
             else:
                 yield identity,c
