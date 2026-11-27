@@ -88,6 +88,11 @@ def part_path(base,n,part):
     need(not path.is_symlink())
     return path
 
+def validate_start(graph):
+    if 'startPoint' not in graph:return
+    pt=graph['startPoint']
+    need(type(pt)is dict and set(pt)=={'x','y'} and all(type(v)is int and 0<=v<=1000 for v in pt.values()))
+
 def read_group(store,base,n,state):
     need(set(state)==METADATA|{'title','regions','parts'} and state['projectId']=='binari' and
          match(state['officialRequestId'],OID))
@@ -99,7 +104,8 @@ def read_group(store,base,n,state):
         except FileNotFoundError as exc:raise ValueError('map revision part missing') from exc
         need(sha256(raw).hexdigest()==digests[part])
         value=json.loads(raw)
-        need(type(value)is dict and (set(value)=={field} or part=='collisions' and not value))
+        need(type(value)is dict and (set(value)=={field} or part=='collisions' and not value or
+             part=='start' and set(value)=={field,'startPoint'}))
         graph.update(value)
     state={k:state[k] for k in METADATA}
     return {**state,'schemaVersion':MAP_SCHEMA,'graph':graph}
@@ -110,7 +116,7 @@ def read_revision(store,base,n):
     state=json.loads(store._read(p,65536))
     need(type(state)is dict and state.get('revision')==n and state.get('mapId')==base.name)
     if state.get('schemaVersion')==GROUP_SCHEMA:state=read_group(store,base,n,state)
-    validate_colliders(state.get('graph'))
+    validate_colliders(state.get('graph')); validate_start(state['graph'])
     return state
 def map_context(store,p):
     ids=p.get('backgroundIds') if type(p)is dict else None
@@ -141,10 +147,11 @@ def map_revision(store,p,write=False):
     if not write:return read_revision(store,base,n)
     need(set(p)=={'schemaVersion','projectId','mapId','revision','updatedAt','officialRequestId','graph'} and
          p['schemaVersion']=='ngs.map-metadata.v1' and p['projectId']=='binari' and match(p['officialRequestId'],OID))
-    graph=p['graph']; validate_colliders(graph)
+    graph=p['graph']; validate_colliders(graph); validate_start(graph)
     required={'title','regions','startRegionId','connections'}
-    need(set(graph) in (required,required|{'colliders'}) and len(encode(p))<65536)
+    need(required<=set(graph)<=required|{'colliders','startPoint'} and len(encode(p))<65536)
     part_bytes={part:encode({field:graph[field]} if field in graph else {}) for part,field in PARTS.items()}
+    if 'startPoint' in graph:part_bytes['start']=encode({'startRegionId':graph['startRegionId'],'startPoint':graph['startPoint']})
     manifest={**{k:p[k] for k in METADATA},'schemaVersion':GROUP_SCHEMA,
               'title':graph['title'],'regions':graph['regions'],
               'parts':{part:sha256(raw).hexdigest() for part,raw in part_bytes.items()}}

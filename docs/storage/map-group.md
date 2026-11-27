@@ -8,7 +8,7 @@ fields are `schemaVersion: "ngs.map-group.v1"`, `projectId`, `mapId`,
 `parts: {start, portals, collisions}`. Each part value is the lowercase
 SHA-256 of the actual corresponding file bytes:
 
-- `<revision>.start.json`: `{startRegionId}`
+- `<revision>.start.json`: `{startRegionId}`, with optional `startPoint:{x,y}` in normalized thousandths
 - `<revision>.portals.json`: `{connections}`
 - `<revision>.collisions.json`: `{colliders}`, or `{}` if the merged graph
   did not have a collider field. An explicit empty list is preserved.

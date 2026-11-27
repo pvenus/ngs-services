@@ -23,6 +23,9 @@ export const regionId=v=>typeof v==='string'&&/^[a-z][a-z0-9-]{0,31}$/.test(v);
 export const mapBackgroundIds=graph=>[...new Set(graph.regions.map(r=>r.backgroundId).filter(Boolean))];
 export function validMapGraph(v,{partial=false}={}){
  const fields=['title','startRegionId','regions','connections'];
+ const withStartPoint=v!==null&&typeof v==='object'&&Object.hasOwn(v,'startPoint');
+ if(withStartPoint&& (partial||!mapPoint(v.startPoint)))return false;
+ if(withStartPoint)fields.push('startPoint');
  const withColliders=v!==null&&typeof v==='object'&&Object.hasOwn(v,'colliders');
  if(!mapFields(v,withColliders?[...fields,'colliders']:fields)||!mapText(v.title,100)||!Array.isArray(v.regions)||
     v.regions.length<1||v.regions.length>24||!v.regions.every(r=>mapFields(r,['id','name','description','backgroundId','imageSha256'])&&
@@ -55,7 +58,7 @@ const pointSchema=obj({x:count(0,1000),y:count(0,1000)});
 const rectangleSchema=obj({...pointSchema.properties,width:count(1,1000),height:count(1,1000)});
 const regionSchema=obj({id:key,name:title,description:{type:'string',minLength:1,maxLength:1000},
  backgroundId:{type:'string',pattern:'^background\\.[a-f0-9]{64}$'},imageSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}});
-const graphSchema=(generate)=>obj({title,startRegionId:key,
+const graphSchema=(generate)=>obj({title,startRegionId:key,...(generate?{}:{startPoint:pointSchema}),
  regions:{type:'array',minItems:generate?2:1,maxItems:generate?12:24,items:regionSchema},
  connections:{type:'array',minItems:generate?1:0,maxItems:96,items:obj({id:key,from:key,to:key,
   hit:generate?{type:'null'}:rectangleSchema,spawn:generate?{type:'null'}:pointSchema,label:title})},

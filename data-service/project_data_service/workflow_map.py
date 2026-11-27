@@ -22,6 +22,9 @@ def rect(v):
             0<=v['x'] and 0<=v['y'] and 0<v['width']<=1000-v['x'] and 0<v['height']<=1000-v['y'])
 def graph_valid(v,partial=False):
     fields=('title','startRegionId','regions','connections')
+    if type(v)is dict and 'startPoint' in v:
+        need(not partial and point(v['startPoint']))
+        fields+=('startPoint',)
     need((keys(v,fields) or keys(v,(*fields,'colliders'))) and text(v['title'],100))
     regions=v['regions']; edges=v['connections']
     need(type(regions)is list and 1<=len(regions)<=24 and type(edges)is list and len(edges)<=96)
@@ -85,7 +88,8 @@ def graph(db,oid,task_id=None):
             need(t['status']=='completed' and type(t['map_part_json']) is str)
             raw=t['map_part_json'];v=strict_json(raw.encode())
             need(canonical(v).decode()==raw and t['result_ref']=='workflow.map-stage.'+digest(v))
-            if key=='map_start':need(keys(v,('startRegionId',)) and v['startRegionId']==p['graph']['startRegionId'])
+            if key=='map_start':
+                need(keys(v,('startRegionId','startPoint')) and v['startRegionId']==p['graph']['startRegionId'] and point(v['startPoint']))
             if key=='map_portals':match_coordinates(p['graph'],v)
             prior.update(v)
     return r,by_id[ids[idx]],(p,stages[idx],prior)
@@ -108,10 +112,10 @@ def graph_matches(basis,value,prior):
     if basis['schemaVersion']!=V2:
         need(masked==source)
         return
-    need({k:v for k,v in masked.items() if k!='colliders'}==
-         {k:v for k,v in source.items() if k!='colliders'} and
+    need({k:v for k,v in masked.items() if k not in ('colliders','startPoint')}==
+         {k:v for k,v in source.items() if k not in ('colliders','startPoint')} and
          'colliders' in value and (basis['design']['collisionMode']!='none' or not value['colliders']) and
-         value['startRegionId']==prior['startRegionId'])
+         value['startRegionId']==prior['startRegionId'] and value.get('startPoint')==prior['startPoint'])
     points=match_coordinates(source,{'coordinates':prior['coordinates']})
     need(all({k:e[k] for k in ('id','hit','spawn')}==points[e['id']] for e in value['connections']))
 def identity(oid,p):return p.get('mapId',oid),p.get('expectedRevision',0)+1

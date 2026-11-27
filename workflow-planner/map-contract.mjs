@@ -23,6 +23,9 @@ export const regionId=v=>typeof v==='string'&&/^[a-z][a-z0-9-]{0,31}$/.test(v);
 export const mapBackgroundIds=graph=>[...new Set(graph.regions.map(r=>r.backgroundId).filter(Boolean))];
 export function validMapGraph(v,{partial=false}={}){
  const fields=['title','startRegionId','regions','connections'];
+ const withStartPoint=v!==null&&typeof v==='object'&&Object.hasOwn(v,'startPoint');
+ if(withStartPoint&& (partial||!mapPoint(v.startPoint)))return false;
+ if(withStartPoint)fields.push('startPoint');
  const withColliders=v!==null&&typeof v==='object'&&Object.hasOwn(v,'colliders');
  if(!mapFields(v,withColliders?[...fields,'colliders']:fields)||!mapText(v.title,100)||!Array.isArray(v.regions)||
     v.regions.length<1||v.regions.length>24||!v.regions.every(r=>mapFields(r,['id','name','description','backgroundId','imageSha256'])&&

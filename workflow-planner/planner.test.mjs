@@ -317,7 +317,7 @@ test('map generation v2 keeps a deterministic three-task DAG, proof and failure 
   s.db.prepare("UPDATE workflow_tasks SET status='completed',map_part_json=?,result_ref=? WHERE task_id=?")
    .run(packed,'workflow.map-stage.'+sha(packed),id);
  }
- complete(ids[0],{startRegionId:'one'});complete(ids[1],{coordinates:[{id:'entrance',hit:{x:1,y:2,width:10,height:20},spawn:{x:4,y:5}}]});
+ complete(ids[0],{startRegionId:'one',startPoint:{x:3,y:8}});complete(ids[1],{coordinates:[{id:'entrance',hit:{x:1,y:2,width:10,height:20},spawn:{x:4,y:5}}]});
  const ref='binari/cinematics/maps/'+row.officialRequestId+'/1.json';
  s.db.prepare("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?").run(ref,ids[2]);
  assert.deepEqual(s.terminalFailures(),[]);

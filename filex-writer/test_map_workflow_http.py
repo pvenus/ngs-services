@@ -78,6 +78,7 @@ s.close();"""
         posted={**graph,'connections':[{**link,'hit':{'x':20,'y':750,'width':90,'height':120},'spawn':{'x':450,'y':850}} for link in links]}
         mutated={**posted,'connections':[{**posted['connections'][0],'from':'zone-5'},*posted['connections'][1:]]}
         call('',{'claim':claim,'graph':mutated},403)
+        call('',{'claim':claim,'graph':{**posted,'startPoint':{'x':1,'y':1}}},403)
         result=call('',{'claim':claim,'graph':posted})
         self.assertEqual(result,{'ok':True,'resultRef':f'binari/cinematics/maps/{oid}/1.json'})
         f=self.data/'cinematics'/'maps'/oid/'1.json'
@@ -99,7 +100,7 @@ s.close();"""
         original=f.read_bytes()
         box={'id':'wall-1','regionId':'zone-2','rect':{'x':10,'y':20,'width':130,'height':300}}
         round_wall={**box,'id':'round-1','shape':'ellipse','rotation':45}
-        changed={**posted,'colliders':[box,round_wall]}
+        changed={**posted,'startPoint':{'x':90,'y':350},'colliders':[box,round_wall]}
         update_id='request.official.'+'b'*64
         update_claim=stage(update_id,{'schemaVersion':'ngs.map-update.v1','projectId':'binari','mapId':oid,
             'expectedRevision':1,'graph':changed},'map.update')
@@ -136,18 +137,23 @@ s.close();"""
         call('/read',{'claim':claim_at(a)})
         call('',{'claim':claim_at(a),'graph':{**posted,'colliders':[]}},403)
         call('/read',{'claim':claim_at(b)},403)
-        complete(a,{'startRegionId':'zone-1'})
+        start={'startRegionId':'zone-1','startPoint':{'x':300,'y':810}}
+        complete(a,start)
         call('/read',{'claim':claim_at(b)})
         call('/read',{'claim':claim_at(c)},403)
         coordinates={'coordinates':[{k:e[k] for k in ('id','hit','spawn')} for e in posted['connections']]}
         complete(b,coordinates)
         call('/read',{'claim':claim_at(c)})
-        call('',{'claim':claim_at(c),'graph':changed},403) # collisionMode none
-        wrong_portal={**posted,'colliders':[],'connections':[{**posted['connections'][0],'spawn':{'x':3,'y':4}},*posted['connections'][1:]]}
+        call('',{'claim':claim_at(c),'graph':{**changed,**start}},403) # collisionMode none
+        wrong_portal={**posted,**start,'colliders':[],'connections':[{**posted['connections'][0],'spawn':{'x':3,'y':4}},*posted['connections'][1:]]}
         call('',{'claim':claim_at(c),'graph':wrong_portal},403)
-        valid={**posted,'colliders':[]}
+        call('',{'claim':claim_at(c),'graph':{**posted,'colliders':[]}},403)
+        call('',{'claim':claim_at(c),'graph':{**posted,**start,'startPoint':{'x':4,'y':4},'colliders':[]}},403)
+        valid={**posted,**start,'colliders':[]}
         expected_split=call('',{'claim':claim_at(c),'graph':valid})
         self.assertEqual(expected_split,{'ok':True,'resultRef':f'binari/cinematics/maps/{split_id}/1.json'})
+        v2start=self.data/'cinematics'/'maps'/split_id/'1.start.json'
+        self.assertEqual(v2start.read_bytes(),encode(start))
         with sqlite3.connect(db) as conn:
             conn.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE task_id=?",
                 (expected_split['resultRef'],c))
