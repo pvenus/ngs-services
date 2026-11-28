@@ -82,6 +82,8 @@ class Handler(DomainHandler):
         if media_path in playback_routes:return cinematic_playback(self)
         from .workflow_cinematic_project import ROUTES as cinematic_project_routes,serve as cinematic_project
         if media_path in cinematic_project_routes:return cinematic_project(self)
+        from .workflow_ui_asset import ROUTES as ui_routes,serve as workflow_ui
+        if media_path in ui_routes:return workflow_ui(self)
         from .workflow_prop_animation_remove import ROUTES as animation_remove_routes,serve as prop_animation_remove
         if media_path in animation_remove_routes:return prop_animation_remove(self)
 
@@ -846,6 +848,9 @@ def serve(storage_root: Path, host: str, port: int):
         server.workflow_cinematic_background_cinematic_source=WorkflowCinematicProject(planner,CINE_BG)
         server.workflow_cinematic_background_pixel_draft=WorkflowCinematicProject(planner,DRAFT)
         server.workflow_cinematic_sequence_remove=WorkflowCinematicProject(planner,ARCHIVE)
+        from .workflow_ui_asset import WorkflowUiAsset
+        server.workflow_ui_generate=WorkflowUiAsset(planner,'generate',app.concept.current)
+        server.workflow_ui_import=WorkflowUiAsset(planner,'import',app.concept.current)
         from .workflow_prop_animation_remove import WorkflowPropAnimationRemove
         server.workflow_prop_animation_remove=WorkflowPropAnimationRemove(planner)
     from .workflow_prop_image import configured as configure_prop_image

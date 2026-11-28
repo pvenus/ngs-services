@@ -449,6 +449,24 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                         aid=url.path.removeprefix('/v1/portrait-assets/')
                         return self.reply(200,store.portrait_asset(aid))
                     return self.reply(404,{'error':'NOT_FOUND'})
+                if hasattr(store,'ui_asset_publish'):
+                    from media_store import UI_ROUTE,CINEMATIC_BODY
+                    routes={UI_ROUTE:store.ui_asset_publish,UI_ROUTE+'/result':store.ui_asset_result}
+                    action=routes.get(url.path)
+                    if self.command!='POST' or action is None:return self.reply(404,{'error':'NOT_FOUND'})
+                    n=self.headers.get('Content-Length','')
+                    if (url.query or self.headers.get('Origin') is not None or self.headers.get('Transfer-Encoding') is not None or
+                        self.headers.get_all('Content-Length')!=[n] or self.headers.get('Content-Type')!='application/json' or
+                        not n.isascii() or not n.isdecimal() or len(n)>9 or not 0<int(n)<=(CINEMATIC_BODY if url.path==UI_ROUTE else 4096)):
+                        raise ValueError('ui asset transport')
+                    def distinct(items):
+                        out=dict(items)
+                        if len(items)!=len(out):raise ValueError('duplicate ui asset key')
+                        return out
+                    self.connection.settimeout(20)
+                    body=self.rfile.read(int(n))
+                    if len(body)!=int(n):raise ValueError('ui asset body incomplete')
+                    return self.reply(200,action(json.loads(body,object_pairs_hook=distinct)))
                 if hasattr(store,'cinematic_publish'):
                     from media_store import CINEMATIC_ROUTE,CINEMATIC_BODY,SEQUENCE_ROUTE,PLAYBACK_ROUTE,SOURCE_ROUTE,BACKGROUND_ROUTE,ARCHIVE_ROUTE
                     routes={CINEMATIC_ROUTE:store.cinematic_publish,

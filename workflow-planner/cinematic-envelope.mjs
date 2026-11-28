@@ -112,7 +112,19 @@ const validSelection=(a,check)=>Array.isArray(a)&&a.length>=1&&a.length<=30&&a.e
 const req=(schema,fields)=>{const properties={...familyBase,schemaVersion:{const:schema},...fields};return {
  type:'object',additionalProperties:false,required:Object.keys(properties),properties,
 };};
+export const uiAssetGenerateType='ui.asset.generate',uiAssetImportType='ui.asset.import';
+export const uiAssetTypes=Object.freeze([uiAssetGenerateType,uiAssetImportType]);
+const uiKind={type:'string',enum:['logo','button']},uiTitle={type:'string',minLength:1,maxLength:120};
+const uiSpec=(mode)=> {
+ const gen=mode==='generate',schema='ngs.ui-asset-'+mode+'.v1';
+ return {schema,key:'ui_asset_'+mode,worker:'image',route:'/v1/ui/ownership/workflow-asset/'+mode,
+  capability:'workflow.ui-asset-'+mode+'.v1',
+  payload:req(schema,{kind:uiKind,title:uiTitle,...(gen?{prompt:{type:'string',minLength:1,maxLength:2000}}:{sha256:hashSchema})}),
+  fields:['kind','title',gen?'prompt':'sha256'],
+  valid:v=>['logo','button'].includes(v.kind)&&cleanText(v.title,120,480)&&(gen?cleanText(v.prompt,2000,4000):validHash(v.sha256))};
+};
 export const extraCinematicRequests=Object.freeze({
+ [uiAssetGenerateType]:uiSpec('generate'),[uiAssetImportType]:uiSpec('import'),
  [cinematicSourceType]:{schema:cinematicSourceRequestSchema,key:'cinematic_source_generate',worker:'image',route:'/v1/cinematics/ownership/workflow-source',
   capability:'workflow.cinematic-source-write.v1',
   payload:req(cinematicSourceRequestSchema,{title:{type:'string',minLength:1,maxLength:120},prompt:{type:'string',minLength:1,maxLength:2000}}),
@@ -153,7 +165,7 @@ export const extraCinematicRequests=Object.freeze({
    integer(v.source.revision,1,Number.MAX_SAFE_INTEGER-2)&&validHash(v.source.sha256)&&validSelection(v.motionIds,validSlug)},
 });
 export const extraCinematicTypes=Object.freeze(Object.keys(extraCinematicRequests));
-export const allCinematicTypes=Object.freeze([cinematicType,cinematicSequenceType,cinematicPlaybackType,...extraCinematicTypes]);
+export const allCinematicTypes=Object.freeze([cinematicType,cinematicSequenceType,cinematicPlaybackType,...extraCinematicTypes.filter(type=>!uiAssetTypes.includes(type))]);
 export function validateExtraCinematic(payload,projectId,type){
  const cfg=Object.hasOwn(extraCinematicRequests,type)?extraCinematicRequests[type]:null;
  if(!cfg||!exact(payload,cfg.payload.required)||projectId!=='binari'||payload.projectId!==projectId||(payload.schemaVersion!==cfg.schema&&!(type===backgroundAnimationType&&payload.schemaVersion===backgroundAnimationStageSchema))||!cfg.valid(payload))

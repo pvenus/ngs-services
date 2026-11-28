@@ -841,3 +841,57 @@ class CinematicTargetDelete:
                 self._uncorrelated_sources(source,m['officialRequestId'])
                 if self._remaining_children(source):raise PinnedDeleteRejected('scene still has cinematic children')
             return mover.remove_locked(move)
+
+UI_ROUTE='/v1/workflow/ui/assets'
+UI_FIELDS={'schemaVersion','projectId','officialRequestId','kind','title','sha256','bytes','width','height','origin','designSha256'}
+
+
+class UiAssetStore(MediaStore):
+ namespace='canonical-files/binari/ui/'
+
+ def ui_asset_result(self,p):
+  require(type(p)is dict and set(p)=={'officialRequestId'} and cinematic_match(p['officialRequestId'],CINEMATIC_ID),'ui result id')
+  oid=p['officialRequestId']
+  with self.lock():
+   m=json.loads(self.internal('assets',oid,'manifest.json').read_bytes())
+   data=self.internal('assets',oid,'asset.png').read_bytes()
+   self._validate(m,data,oid)
+   return m
+
+ @staticmethod
+ def _validate(m,data,oid):
+  require(type(m)is dict and set(m)==UI_FIELDS and m['schemaVersion']=='ngs.ui-asset-result.v1'
+   and m['projectId']=='binari' and cinematic_match(oid,CINEMATIC_ID) and m['officialRequestId']==oid
+   and m['kind'] in ('logo','button') and type(m['title'])is str and 0<len(m['title'])<=120
+   and isinstance(m['bytes'],int) and not isinstance(m['bytes'],bool) and len(data)==m['bytes'] and len(data)<=CINEMATIC_MAX
+   and sha(data)==m['sha256'] and m['origin'] in ('manual','imagegen')
+   and (m['designSha256'] is None if m['origin']=='manual' else cinematic_match(m['designSha256'],CINEMATIC_DIGEST)),'ui manifest')
+  png(data)
+  require(data[24:26]==b'\x08\x06' and tuple(struct.unpack_from('>II',data,16))==(m['width'],m['height'])
+   and all(type(m[k])is int and 0<m[k]<=4096 for k in ('width','height')),'ui png profile')
+
+ def ui_asset_publish(self,p):
+  import os, tempfile
+  require(type(p)is dict and set(p)=={'manifest','base64'} and type(p['manifest'])is dict
+   and type(p['base64'])is str and len(p['base64'])<=4*((CINEMATIC_MAX+2)//3),'ui artifact')
+  m=p['manifest'];oid=m.get('officialRequestId');data=base64.b64decode(p['base64'],validate=True)
+  self._validate(m,data,oid)
+  dest=self.internal('assets',oid);assets=dest.parent
+  with self.lock():
+   if dest.exists():
+    if self.internal('assets',oid,'manifest.json').read_bytes()!=wire(m) or self.internal('assets',oid,'asset.png').read_bytes()!=data:
+     raise Conflict('ui asset already published with different bytes or metadata')
+    return m
+   assets.mkdir(exist_ok=True)
+   # Move a complete directory as one publication; no visible incomplete item.
+   with tempfile.TemporaryDirectory(prefix='.ui-stage-',dir=self.root) as tmp:
+    from pathlib import Path
+    stage=Path(tmp)/'publish'
+    self.write(stage/'asset.png',data)
+    self.write(stage/'manifest.json',wire(m))
+    os.rename(stage,dest)
+    for folder in (assets,self.root):
+     fd=os.open(folder,os.O_RDONLY)
+     try:os.fsync(fd)
+     finally:os.close(fd)
+  return m

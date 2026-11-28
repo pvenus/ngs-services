@@ -1,6 +1,6 @@
 import {fileUpdateType,fileUpdatePds} from './file-update-envelope.mjs';
 import {assemblyTypes,assemblyPds} from './assembly-contract.mjs';
-import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
+import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType,uiAssetTypes,uiAssetImportType} from './cinematic-envelope.mjs';
 import {mapTypes,mapPds} from './map-contract.mjs';
 import {canonical} from './envelope.mjs';
 
@@ -75,6 +75,15 @@ export function verifyCinematicPlaybackReadback(candidate,value){
 export function verifyExtraCinematicReadback(candidate,value){
  if(!value||value.ok!==true||value.resultRef!==candidate.resultRef)return false;
  const keys=Object.keys(value).sort().join(',');
+ if(uiAssetTypes.includes(candidate.family)){
+  const m=value.manifest,manual=candidate.family===uiAssetImportType,h=v=>typeof v==='string'&&/^[a-f0-9]{64}$/u.test(v);
+  return keys==='manifest,ok,resultRef'&&m&&Object.keys(m).sort().join(',')==='bytes,designSha256,height,kind,officialRequestId,origin,projectId,schemaVersion,sha256,title,width'&&
+   candidate.resultRef===`binari/ui/assets/${candidate.officialRequestId}/manifest.json`&&m.schemaVersion==='ngs.ui-asset-result.v1'&&m.projectId==='binari'&&
+   m.officialRequestId===candidate.officialRequestId&&m.kind===candidate.kind&&m.title===candidate.title&&h(m.sha256)&&
+   Number.isInteger(m.bytes)&&m.bytes>0&&m.bytes<=8*1024*1024&&[m.width,m.height].every(n=>Number.isInteger(n)&&n>=1&&n<=4096)&&
+   (manual?m.origin==='manual'&&m.designSha256===null&&m.sha256===candidate.sha256:m.origin==='imagegen'&&h(m.designSha256));
+ }
+
  if([cinematicSourceType,backgroundSourceType,backgroundPixelType].includes(candidate.family)){
   const pixel=candidate.family===backgroundPixelType,background=pixel||candidate.family===backgroundSourceType;
   const m=value.manifest;

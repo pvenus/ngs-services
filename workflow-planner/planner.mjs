@@ -26,7 +26,7 @@ import {buildPropGeneratePlan,exactPropTask,isPropRef,isPropScaleKey,propKeys,pr
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,backgroundAnimationKeys,backgroundAnimationStages,backgroundAnimationStageSchema,sequenceOperations,cinematicArchiveType,propAnimationRemoveType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic,allCinematicTypes} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicTask,cinematicTaskType,cinematicInvalid,cinematicUnavailable,cinematicResultRef,validateCinematic,cinematicSequenceType,cinematicSequenceTask,cinematicSequenceTaskType,cinematicSequenceResultRef,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackTask,cinematicPlaybackResultRef,validateCinematicPlaybackUpdate,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,backgroundAnimationKeys,backgroundAnimationStages,backgroundAnimationStageSchema,sequenceOperations,cinematicArchiveType,propAnimationRemoveType,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic,allCinematicTypes,uiAssetTypes} from './cinematic-envelope.mjs';
 import {verifyCinematicReadback,verifyCinematicSequenceReadback,verifyCinematicPlaybackReadback,verifyExtraCinematicReadback} from './cinematic-readback.mjs';
 
 export const portraitPixelTaskType='npc.portrait-pixel';
@@ -41,7 +41,7 @@ export function checkRow(row){
  const site=exact(row,[...rowKeys,'sourceId','sourceKey'])&&row.sourceId==='space'&&
   typeof row.sourceKey==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(row.sourceKey)&&
   row.officialRequestId==='request.official.'+sha(canonical(['request.official.v1','space',row.projectId,row.sourceKey]));
- ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,fileDeleteType,fileUpdateType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,...allCinematicTypes,...propTypes,...mapTypes,...assemblyTypes].includes(row.requestType)&&row.projectId==='binari'&&
+ ensure((exact(row,rowKeys)||site)&&typeof row.officialRequestId==='string'&&identity.test(row.officialRequestId)&&['npc.workflow',conceptCategoryRequestType,npcPlanningUpdateType,npcPlanningAddType,audioRequestType,audioDeleteType,fileDeleteType,fileUpdateType,audioSeparateType,motion2DRequestType,npcAnimationRegenerateType,propImageType,...allCinematicTypes,...uiAssetTypes,...propTypes,...mapTypes,...assemblyTypes].includes(row.requestType)&&row.projectId==='binari'&&
    row.status==='registered'&&Number.isSafeInteger(row.registeredAt)&&row.registeredAt>=0&&
    typeof row.payloadSha256==='string'&&/^[a-f0-9]{64}$/.test(row.payloadSha256),'WORKFLOW_ROW_INVALID');
  if(assemblyTypes.includes(row.requestType)){
@@ -527,12 +527,12 @@ export class PlannerStore{
      continue;
     }
     if(extraCinematicTypes.includes(row.request_type)){
-     if(!this.#cinematicEnabled)continue;
+     if(!this.#cinematicEnabled&&!uiAssetTypes.includes(row.request_type))continue;
      const plan=restoreStoredPlan(row),rows=evidence.all(row.official_request_id,4);
      if(!plan||rows.length!==plan.tasks.length||!plan.tasks.every(t=>rows.some(r=>exactStoredTask(r,t))))continue;
      const final=plan.tasks.at(-1),resultRef=rows.find(r=>r.task_id===final.id)?.result_ref;
      if(typeof resultRef!=='string')continue;
-     if(row.request_type===cinematicSourceType&&!/^binari\/cinematics\/sources\/[a-f0-9]{64}\.json$/u.test(resultRef)||
+     if(uiAssetTypes.includes(row.request_type)&&resultRef!==`binari/ui/assets/${row.official_request_id}/manifest.json`||row.request_type===cinematicSourceType&&!/^binari\/cinematics\/sources\/[a-f0-9]{64}\.json$/u.test(resultRef)||
         [backgroundSourceType,backgroundPixelType].includes(row.request_type)&&!/^binari\/cinematics\/backgrounds\/[a-f0-9]{64}\.json$/u.test(resultRef)||
         row.request_type===cinematicArchiveType&&resultRef!=='binari/cinematics/sequence-archive.json'||
         row.request_type===propAnimationRemoveType&&!/^prop\.package\.[a-f0-9]{64}$/u.test(resultRef))continue;
@@ -603,7 +603,7 @@ export class PlannerStore{
     await this.#readCinematicPublication({...out,family:backgroundAnimationType}))))).every(Boolean);}catch{return false;}
   }
   if(extraCinematicTypes.includes(publication.family)){
-   if(!this.#cinematicEnabled||typeof this.#readCinematicPublication!=='function')return false;
+   if((!this.#cinematicEnabled&&!uiAssetTypes.includes(publication.family))||typeof this.#readCinematicPublication!=='function')return false;
    try{return verifyExtraCinematicReadback(publication,await this.#readCinematicPublication(publication));}catch{return false;}
   }
   if(['cinematic','cinematic-sequence','cinematic-playback'].includes(publication.family)){

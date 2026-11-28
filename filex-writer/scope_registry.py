@@ -15,8 +15,8 @@ SCHEMA='ngs.filex-writer-scopes.v1'
 REGISTRY=Path(__file__).with_name('scopes.json')
 IDENT=r'[a-z][a-z0-9-]{0,39}'
 CREDENTIALS=frozenset(('npc','concept','motion','media'))
-PROFILES=frozenset(('npc','concept','motion','media','audio','props','cinematics'))
-PROFILE_CREDENTIAL=MappingProxyType({'npc':'npc','concept':'concept','motion':'motion','media':'media','audio':'concept','props':'concept','cinematics':'media'})
+PROFILES=frozenset(('npc','concept','motion','media','audio','props','cinematics','ui'))
+PROFILE_CREDENTIAL=MappingProxyType({'npc':'npc','concept':'concept','motion':'motion','media':'media','audio':'concept','props':'concept','cinematics':'media','ui':'media'})
 RECEIPT_TOKEN=r'(?:[A-Za-z0-9_.:-]|%[a-fA-F0-9]{2}){1,384}'
 HEX=r'[a-f0-9]{64}'
 CAPS='/v1/capabilities'
@@ -50,6 +50,7 @@ _ALLOW=MappingProxyType({
  'motion':(frozenset({'/v1/snapshot','/v1/object','/v1/asset'}),frozenset({'/v1/asset','/v1/batch','/v1/cas'})),
  'media':(_EXACT,frozenset({'/v1/media-artifacts/publish'})),
  'audio':(_EXACT,frozenset(_AUDIO_POST)),
+ 'ui':(_EXACT,frozenset({'/v1/workflow/ui/assets','/v1/workflow/ui/assets/result'})),
  'props':(_EXACT,frozenset(_PROPS_POST)),
  'cinematics':(_EXACT,frozenset('/v1/workflow/cinematics'+p for p in
   ('','/asset','/source-status','/result','-sequence','-sequence/frame','-sequence/result','-playback','-playback/target-status','-playback/result','-source','-source/result','-source/reconcile',
@@ -99,6 +100,7 @@ def allowed(profile,method,path):
 def _special_caps(profile,folder):
     entries={
        'media':{'mediaArtifactsV1':True},
+       'ui':{'workflowUiAssetV1':True},
        'audio':{'workflowAudioResultV1':True,'workflowAudioSeparateV1':True,'workflowAudioDeleteV1':True},
        'props':{'workflowPropPackageV1':True,'workflowPropAssemblyBindingsV1':True,'workflowPinnedPropFolderDeleteV1':True,'workflowPropAnimationRemoveV1':True},
        'cinematics':{'workflowMapMetadataV1':True,'workflowFileUpdateV1':True,'workflowAssemblyV1':True,'workflowCinematicV1':True,'workflowCinematicSequenceV1':True,'workflowCinematicPlaybackV1':True,'workflowCinematicSourceV1':True,'workflowBackgroundSourceV1':True,'workflowBackgroundPixelV1':True,'workflowBackgroundAnimationV1':True,'workflowCinematicSequenceRemoveV1':True,'workflowPinnedCinematicTargetDeleteV1':True,'workflowPinnedBackgroundFileDeleteV1':True,'workflowPinnedMapFolderDeleteV1':True,'workflowPinnedAssemblyFolderDeleteV1':True},
@@ -150,11 +152,11 @@ def bind_scopes(registry, root, credentials, *, verify_mounts=None):
     from concept_store import ConceptStore
     from fenced_store import FencedOwnedNPCStore
     from motion_store import MotionStore
-    from media_store import MediaStore,CinematicProjectStore
+    from media_store import MediaStore,CinematicProjectStore,UiAssetStore
     from workflow_audio_store import AudioResult
     from prop_package_store import PropPackageStore
     constructors={'concept':ConceptStore,'npc':FencedOwnedNPCStore,'motion':MotionStore,
-                  'media':MediaStore,'props':PropPackageStore,'cinematics':CinematicProjectStore}
+                  'media':MediaStore,'props':PropPackageStore,'cinematics':CinematicProjectStore,'ui':UiAssetStore}
     stores={r.id:constructors[r.profile](roots[r.id]) for r in registry if r.profile!='audio'}
     for r in registry:
         if r.profile in ('concept','motion'):

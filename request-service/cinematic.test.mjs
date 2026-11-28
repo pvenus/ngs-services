@@ -73,3 +73,37 @@ test('local and independently verified Space background animations share exact r
  assert.equal((await submitSpace()).structuredContent.status,'registered');
  assert.deepEqual((await call('request_workflow_list',{limit:8})).structuredContent.requests.map(x=>x.payload),[payload,payload]);
 });
+
+test('official UI asset requests are advertised and submitted without a cinematic feature flag',async t=>{
+ const parent=await mkdtemp(join(await realpath(tmpdir()),'ui-asset-rs-'));
+ t.after(()=>rm(parent,{recursive:true,force:true}));
+ let ready=false;
+ const supported=['ui.asset.generate','ui.asset.import'];
+ const server=createRequestService({directory:join(parent,'inbox'),cinematicEnabled:false,
+  cinematicOperationReadiness:type=>ready&&supported.includes(type)});
+ await new Promise(resolve=>server.listen(0,host,resolve));
+ t.after(()=>new Promise(resolve=>server.close(resolve)));
+ const url='http://'+host+':'+server.address().port+'/mcp';
+ const rpc=async(method,params={})=>{
+  const answer=await fetch(url,{method:'POST',headers:{Accept:'application/json, text/event-stream','Content-Type':'application/json'},
+   body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});
+  return (await answer.json()).result;
+ };
+ const allowed=async()=> (await rpc('tools/list')).tools[0].inputSchema.properties.requestType.enum;
+ assert.equal((await allowed()).some(type=>supported.includes(type)),false);
+ ready=true;
+ assert.equal((await allowed()).filter(type=>supported.includes(type)).length,2);
+ assert.equal((await allowed()).includes(cinematicType),false);
+ for(const mode of ['generate','import']){
+  const payload={projectId:'binari',schemaVersion:'ngs.ui-asset-'+mode+'.v1',kind:'button',title:'들어가기',
+   ...(mode==='generate'?{prompt:'한지로 만든 가로형 버튼'}:{sha256:'a'.repeat(64)})};
+  const arguments_={sourceId:'local',requestType:'ui.asset.'+mode,idempotencyKey:'fixture-ui-'+mode,payload};
+  const accepted=await rpc('tools/call',{name:'request_submit',arguments:arguments_});
+  assert.equal(accepted.isError,false,JSON.stringify(accepted.structuredContent));
+  assert.equal(accepted.structuredContent.status,'registered');
+  const invalid=await rpc('tools/call',{name:'request_submit',arguments:{...arguments_,idempotencyKey:'bad-ui-'+mode,payload:{...payload,kind:'unsupported'}}});
+  assert.equal(invalid.isError,true);
+ }
+ const listing=(await rpc('tools/call',{name:'request_workflow_list',arguments:{limit:8}})).structuredContent.requests;
+ assert.deepEqual(listing.map(job=>job.requestType).sort(),supported);
+});

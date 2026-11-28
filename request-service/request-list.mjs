@@ -16,7 +16,7 @@ import {audioSeparateType} from './audio-separate-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
 import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
 import {propTypes,propGenerateType,propRegenerateType,propScaleType,propAnimationType} from './prop-generate-envelope.mjs';
-import {cinematicType,cinematicSequenceType,cinematicPlaybackType,allCinematicTypes,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicSequenceType,cinematicPlaybackType,allCinematicTypes,cinematicSourceType,uiAssetTypes,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
 import {propImageType} from './prop-image-envelope.mjs';
 export const listTool='request_list',workflowListTool='request_workflow_list';
 export const statuses=Object.freeze(['registered',...workflowStatuses,'cancelled']);
@@ -54,6 +54,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${cinematicType}' THEN official_request_id
    WHEN '${cinematicSequenceType}' THEN official_request_id
    WHEN '${cinematicPlaybackType}' THEN json_extract(payload_json,'$.sequenceId')
+   ${uiAssetTypes.map(t=>"WHEN '"+t+"' THEN official_request_id").join(' ')}
    WHEN '${cinematicSourceType}' THEN official_request_id
    WHEN '${backgroundSourceType}' THEN official_request_id
    WHEN '${backgroundPixelType}' THEN official_request_id
@@ -93,6 +94,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${cinematicType}' THEN '시네마틱 영상 생성'
    WHEN '${cinematicSequenceType}' THEN '시네마틱 프레임 생성'
    WHEN '${cinematicPlaybackType}' THEN '시네마틱 재생 수정'
+   ${uiAssetTypes.map(t=>"WHEN '"+t+"' THEN json_extract(payload_json,'$.title')").join(' ')}
    WHEN '${cinematicSourceType}' THEN json_extract(payload_json,'$.title')
    WHEN '${backgroundSourceType}' THEN json_extract(payload_json,'$.title')
    WHEN '${backgroundAnimationType}' THEN '배경 애니메이션 생성'
