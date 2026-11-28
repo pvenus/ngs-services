@@ -85,6 +85,62 @@ s.close();"""
                 with e:self.assertEqual(e.code,expected);return json.load(e)
         return root,db,claim,call,payload,still
 
+    def test_upscale_uses_exact_published_input_and_commits_only_after_45_frames(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from project_data_service.filex_read import digest
+        root,db,original,call,p,still=self.sequence()
+        original_id=original['officialRequestId']
+        original_ref='binari/cinematics/sequences/'+original_id+'/manifest.json'
+        orig_frames=[]
+        for i in range(45):
+            raw=png(i);m={'index':i,'bytes':len(raw),'sha256':sha(raw)}
+            orig_frames.append(m)
+            call('/frame',{'claim':original,'frame':{**m,'base64':base64.b64encode(raw).decode()}})
+        orig={'schemaVersion':'ngs.cinematic-sequence-result.v1','projectId':'binari','officialRequestId':original_id,
+              'sourceSha256':p['sourceSha256'],'width':128,'height':128,'masterFps':24,'frameCount':45,
+              'frames':orig_frames,'playback':PLAYBACK}
+        call('',{'claim':original,'manifest':orig})
+        dest='request.official.'+'6'*64
+        ref='binari/cinematics/sequences/'+dest+'/manifest.json'
+        manifest_file=root/'sequences'/original_id/'manifest.json'
+        saved=manifest_file.read_bytes()
+        j='cinematic.sequence.upscale';k='cinematic_sequence_upscale';schema='ngs.cinematic-sequence-upscale.v1'
+        inp={'sequenceId':original_id,'sourceSha256':p['sourceSha256'],'expectedRevision':0,'playback':PLAYBACK}
+        wire=json.dumps({'schemaVersion':schema,'projectId':'binari',**inp},sort_keys=True,separators=(',',':'))
+        c={'officialRequestId':dest,'taskId':'workflow.task.'+digest([dest,k]),'projectId':'binari',
+           'claimStamp':8,'payloadSha256':sha(wire.encode())}
+        with sqlite3.connect(db) as q:
+            q.execute("UPDATE workflow_tasks SET status='completed',result_ref=? WHERE official_request_id=?",(original_ref,original_id))
+            q.execute("""INSERT INTO workflow_runs (official_request_id,project_id,request_type,schema_version,payload,payload_sha256,registered_at,state,updated_at,reason)
+                     VALUES(?,?,?,?,?,?,1,'planned',1,NULL)""",(dest,'binari',j,schema,wire,c['payloadSha256']))
+            q.execute("""INSERT INTO workflow_tasks (task_id,official_request_id,task_key,task_type,worker_type,task_input,result_ref,updated_at,depends_on_task_id,status)
+                     VALUES(?,?,?,?,'animation',?,NULL,8,NULL,'running')""",(c['taskId'],dest,k,j,json.dumps(inp)))
+        def current():
+            with sqlite3.connect(db) as q:
+                return q.execute('SELECT status,save_started_at,result_ref FROM workflow_tasks WHERE task_id=?',(c['taskId'],)).fetchone()
+        call('/upscale',None,503)
+        with patch.dict('os.environ',{'WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE':'1'}):
+            self.assertEqual(call('/upscale',None)['schemaVersion'],'workflow.cinematic-sequence-upscale.v1')
+            self.assertEqual(call('/read',{'claim':c}),{'input':inp,'original':orig})
+            self.assertEqual(base64.b64decode(call('/upscale-input-frame',{'claim':c,'index':7})['base64']),png(7))
+            call('/upscale-input-frame',{'claim':c,'index':45},403)
+            self.assertEqual(current(),('running',None,None))
+            up=[]
+            for i in range(45):
+                raw=png(i,256,256);m={'index':i,'bytes':len(raw),'sha256':sha(raw)};up.append(m)
+                with patch('project_data_service.workflow_save_reservation.time',SimpleNamespace(time=lambda: 100+i)):
+                    call('/frame',{'claim':c,'frame':{**m,'base64':base64.b64encode(raw).decode()}})
+                self.assertEqual(current(),('running',100000,None))
+            m={**orig,'officialRequestId':dest,'width':256,'height':256,'frames':up,
+               'upscale':{'model':'seedvr2-7b-fp16','scale':2,'sourceWidth':128,'sourceHeight':128,'sourceSequenceId':original_id}}
+            with patch('project_data_service.workflow_save_reservation.time',SimpleNamespace(time=lambda: 200)):
+                self.assertEqual(call('',{'claim':c,'manifest':m}),{'ok':True,'resultRef':ref})
+            self.assertEqual(current(),('completed',None,ref))
+            self.assertEqual(call('/upscale/result',{'officialRequestId':dest})['manifest'],m)
+            call('/frame',{'claim':c,'frame':{}},403)
+            self.assertEqual(manifest_file.read_bytes(),saved)
+
     def test_background_animation_group_keeps_pinned_sources_and_exact_independent_sequence_results(self):
         self.background_graph_test(staged=False)
 

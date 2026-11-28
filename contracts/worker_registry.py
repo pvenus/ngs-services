@@ -83,6 +83,16 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
        policy.get('apply')!='authorized-mutation'):
     raise ValueError('LAYA_FILE_METADATA_ADAPTER_CONTRACT')
+  elif worker=='animation' and action['id']=='cinematic.sequence.upscale':
+   ident=action['id']
+   expected=[{'id':'upscale','operation':'media.frames.upscale','dependsOn':[]},
+             {'id':'publish','operation':'media.sequence.publish','dependsOn':['upscale']}]
+   if (action.get('modelCalls')!=1 or action.get('dependsOn')!=[] or action.get('executionStages')!=expected or
+       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.cinematic-sequence-upscale.v1' or
+       registry['requestTypes'].get(ident,{}).get('stageIds')!=[ident] or
+       policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
+       policy.get('apply')!='authorized-mutation'):
+    raise ValueError('LAYA_CINEMATIC_UPSCALE_ADAPTER_CONTRACT')
   elif worker=='animation':
    stage_ids=['background.animation-cinematic','background.animation-pixel']
    pixel=action['id']=='background.animation-pixel'

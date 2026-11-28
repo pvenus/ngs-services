@@ -1,11 +1,12 @@
 """Claim-bound native RGB frame staging and atomic sequence publication."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from hashlib import sha256
 import base64
 import math
 import os
+from urllib.parse import urlsplit
 
-from .workflow_save_reservation import optionally_save
+from .workflow_save_reservation import optionally_save, save_handoff
 from .filex_read import digest
 from .workflow_cinematic import (
     WorkflowCinematic,READY_FILE as OLD_READY_FILE,serve as serve_cinematic,
@@ -16,8 +17,12 @@ from .workflow_motion_2d import strict_json
 
 PATH='/v1/cinematics/ownership/workflow-sequence'
 WRITER='/v1/workflow/cinematics-sequence'
-ROUTES=(PATH,*[PATH+'/'+suffix for suffix in ('source-status','background-status','read','asset','frame','result')])
+ROUTES=(PATH,*[PATH+'/'+suffix for suffix in ('source-status','background-status','read','asset','frame','result','upscale','upscale/result','upscale-input-frame')])
 CAPABILITY='workflow.cinematic-sequence-write.v1'
+UPSCALE_TYPE='cinematic.sequence.upscale'
+UPSCALE_SCHEMA='ngs.cinematic-sequence-upscale.v1'
+UPSCALE_KEY='cinematic_sequence_upscale'
+UPSCALE_FIELDS=('sequenceId','sourceSha256','expectedRevision','playback')
 TYPE='cinematic.sequence.generate'
 SCHEMA='ngs.cinematic-sequence-generate.v1'
 RENDER='cinematic_sequence_render'
@@ -73,7 +78,7 @@ def short_background(p):
 
 def upscale_proof(m,compact):
     u=m.get('upscale')
-    base=('model','scale','sourceWidth','sourceHeight')
+    base=('model','scale','sourceWidth','sourceHeight')+(() if 'group' in m else ('sourceSequenceId',))
     reduced=False
     if keys(u,(*base,'pixelCorrection')):
         c=u['pixelCorrection']
@@ -90,13 +95,18 @@ def upscale_proof(m,compact):
             (m['width'],m['height'])==(u['sourceWidth']*scale,u['sourceHeight']*scale))
 
 
-def verify_manifest(m,oid,inp,group=None):
+def verify_manifest(m,oid,inp,group=None,original=None):
     upscale=type(m)is dict and 'upscale' in m
     compact=group is not None and short_background(inp['playback'])
     count=8 if compact else COUNT
-    need((not upscale or group is not None) and (not compact or upscale))
+    need((not upscale or group is not None or original is not None) and (not compact or upscale) and (original is None or upscale))
     fields=MANIFEST if group is None else MANIFEST|{'group'}
     if upscale:fields=fields|{'upscale'}
+    if original is not None:
+        u=m['upscale']
+        need(keys(u,('model','scale','sourceWidth','sourceHeight','sourceSequenceId')) and
+             u['sourceSequenceId']==inp['sequenceId']==original['officialRequestId'] and oid!=u['sourceSequenceId'] and
+             (u['sourceWidth'],u['sourceHeight'])==(original['width'],original['height']))
     need(keys(m,fields) and
          (group is None or m['group']==group) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
          m['projectId']=='binari' and m['officialRequestId']==oid and m['sourceSha256']==inp['sourceSha256'] and
@@ -105,6 +115,24 @@ def verify_manifest(m,oid,inp,group=None):
          (upscale_proof(m,compact) if upscale else all(128<=m[k]<=512 and m[k]%32==0 for k in ('width','height'))) and
          type(m['frames'])is list and len(m['frames'])==count and playback(m['playback'])==inp['playback'])
     need(sum(frame_meta(row,i)['bytes'] for i,row in enumerate(m['frames']))<=MAX_TOTAL*(2 if upscale else 1))
+
+
+def upscale_graph(db,oid):
+    r=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
+    need(r is not None and r['request_type']==UPSCALE_TYPE and r['schema_version']==UPSCALE_SCHEMA and
+         r['project_id']=='binari' and r['state']=='planned' and r['reason'] in (None,'RS_COMPLETED'))
+    raw=r['payload'].encode('utf-8');p=strict_json(raw)
+    need(keys(p,('schemaVersion','projectId',*UPSCALE_FIELDS)) and p['schemaVersion']==UPSCALE_SCHEMA and
+         p['projectId']=='binari' and sha256(raw).hexdigest()==r['payload_sha256'] and
+         match(p['sequenceId'],OFFICIAL) and p['sequenceId']!=oid and match(p['sourceSha256'],HASH) and
+         type(p['expectedRevision']) is int and 0<=p['expectedRevision']<SAFE_INT)
+    playback(p['playback'])
+    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 2',(oid,)).fetchall()
+    need(len(rows)==1);t=rows[0]
+    inp={k:p[k] for k in UPSCALE_FIELDS}
+    need(t['task_id']=='workflow.task.'+digest([oid,UPSCALE_KEY]) and t['task_key']==UPSCALE_KEY and t['task_type']==UPSCALE_TYPE and
+         t['worker_type']=='animation' and t['depends_on_task_id'] is None and strict_json(t['task_input'].encode('utf-8'))==inp)
+    return r,t,inp
 
 
 def sequence_graph(db,oid):
@@ -208,7 +236,7 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         with self.planner.snapshot():pass
         return self.capabilities()
     def seq_call(self,path,body,*,missing=False):
-        need(path in ('','/frame','/result'))
+        need(path in ('','/frame','/result','/upscale-input'))
         with self.writer_factory() as tx:
             r=tx.call('POST',WRITER+path,body,missing=missing)
         if r is None:raise FileNotFoundError('cinematic sequence not found')
@@ -258,10 +286,53 @@ class WorkflowCinematicSequence(WorkflowCinematic):
                  0<=r['registered_at']<=claim['claimStamp'])
         yield save_id,inp,group,refs,stage
 
+    def upscale_ready(self):
+        # Shared replicas must support derivative manifests before allowing writes.
+        if os.environ.get('WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE')!='1' or not self.ready():return False
+        with self.writer_factory() as tx:return tx.capabilities().get('workflowCinematicUpscaleV1') is True
+
+    def upscale_source(self,inp):
+        source=self.seq_call('/upscale-input',{'sequenceId':inp['sequenceId'],'expectedRevision':inp['expectedRevision']},missing=True)
+        need(keys(source,('manifest','playback')) and source['playback']==inp['playback'])
+        m=source['manifest']
+        verify_manifest(m,inp['sequenceId'],{'sourceSha256':inp['sourceSha256'],'playback':m['playback']})
+        return m
+
+    def upscale_operate(self,op,packet):
+        need(os.environ.get('WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE')=='1' and op in ('read','upscale-input-frame','frame','publish') and
+             keys(packet,('claim','index') if op=='upscale-input-frame' else ('claim','frame') if op=='frame'
+                  else ('claim','manifest') if op=='publish' else ('claim',)))
+        c=packet['claim']
+        with exact_claim(self.planner,c,upscale_graph) as (oid,inp), (save_handoff(
+                self.planner,c,continuation=True,require_reservation=True) if op in ('frame','publish') else nullcontext()) as reservation:
+            if op=='read':return {'input':inp,'original':self.upscale_source(inp)}
+            if op=='upscale-input-frame':
+                i=packet['index'];need(type(i)is int and 0<=i<COUNT)
+                return self.seq_call('/upscale-input',{'sequenceId':inp['sequenceId'],'expectedRevision':inp['expectedRevision'],'index':i},missing=True)
+            if op=='frame':
+                f=packet['frame']
+                need(keys(f,('index','sha256','bytes','base64')) and type(f['base64'])is str and
+                     0<len(f['base64'])<=4*((MAX_FRAME+2)//3))
+                frame_meta({k:v for k,v in f.items() if k!='base64'})
+                out=self.seq_call('/frame',{'officialRequestId':oid,'frame':f,'claimStamp':c['claimStamp']})
+                need(out=={'ok':True,'index':f['index'],'sha256':f['sha256']})
+                return out
+            original=self.upscale_source(inp)
+            manifest=packet['manifest']
+            verify_manifest(manifest,oid,inp,original=original)
+            need(self.seq_call('',{'manifest':manifest,'claimStamp':c['claimStamp']})==manifest)
+            reservation.complete(ref(oid))
+            return {'ok':True,'resultRef':ref(oid)}
+
     def operate(self,op,packet):
         if op=='background-status':return self.background_status(packet)
         if op=='source-status':return self.source_status(packet)
         if op=='result':return self.result(packet)
+        c=packet.get('claim') if isinstance(packet,dict) else None
+        if type(c)is dict and match(c.get('officialRequestId'),OFFICIAL):
+            with self.planner.snapshot() as db:
+                r=db.execute('SELECT request_type FROM workflow_runs WHERE official_request_id=?',(c['officialRequestId'],)).fetchone()
+            if r is not None and r['request_type']==UPSCALE_TYPE:return self.upscale_operate(op,packet)
         need(op in ('read','asset','frame','publish') and keys(packet,
              ('claim','frame') if op=='frame' else ('claim','manifest') if op=='publish' else ('claim',)))
         with self.render_claim(packet['claim']) as (oid,inp,group,refs,stage), optionally_save(
@@ -314,14 +385,21 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         need(keys(packet,('officialRequestId',)) and match(packet['officialRequestId'],OFFICIAL))
         oid=packet['officialRequestId']
         with self.planner.snapshot() as db:
-            _,t,inp=sequence_graph(db,oid)
+            r=db.execute('SELECT request_type FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
+            derived=r is not None and r['request_type']==UPSCALE_TYPE
+            _,t,inp=(upscale_graph if derived else sequence_graph)(db,oid)
             need(t['status']=='completed' and t['result_ref']==ref(oid))
         m=self.seq_call('/result',packet,missing=True)
-        verify_manifest(m,oid,inp)
+        # The original was verified at publication. Do not invalidate an already
+        # published derivative if the user edits the original's playback later.
+        u=m.get('upscale',{})
+        original={'officialRequestId':inp['sequenceId'],'width':u.get('sourceWidth'),'height':u.get('sourceHeight')} if derived else None
+        verify_manifest(m,oid,inp,original=original)
         return {'ok':True,'resultRef':ref(oid),'manifest':m}
 
 
 def serve(handler):
+    ready=(PATH+'/upscale','workflow.cinematic-sequence-upscale.v1','upscale_ready') if urlsplit(handler.path).path==PATH+'/upscale' else (PATH+'/background-status','workflow.background-animation-write.v1')
     return serve_cinematic(handler,attribute='workflow_cinematic_sequence',path=PATH,capability=CAPABILITY,
                            body_limits={PATH:64*1024,PATH+'/frame':6*1024*1024},
-                           additional_ready=(PATH+'/background-status','workflow.background-animation-write.v1'))
+                           additional_ready=ready)

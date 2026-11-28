@@ -119,3 +119,20 @@ atomic scene publish, then archives each legacy entry under the private
 and private backups before retrying; never overwrite either tree. Check the
 canonical reader and sampled playback before resuming sync. Do not expose
 the Space capability until the matching services and readers are live.
+
+### Formal 2× upscale of a published animation
+
+`cinematic.sequence.upscale` pins one existing non-upscaled, standalone
+45-frame PNG sequence by its official request ID, source digest and playback
+revision. The animated background and legacy MP4 paths are not eligible. SeedVR2
+reads and verifies each pinned frame; Wan is not invoked. The result is a new
+official ID in the same cinematic scene, with doubled width and height,
+unchanged frame count and timeline and `upscale.sourceSequenceId` provenance.
+The original sequence and playback files remain unchanged. Filex publishes the
+derived sequence, then PDS finalizes its save reservation and the planner
+verifies the published receipt.
+
+Activate `WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE=1` on PDS only after the
+derivative-aware replica readers and Filex writer have been deployed. Local
+browser intake checks the PDS capability. The worker also checks the scoped
+PDS capability and verifies SeedVR2 readiness before reading the frames.

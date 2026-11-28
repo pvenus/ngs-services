@@ -532,6 +532,7 @@ export class PlannerStore{
      if(!plan||rows.length!==plan.tasks.length||!plan.tasks.every(t=>rows.some(r=>exactStoredTask(r,t))))continue;
      const final=plan.tasks.at(-1),resultRef=rows.find(r=>r.task_id===final.id)?.result_ref;
      if(typeof resultRef!=='string')continue;
+     if(row.request_type==='cinematic.sequence.upscale'&&resultRef!==cinematicSequenceResultRef(row.official_request_id))continue;
      if(uiAssetTypes.includes(row.request_type)&&resultRef!==`binari/ui/assets/${row.official_request_id}/manifest.json`||row.request_type===cinematicSourceType&&!/^binari\/cinematics\/sources\/[a-f0-9]{64}\.json$/u.test(resultRef)||
         [backgroundSourceType,backgroundPixelType].includes(row.request_type)&&!/^binari\/cinematics\/backgrounds\/[a-f0-9]{64}\.json$/u.test(resultRef)||
         row.request_type===cinematicArchiveType&&resultRef!=='binari/cinematics/sequence-archive.json'||

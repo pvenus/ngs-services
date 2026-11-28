@@ -99,6 +99,7 @@ export const backgroundAnimationStages={cinematic:['wan','upscale','publish'],pi
 export const backgroundAnimationKeys={cinematic:'background_animation_cinematic',pixel:'background_animation_pixel'};
 export const cinematicArchiveType='cinematic.sequences.remove',cinematicArchiveRequestSchema='ngs.cinematic-sequences-remove.v1';
 export const propAnimationRemoveType='prop.animation.remove',propAnimationRemoveRequestSchema='ngs.prop-animation-remove.v1';
+export const cinematicUpscaleType='cinematic.sequence.upscale',cinematicUpscaleSchema='ngs.cinematic-sequence-upscale.v1';
 const familyBase={projectId:{const:'binari'}}, hashSchema={type:'string',pattern:'^[a-f0-9]{64}$',minLength:64,maxLength:64};
 const slugRE=/^[a-z0-9]+(?:[-._][a-z0-9]+)*$/u;
 const slugSchema={type:'string',minLength:2,maxLength:80,pattern:slugRE.source};
@@ -125,6 +126,13 @@ const uiSpec=(mode)=> {
 };
 export const extraCinematicRequests=Object.freeze({
  [uiAssetGenerateType]:uiSpec('generate'),[uiAssetImportType]:uiSpec('import'),
+ [cinematicUpscaleType]:{schema:cinematicUpscaleSchema,key:'cinematic_sequence_upscale',worker:'animation',route:'/v1/cinematics/ownership/workflow-sequence/upscale',
+  capability:'workflow.cinematic-sequence-upscale.v1',
+  payload:req(cinematicUpscaleSchema,{sequenceId:{type:'string',minLength:81,maxLength:81,pattern:sequenceId.source},
+   sourceSha256:hashSchema,expectedRevision:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER-1},playback:cinematicPlaybackSchema}),
+  fields:['sequenceId','sourceSha256','expectedRevision','playback'],valid:v=>typeof v.sequenceId==='string'&&v.sequenceId.length===81&&
+   sequenceId.test(v.sequenceId)&&validHash(v.sourceSha256)&&integer(v.expectedRevision,0,Number.MAX_SAFE_INTEGER-1)&&validCinematicPlayback(v.playback)},
+
  [cinematicSourceType]:{schema:cinematicSourceRequestSchema,key:'cinematic_source_generate',worker:'image',route:'/v1/cinematics/ownership/workflow-source',
   capability:'workflow.cinematic-source-write.v1',
   payload:req(cinematicSourceRequestSchema,{title:{type:'string',minLength:1,maxLength:120},prompt:{type:'string',minLength:1,maxLength:2000}}),

@@ -28,14 +28,15 @@ class SaveReservation:
         self.claim=claim
         self.started=None
 
-    def _change(self, sql, args):
+    def _change(self, sql, args, *, returning=False):
         self.verifier.check_path()
         with closing(sqlite3.connect(self.verifier.path.as_uri()+'?mode=rw', uri=True, timeout=5, isolation_level=None)) as db:
             db.execute('PRAGMA trusted_schema=OFF')
             db.execute('BEGIN IMMEDIATE')
             try:
                 self.verifier.check_path()
-                changed=db.execute(sql,args).rowcount
+                result=db.execute(sql,args)
+                changed=result.fetchall() if returning else result.rowcount
                 db.execute('COMMIT')
                 return changed
             except BaseException:
@@ -49,14 +50,14 @@ class SaveReservation:
             with self.verifier.snapshot() as db:
                 if not any(row['name']=='save_started_at' for row in db.execute('PRAGMA table_info(workflow_tasks)')):
                     return
-        n=self._change("""UPDATE workflow_tasks SET save_started_at=coalesce(save_started_at,?)
+        rows=self._change("""UPDATE workflow_tasks SET save_started_at=coalesce(save_started_at,?)
             WHERE task_id=? AND official_request_id=? AND updated_at=? AND (?=0 OR worker_type='document')
             AND status='running' AND result_ref IS NULL AND (?=1 OR save_started_at IS NULL)
             AND EXISTS(SELECT 1 FROM workflow_runs r WHERE r.official_request_id=workflow_tasks.official_request_id
-                AND r.state='planned' AND r.project_id='binari' AND r.payload_sha256=? AND r.reason IS NULL)""",
-            (start,claim['taskId'],claim['officialRequestId'],claim['claimStamp'],int(document),int(continuation),claim['payloadSha256']))
-        require(n==1)
-        self.started=start
+                AND r.state='planned' AND r.project_id='binari' AND r.payload_sha256=? AND r.reason IS NULL) RETURNING save_started_at""",
+            (start,claim['taskId'],claim['officialRequestId'],claim['claimStamp'],int(document),int(continuation),claim['payloadSha256']),returning=True)
+        require(len(rows)==1)
+        self.started=rows[0][0]
 
     def complete(self, result_ref):
         """Finalize only the exact reserved save, after storage returns its receipt."""

@@ -237,7 +237,7 @@ def seq_frame_meta(value,index=None):
  return value
 
 def seq_manifest(m):
- require(type(m)is dict and set(m) in (SEQUENCE_KEYS,SEQUENCE_KEYS|{'group'},SEQUENCE_KEYS|{'group','upscale'}) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
+ require(type(m)is dict and set(m) in (SEQUENCE_KEYS,SEQUENCE_KEYS|{'group'},SEQUENCE_KEYS|{'group','upscale'},SEQUENCE_KEYS|{'upscale'}) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
   m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
   cinematic_match(m['sourceSha256'],CINEMATIC_DIGEST) and type(m['masterFps'])is int and m['masterFps']==24 and
   type(m['frameCount'])is int and
@@ -250,10 +250,13 @@ def seq_manifest(m):
  if 'upscale' in m:
   u=m['upscale']
   base={'model','scale','sourceWidth','sourceHeight'}
-  require(type(u)is dict and set(u) in (base,base|{'pixelCorrection'}) and u['model']=='seedvr2-7b-fp16' and
+  derived='group' not in m
+  require(not derived or type(u)is dict and set(u)==base|{'sourceSequenceId'} and
+   cinematic_match(u['sourceSequenceId'],CINEMATIC_ID) and u['sourceSequenceId']!=m['officialRequestId'],'sequence derivative lineage')
+  require(type(u)is dict and (derived or set(u) in (base,base|{'pixelCorrection'})) and u['model']=='seedvr2-7b-fp16' and
    type(u['scale'])is int and u['scale']==2 and
    all(type(u[k])is int and 128<=u[k]<=512 and u[k]%32==0 for k in ('sourceWidth','sourceHeight')),'sequence upscale geometry')
-  pixel=type(m['group'])is dict and m['group'].get('variant')=='pixel'
+  pixel=type(m.get('group'))is dict and m['group'].get('variant')=='pixel'
   reduced=compact and pixel
   if 'pixelCorrection' in u:
    c=u['pixelCorrection'];keys={'method','upscaledFramesSha256'}|({'downscale'} if reduced else set())
@@ -327,8 +330,8 @@ class CinematicSequenceStore(CinematicStore):
   require(type(p)is dict and set(p)=={'officialRequestId'},'sequence result request')
   with self.lock():return self._seq_result(p['officialRequestId'])
  def cinematic_sequence_frame(self,p):
-  require(type(p)is dict and set(p)=={'officialRequestId','frame'} and cinematic_match(p['officialRequestId'],CINEMATIC_ID),'sequence frame request')
-  oid=p['officialRequestId']; frame=p['frame']
+  require(type(p)is dict and set(p) in ({'officialRequestId','frame'},{'officialRequestId','frame','claimStamp'}) and cinematic_match(p['officialRequestId'],CINEMATIC_ID),'sequence frame request')
+  oid=p['officialRequestId']; frame=p['frame']; attempt=self._upscale_stage_suffix(p)
   require(type(frame)is dict and set(frame)=={'index','sha256','bytes','base64'} and type(frame['base64'])is str and
    len(frame['base64'])<=4*((SEQUENCE_MAX_FRAME+2)//3),'sequence frame packet')
   meta=seq_frame_meta({k:v for k,v in frame.items() if k!='base64'})
@@ -345,7 +348,7 @@ class CinematicSequenceStore(CinematicStore):
     if m['frames'][index]!=meta or self._read(self._seq_frames(final)/name,SEQUENCE_MAX_FRAME)!=data:
      raise Conflict('immutable sequence frame')
    else:
-    stage=self._seq_dir('.staged-'+oid)
+    stage=self._seq_dir('.staged-'+oid+attempt)
     folder=self._seq_frames(stage); dest=folder/name
     if dest.exists() or dest.is_symlink():
      if self._read(dest,SEQUENCE_MAX_FRAME)!=data:raise Conflict('sequence staged frame changed')
@@ -361,16 +364,21 @@ class CinematicSequenceStore(CinematicStore):
      self.write(dest,data)
      require(self._read(dest,SEQUENCE_MAX_FRAME)==data,'sequence stage readback')
    return {'ok':True,'index':index,'sha256':meta['sha256']}
+ def _upscale_stage_suffix(self,p):
+  if 'claimStamp' not in p:return ''
+  stamp=p['claimStamp'];require(type(stamp)is int and 0<stamp<2**53,'sequence attempt stamp')
+  return '-'+str(stamp)
  def cinematic_sequence_publish(self,p):
-  require(type(p)is dict and set(p)=={'manifest'},'sequence publish request')
-  manifest=seq_manifest(p['manifest']);oid=manifest['officialRequestId']
+  require(type(p)is dict and set(p) in ({'manifest'},{'manifest','claimStamp'}),'sequence publish request')
+  manifest=seq_manifest(p['manifest']);oid=manifest['officialRequestId'];attempt=self._upscale_stage_suffix(p)
+  require(bool(attempt)==('upscale' in manifest and 'group' not in manifest),'sequence upscale attempt binding')
   with self.lock():
    self._ensure_unretired_source(manifest['sourceSha256'])
    final=self._seq_dir(oid)
    if final.exists():
     if self._seq_result(oid)!=manifest:raise Conflict('immutable sequence manifest')
     return manifest
-   stage=self._seq_dir('.staged-'+oid)
+   stage=self._seq_dir('.staged-'+oid+attempt)
    self._seq_verify_frames(stage,manifest)
    self.write(stage/'manifest.json',wire(manifest))
    require(self._read(stage/'manifest.json',64*1024)==wire(manifest),'sequence pre-publication manifest readback')
@@ -428,6 +436,22 @@ class CinematicPlaybackStore(CinematicSequenceStore):
   entry=receipts/(str(rev)+'.json')
   receipt={'officialRequestId':edit['officialRequestId'],'state':state}
   return state,entry,receipt
+ def cinematic_upscale_input(self,p):
+  require(type(p)is dict and set(p) in ({'sequenceId','expectedRevision'},{'sequenceId','expectedRevision','index'}) and
+   type(p['expectedRevision'])is int and 0<=p['expectedRevision']<MAX_SAFE_INTEGER,'upscale input scope')
+  with self.lock():
+   folder,m=self._playback_base(p['sequenceId'])
+   self._ensure_unretired_source(m['sourceSha256'])
+   require(not hasattr(self,'_archived') or p['sequenceId'] not in self._archived(),'upscale source archived')
+   require('group' not in m and 'upscale' not in m,'upscale requires original cinematic')
+   current=self._playback_current(folder,m)
+   if current['revision']!=p['expectedRevision']:raise Conflict('upscale playback revision changed')
+   if 'index' not in p:return {'manifest':m,'playback':current['playback']}
+   i=p['index']
+   require(type(i)is int and 0<=i<len(m['frames']),'upscale frame index')
+   f=m['frames'][i];raw=self._read(self._seq_frames(folder)/f'{i:04}.png',SEQUENCE_MAX_FRAME)
+   require(seq_png(raw,f)==(m['width'],m['height']),'upscale input frame integrity')
+   return {**f,'base64':base64.b64encode(raw).decode('ascii')}
  def cinematic_playback_target(self,packet):
   require(type(packet)is dict and set(packet)=={'sequenceId','expectedRevision'} and
    type(packet['expectedRevision'])is int and 0<=packet['expectedRevision']<MAX_SAFE_INTEGER,'playback target')

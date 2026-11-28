@@ -9,7 +9,7 @@ export async function readCinematicPublication({officialRequestId,family,group})
  const path=family===fileUpdateType?fileUpdatePds:assemblyTypes.includes(family)?assemblyPds:mapTypes.includes(family)?mapPds:family===backgroundAnimationType?'/v1/cinematics/ownership/workflow-sequence':Object.hasOwn(extraCinematicRequests,family)?extraCinematicRequests[family].route:'/v1/cinematics/ownership/'+route;
  const r=await fetch('http://127.0.0.1:8030'+path+'/result',{
   method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(family===backgroundAnimationType?{officialRequestId,group}:{officialRequestId}),
-  signal:AbortSignal.timeout(family===backgroundAnimationType?20_000:5000),redirect:'error',cache:'no-store',
+  signal:AbortSignal.timeout(family===backgroundAnimationType||family==='cinematic.sequence.upscale'?20_000:5000),redirect:'error',cache:'no-store',
  });
  if(r.status!==200||!/^application\/json(?:;|$)/iu.test(r.headers.get('content-type')??'')){
   await r.body?.cancel();throw Error('CINEMATIC_READBACK_UNAVAILABLE');
@@ -39,16 +39,18 @@ export function verifyCinematicSequenceReadback(candidate,value){
  const upscale=Object.hasOwn(m??{},'upscale');
  const compact=!!candidate.group&&candidate.playback?.durationFrames===84&&candidate.playback?.speedCurve?.[0]?.rate===1/6;
  const count=compact?8:45,reduced=compact&&candidate.group.variant==='pixel';
- if(compact&&!upscale)return false;
+ if((compact||candidate.sequenceId)&&!upscale)return false;
  if(upscale){
   const u=m.upscale;
-  if(!candidate.group||!u||Object.keys(u).filter(k=>k!=='pixelCorrection').sort().join(',')!=='model,scale,sourceHeight,sourceWidth'||
+  if(!(candidate.group||candidate.sequenceId)||!u||
+   Object.keys(u).filter(k=>k!=='pixelCorrection').sort().join(',')!==(candidate.sequenceId?'model,scale,sourceHeight,sourceSequenceId,sourceWidth':'model,scale,sourceHeight,sourceWidth')||
+   (candidate.sequenceId&&u.sourceSequenceId!==candidate.sequenceId)||
    u.model!=='seedvr2-7b-fp16'||u.scale!==2||
    ![u.sourceWidth,u.sourceHeight].every(n=>Number.isInteger(n)&&n>=128&&n<=512&&n%32===0)||
    m.width!==u.sourceWidth*(reduced?1:2)||m.height!==u.sourceHeight*(reduced?1:2))return false;
   if(Object.hasOwn(u,'pixelCorrection')){
    const c=u.pixelCorrection,h=c?.upscaledFramesSha256;
-   if(candidate.group.variant!=='pixel'||!c||Object.keys(c).sort().join(',')!==(reduced?'downscale,method,upscaledFramesSha256':'method,upscaledFramesSha256')||
+   if(candidate.group?.variant!=='pixel'||!c||Object.keys(c).sort().join(',')!==(reduced?'downscale,method,upscaledFramesSha256':'method,upscaledFramesSha256')||
     (reduced&&c.downscale!==2)||c.method!=='reference-palette-v1'||typeof h!=='string'||h.length!==64||!/^[a-f0-9]{64}$/u.test(h))return false;
   }else if(reduced)return false;
  }
@@ -73,6 +75,7 @@ export function verifyCinematicPlaybackReadback(candidate,value){
 }
 
 export function verifyExtraCinematicReadback(candidate,value){
+ if(candidate.family==='cinematic.sequence.upscale')return verifyCinematicSequenceReadback(candidate,value);
  if(!value||value.ok!==true||value.resultRef!==candidate.resultRef)return false;
  const keys=Object.keys(value).sort().join(',');
  if(uiAssetTypes.includes(candidate.family)){

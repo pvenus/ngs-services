@@ -92,6 +92,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${propScaleType}' THEN '프랍 배율 생성'
    WHEN '${propAnimationType}' THEN '프랍 애니메이션 추가'
    WHEN '${cinematicType}' THEN '시네마틱 영상 생성'
+   WHEN 'cinematic.sequence.upscale' THEN '시네마틱 업스케일링'
    WHEN '${cinematicSequenceType}' THEN '시네마틱 프레임 생성'
    WHEN '${cinematicPlaybackType}' THEN '시네마틱 재생 수정'
    ${uiAssetTypes.map(t=>"WHEN '"+t+"' THEN json_extract(payload_json,'$.title')").join(' ')}

@@ -479,7 +479,8 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                                        SEQUENCE_ROUTE+'/frame':store.cinematic_sequence_frame,
                                        SEQUENCE_ROUTE+'/result':store.cinematic_sequence_result})
                     if hasattr(store,'cinematic_playback_update'):
-                        routes.update({PLAYBACK_ROUTE:store.cinematic_playback_update,
+                        routes.update({SEQUENCE_ROUTE+'/upscale-input':store.cinematic_upscale_input,
+                                       PLAYBACK_ROUTE:store.cinematic_playback_update,
                                        PLAYBACK_ROUTE+'/target-status':store.cinematic_playback_target,
                                        PLAYBACK_ROUTE+'/result':store.cinematic_playback_result})
                     if hasattr(store,'cinematic_source_generate'):

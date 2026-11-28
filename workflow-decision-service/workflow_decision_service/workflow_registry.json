@@ -1913,6 +1913,63 @@
     }
 ,
   {
+    "id": "cinematic.sequence.upscale",
+    "workerId": "animation",
+    "candidateCount": 1,
+    "modelCalls": 1,
+    "dependsOn": [],
+    "executionStages": [
+      {
+        "id": "upscale",
+        "operation": "media.frames.upscale",
+        "dependsOn": []
+      },
+      {
+        "id": "publish",
+        "operation": "media.sequence.publish",
+        "dependsOn": [
+          "upscale"
+        ]
+      }
+    ],
+    "description": "Upscale exactly one selected and published original cinematic PNG sequence with the existing SeedVR2 7B FP16 2× adapter. No Wan, prompt generation or clip resampling. Pin the source scene digest and chosen playback revision; verify every ordered frame through PDS. PDS owns terminal save state. Publish one derivative under the same scene; keep original bytes and timing.",
+    "inputs": [
+      "sequenceId",
+      "sourceSha256",
+      "expectedRevision",
+      "playback"
+    ],
+    "outputs": [
+      "one 2× PNG sequence preserving the frame count and playback"
+    ],
+    "requires": [],
+    "provides": [
+      "cinematic.sequence.upscaled"
+    ],
+    "generationKind": "transformation",
+    "variations": [],
+    "requiredUserFields": [
+      "sequenceId"
+    ],
+    "requestRequirements": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "ngs.cinematic-sequence-upscale.v1"
+      },
+      "projectId": {
+        "type": "string",
+        "const": "binari"
+      }
+    },
+    "outputPolicy": {
+      "kind": "single-result",
+      "count": 1,
+      "selection": "none",
+      "apply": "authorized-mutation",
+      "authorization": "same-authorized-actor-target-and-action-or-fail"
+    }
+  },
+  {
     "id": "background.animation-cinematic",
     "workerId": "animation",
     "candidateCount": 1,
@@ -2186,6 +2243,7 @@
     "map.generate":{"stageIds":["map.generate"],"eligibleStageIds":["map.generate"]},
     "file.update":{"stageIds":["file.update"],"eligibleStageIds":["file.update"]},
     "map.update":{"stageIds":["map.update"],"eligibleStageIds":["map.update"]},
+  "cinematic.sequence.upscale": {"stageIds":["cinematic.sequence.upscale"],"eligibleStageIds":["cinematic.sequence.upscale"]},
   "background.animation.workflow": {
     "eligibleStageIds": [
       "background.animation-cinematic",
