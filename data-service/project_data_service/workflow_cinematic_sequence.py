@@ -1,6 +1,8 @@
 """Claim-bound native RGB frame staging and atomic sequence publication."""
 from contextlib import contextmanager, nullcontext
 from hashlib import sha256
+from datetime import datetime
+import re
 import base64
 import math
 import os
@@ -95,16 +97,37 @@ def upscale_proof(m,compact):
             (m['width'],m['height'])==(u['sourceWidth']*scale,u['sourceHeight']*scale))
 
 
-def verify_manifest(m,oid,inp,group=None,original=None):
+def upscale_title_matches(title,original):
+    if not valid_title(title):return False
+    m=re.fullmatch(r'.+?( · 업스케일링 · (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) KST)',title)
+    if not m:return False
+    try:datetime.strptime(m[2],'%Y-%m-%d %H:%M:%S')
+    except ValueError:return False
+    prior=original.get('title') or 'PNG '+original['officialRequestId'][-10:]
+    suffix=m[1]
+    return title==prior[:120-len(suffix)].rstrip(JS_ENDS)+suffix
+
+
+def verify_manifest(m,oid,inp,group=None,original=None,stored_derivative=False):
     upscale=type(m)is dict and 'upscale' in m
     compact=group is not None and short_background(inp['playback'])
     count=8 if compact else COUNT
     need((not upscale or group is not None or original is not None) and (not compact or upscale) and (original is None or upscale))
     fields=MANIFEST if group is None else MANIFEST|{'group'}
     if upscale:fields=fields|{'upscale'}
-    title=(original if original is not None else inp).get('title')
-    if title is not None:fields=fields|{'title'}
-    need(title is None or valid_title(title) and m.get('title')==title)
+    if original is not None:
+        # Published legacy derivatives did not have a timestamp. Read their
+        # stored title as-is; new writes must bind the name to the source.
+        if stored_derivative:
+            if 'title' in m:
+                fields=fields|{'title'}
+                need(valid_title(m['title']))
+        else:
+            fields=fields|{'title'}
+            need(upscale_title_matches(m.get('title'),original))
+    elif 'title' in inp:
+        fields=fields|{'title'}
+        need(valid_title(inp['title']) and m.get('title')==inp['title'])
     if original is not None:
         u=m['upscale']
         need(keys(u,('model','scale','sourceWidth','sourceHeight','sourceSequenceId')) and
@@ -409,9 +432,8 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         # The original was verified at publication. Do not invalidate an already
         # published derivative if the user edits the original's playback later.
         u=m.get('upscale',{})
-        original={'officialRequestId':inp['sequenceId'],'width':u.get('sourceWidth'),'height':u.get('sourceHeight'),
-                  **({'title':m['title']} if 'title' in m else {})} if derived else None
-        verify_manifest(m,oid,inp,original=original)
+        original={'officialRequestId':inp['sequenceId'],'width':u.get('sourceWidth'),'height':u.get('sourceHeight')} if derived else None
+        verify_manifest(m,oid,inp,original=original,stored_derivative=derived)
         return {'ok':True,'resultRef':ref(oid),'manifest':m}
 
 
