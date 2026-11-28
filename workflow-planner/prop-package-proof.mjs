@@ -1,12 +1,12 @@
 /** Boundary contract for the trusted PDS/Filex prop publisher, never a worker-local file. */
 import {canonical,sha} from './envelope.mjs';
 import {exactProp,propHash,propGenerateType,propRegenerateType,propAnimationType,propScaleType,validPropScalePercents,propValidator,propPresentationProfiles,pixelSourcePresentationProfile} from './prop-generate-envelope.mjs';
-import {checkPropPublishRows,propKeys,propRef,propTaskId,verifyPropScaleRefs} from './prop-generate-plan.mjs';
+import {checkPropPublishRows,propKeys,propRef,propTaskId,propScaleReplacePublish,verifyPropScaleRefs} from './prop-generate-plan.mjs';
 const fail=()=>Error('PROP_PACKAGE_PROOF_INVALID');
 const need=x=>{if(!x)throw fail();};
 const positive=(n,max)=>Number.isSafeInteger(n)&&n>0&&n<=max;
 const matches=(a,b)=>canonical(a)===canonical(b);
-function binding(run){
+function binding(run,rows){
  const {officialRequestId,payload,payloadSha256}=run;
  const {requestType,projectId}=run;
  need(Object.hasOwn(propValidator,requestType));
@@ -17,7 +17,8 @@ function binding(run){
   ...(payload.presentationProfile?{presentationProfile:payload.presentationProfile}:{}),
   ...(requestType===propGenerateType?{designContextSha256:payload.designContextSha256,motion:payload.motion==='subtle'?'subtle':'still'}:
    requestType===propRegenerateType?{operation:'regenerate',source:payload.source,designContextSha256:payload.designContextSha256,motion:payload.motion==='subtle'?'subtle':'still'}:
-   requestType===propScaleType?{operation:'append-scales',source:payload.source}:
+   requestType===propScaleType?{operation:rows.some(r=>r.task_key===propKeys.publish&&r.task_type===propScaleReplacePublish)?
+    'replace-scales':'append-scales',source:payload.source}:
    {operation:'append-animation',source:payload.source,animationId:payload.motionId})};
 }
 function checkMedia(v,motion,lane,small=false){
@@ -121,12 +122,15 @@ function checkManifest(m,scope,members,prior){
     need(clip.officialRequestId===scope.officialRequestId&&clip.requestSha256===scope.requestSha256&&clip.id==='initial');
     checkClip(clip,m.media,members);
    }
-  }else if(scope.operation==='append-scales'){
+  }else if(['append-scales','replace-scales'].includes(scope.operation)){
    for(const field of ['media','designContextSha256','title','interaction','animations','scaleSourcePixel'])need(matches(m[field],prior[field]));
    const old=new Map((prior.scaleVariants??[]).map(x=>[x.scalePercent,x]));
    const next=new Map((m.scaleVariants??[]).map(x=>[x.scalePercent,x]));
-   need(scope.scalePercents.every(n=>!old.has(n)&&next.has(n))&&next.size===old.size+scope.scalePercents.length&&
-    [...old].every(([n,v])=>matches(v,next.get(n))));
+   const selected=new Set(scope.scalePercents);
+   need([...selected].every(n=>next.has(n)&&(scope.operation==='replace-scales'||!old.has(n)))&&
+    next.size===new Set([...old.keys(),...selected]).size&&
+    [...old].every(([n,v])=>next.has(n)&&(selected.has(n)||matches(v,next.get(n)))));
+   if(scope.operation==='replace-scales')need(members.filter(r=>r.key.startsWith('prop_scale_')).length===selected.size);
   }else{
    need(matches(m.scaleVariants,prior.scaleVariants)&&matches(m.scaleSourcePixel,prior.scaleSourcePixel));
    need(scope.operation==='append-animation' &&m.designContextSha256===prior.designContextSha256&&m.title===prior.title&&
@@ -146,7 +150,7 @@ function checkManifest(m,scope,members,prior){
  * The caller must resolve/check member bytes through PDS before committing a Filex receipt.
  * This prepares a candidate, never publishes or allocates a version by itself. */
 export function preparePropPublication(run,rows,claim,manifest,{prior,head}={}){
- const scope=binding(run),taskId=propTaskId(scope.officialRequestId,propKeys.publish);
+ const scope=binding(run,rows),taskId=propTaskId(scope.officialRequestId,propKeys.publish);
  need(run.state==='planned'&&run.reason===null);
  // This witnessed head is also the mandatory compare-and-swap expectation for the writer.
  if(scope.operation)need(exactProp(head,['revision','sha256'])&&matches(head,scope.source));
@@ -166,7 +170,7 @@ export function propCompletionCandidate(run,rows){
  const members=checkPropPublishRows(run,rows,{published:true});
  if(!members)return null;
  const final=members.at(-1);
- return {scope:binding(run),members:members.slice(0,-1),resultRef:final.ref,manifestSha256:final.ref.slice(-64)};
+ return {scope:binding(run,rows),members:members.slice(0,-1),resultRef:final.ref,manifestSha256:final.ref.slice(-64)};
 }
 
 /** Accept only the authoritative committed receipt and exact independently loaded manifest.

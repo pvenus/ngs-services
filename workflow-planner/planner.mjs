@@ -21,8 +21,8 @@ import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit}
 
 import {npcAnimationRegenerateType,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
-import {propGenerateType,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propAnimationType,propTypes,propValidator} from './prop-generate-envelope.mjs';
-import {buildPropGeneratePlan,exactPropTask,isPropRef,isPropScaleKey,propCompletionLimit} from './prop-generate-plan.mjs';
+import {propGenerateType,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propRegenerateRetired,propAnimationType,propTypes,propValidator} from './prop-generate-envelope.mjs';
+import {buildPropGeneratePlan,exactPropTask,isPropRef,isPropScaleKey,propKeys,propScaleReplacePublish,propCompletionLimit} from './prop-generate-plan.mjs';
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
 
@@ -73,11 +73,11 @@ export function checkRow(row){
  return payload;
 }
 
-export function buildPlan(row,{pixelPortraits=true,multiDependencies=false,splitPropScales=true}={}){
- return materializePlan(row,checkRow(row),pixelPortraits,multiDependencies,splitPropScales);
+export function buildPlan(row,{pixelPortraits=true,multiDependencies=false,splitPropScales=true,replacePropScales=splitPropScales}={}){
+ return materializePlan(row,checkRow(row),pixelPortraits,multiDependencies,splitPropScales,replacePropScales);
 }
 
-function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false,splitPropScales=true){
+function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false,splitPropScales=true,replacePropScales=splitPropScales){
  if(assemblyTypes.includes(row.requestType))return {payload,tasks:[{
   id:'workflow.task.'+sha(canonical([row.officialRequestId,assemblyStage])),key:assemblyStage,type:row.requestType,
   workerType:'document',dependsOn:null,input:row.payload,
@@ -140,7 +140,7 @@ function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false
   return {payload,tasks:[{id:'workflow.task.'+sha(canonical([row.officialRequestId,cinematicTask])),
    key:cinematicTask,type:cinematicTaskType,workerType:'animation',dependsOn:null,input:{sourceSha256,motionPrompt}}]};
  }
- if(propTypes.includes(row.requestType))return {payload,tasks:buildPropGeneratePlan(row,{splitScales:splitPropScales})};
+ if(propTypes.includes(row.requestType))return {payload,tasks:buildPropGeneratePlan(row,{splitScales:splitPropScales,replaceScales:replacePropScales})};
  if(row.requestType===propImageType)return {payload,tasks:[{
   id:'workflow.task.'+sha(canonical([row.officialRequestId,propImageKey])),key:propImageKey,type:propImageType,
   workerType:'image',dependsOn:null,input:JSON.parse(payload),
@@ -284,11 +284,11 @@ export function migrateNpcPortraitReadOwner(db){
 // A legal worker transition cannot make this exact graph runnable again. In
 // particular, a running claim is never inferred to have failed, and a failed
 // task below the cap is still live even while its retry cooldown is in effect.
-function restoreStoredPlan(run,{multiDependencies=false,splitPropScales=true}={}){
+function restoreStoredPlan(run,{multiDependencies=false,splitPropScales=true,replacePropScales=splitPropScales}={}){
  try{
   const plan=buildPlan({officialRequestId:run.official_request_id,projectId:run.project_id,
    requestType:run.request_type,schemaVersion:run.schema_version,payload:JSON.parse(run.payload),
-   payloadSha256:run.payload_sha256,status:'registered',registeredAt:run.registered_at},{multiDependencies,splitPropScales});
+   payloadSha256:run.payload_sha256,status:'registered',registeredAt:run.registered_at},{multiDependencies,splitPropScales,replacePropScales});
   return plan.payload===run.payload?plan:null;
  }catch{return null;}
 }
@@ -343,7 +343,8 @@ function hasExhaustedMapGraph(run,readTasks){
 
 function hasExhaustedPropGraph(run,readTasks){
  const rows=readTasks.all(run.official_request_id,propCompletionLimit);
- const plan=restoreStoredPlan(run,{splitPropScales:rows.some(row=>isPropScaleKey(row.task_key))});
+ const plan=restoreStoredPlan(run,{splitPropScales:rows.some(row=>isPropScaleKey(row.task_key)),
+  replacePropScales:rows.some(row=>row.task_key===propKeys.publish&&row.task_type===propScaleReplacePublish)});
  if(!plan)return false;
  if(rows.length!==plan.tasks.length||!rows.some(exhausted))return false;
  const byId=new Map(rows.map(row=>[row.task_id,row])),blocked=new Set();
@@ -452,6 +453,7 @@ export class PlannerStore{
     ensure(prior.project_id===row.projectId&&prior.request_type===row.requestType&&prior.schema_version===row.schemaVersion&&
       prior.payload===payload&&prior.payload_sha256===row.payloadSha256&&prior.registered_at===row.registeredAt,'WORKFLOW_REPLAY_CHANGED');
    }else{
+    if(row.requestType===propRegenerateType)throw Error(propRegenerateRetired);
     if(row.requestType===conceptCategoryRequestType&&row.payload.operation==='replace')throw Error('NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID');
     const plan=materializePlan(row,payload,true,this.#multiDependencies);
     this.db.prepare("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,'awaiting_rs',?,?)")
@@ -473,7 +475,7 @@ export class PlannerStore{
    Number(this.#propMutationsEnabled)+"=1 OR "+type+"='"+propGenerateType+"') AND ("+
    motion+")))";
  }
- pending(){return this.db.prepare( `SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND (?=1 OR request_type<>?) AND (?=1 OR request_type NOT IN (${allCinematicTypes.map(()=>'?').join(',')})) AND
+ pending(){return this.db.prepare( `SELECT official_request_id FROM workflow_runs WHERE state='awaiting_rs' AND request_type<>'${propRegenerateType}' AND (?=1 OR request_type<>?) AND (?=1 OR request_type NOT IN (${allCinematicTypes.map(()=>'?').join(',')})) AND
    ${this.#propSql('request_type','payload')} ORDER BY registered_at,official_request_id`)
   .all(Number(this.#propImageEnabled),propImageType,Number(this.#cinematicEnabled),...allCinematicTypes);}
  acknowledge(id){return this.db.prepare("UPDATE workflow_runs SET state='planned',updated_at=? WHERE official_request_id=? AND state='awaiting_rs'").run(Date.now(),id).changes;}
@@ -632,10 +634,21 @@ export class PlannerStore{
    const evidence=this.db.prepare('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT ?');
    const ready=candidates.filter(run=>failurePolicies.get(run.request_type)(run,evidence))
     .map(({official_request_id,request_type})=>({official_request_id,request_type}));
-   this.db.exec('COMMIT');return ready;
+   // Do not start retired jobs. A running/saving legacy claim is not
+   // guessed failed, and fully completed rows still use immutable proof.
+   const retired=this.db.prepare(`SELECT r.official_request_id,r.request_type FROM workflow_runs r
+    WHERE r.request_type=? AND r.state IN ('awaiting_rs','planned') AND r.reason IS NULL
+      AND EXISTS(SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id AND t.status<>'completed')
+      AND NOT EXISTS(SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=r.official_request_id AND t.status='running')
+    ORDER BY r.registered_at,r.official_request_id`).all(propRegenerateType);
+   this.db.exec('COMMIT');return [...ready.filter(r=>r.request_type!==propRegenerateType),...retired];
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  terminalFailureAcknowledged(id,requestType){
+  if(requestType===propRegenerateType)return this.db.prepare(`UPDATE workflow_runs SET state='failed',reason=?,updated_at=?
+    WHERE official_request_id=? AND request_type=? AND state IN ('awaiting_rs','planned') AND reason IS NULL
+      AND NOT EXISTS(SELECT 1 FROM workflow_tasks t WHERE t.official_request_id=workflow_runs.official_request_id AND t.status='running')`)
+   .run(propRegenerateRetired,Date.now(),id,requestType).changes;
   if(!failurePolicies.has(requestType)||propTypes.includes(requestType)&&!this.#propGenerateEnabled||requestType===propImageType&&!this.#propImageEnabled||allCinematicTypes.includes(requestType)&&!this.#cinematicEnabled)return 0;
   return this.db.prepare(`UPDATE workflow_runs SET state='failed',reason='WORKFLOW_TASK_RETRIES_EXHAUSTED',updated_at=?
     WHERE official_request_id=? AND request_type=? AND state='planned' AND reason IS NULL`)
@@ -655,6 +668,16 @@ export async function pollOnce(store,rs){
    for(const row of page.requests){
     try{staged+=Number(store.stage(row));}
     catch(e){
+     if(e.message===propRegenerateRetired){
+      // A legacy RS registration without a persisted run is terminal; do not plan it.
+      const id=row.officialRequestId,status='failed';
+      try{
+       const ack=await rs.call('request_update_status',{officialRequestId:id,status});
+       ensure(exact(ack,['officialRequestId','status'])&&ack.officialRequestId===id&&ack.status===status,'WORKFLOW_RS_ACK_INVALID');
+       failed++;
+      }catch{pollError=true;}
+      continue;
+     }
      if([cinematicUnavailable,'WORKFLOW_COMBAT_NOT_SUPPORTED',propImageUnavailable,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable].includes(e.message)){unsupported++;continue;}
      if(![cinematicInvalid,propImageInvalid,propGenerateInvalid,'WORKFLOW_ROW_INVALID','WORKFLOW_PAYLOAD_BINDING_CHANGED','WORKFLOW_REPLAY_CHANGED','NGS_ONE_STOP_PAYLOAD_INVALID','NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID','NGS_NPC_PLANNING_UPDATE_PAYLOAD_INVALID','NGS_NPC_PLANNING_ADD_PAYLOAD_INVALID','NGS_AUDIO_GENERATE_PAYLOAD_INVALID','NGS_AUDIO_DELETE_PAYLOAD_INVALID','NGS_AUDIO_SEPARATE_PAYLOAD_INVALID','NGS_MOTION_PRESET_CONVERT_2D_PAYLOAD_INVALID','NGS_NPC_ANIMATION_REGENERATE_PAYLOAD_INVALID'].includes(e.message))throw e;
      invalid++;

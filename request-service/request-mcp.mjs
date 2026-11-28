@@ -19,7 +19,7 @@ import {spaceQueueIdPattern,verifiedSpaceRequest} from './space-intake.mjs';
 
 import {unsupportedReason} from './pending-unsupported.mjs';
 
-import {propTypes,propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propRegeneratePayloadSchema,propAnimationType,propAnimationPayloadSchema,propScaleType,propScalePayloadSchema} from './prop-generate-envelope.mjs';
+import {propTypes,propGenerateType,propGeneratePayloadSchema,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propRegenerateRetired,propAnimationType,propAnimationPayloadSchema,propScaleType,propScalePayloadSchema} from './prop-generate-envelope.mjs';
 import {propImageType,propImagePayloadSchema,propImageInvalid,propImageUnavailable} from './prop-image-envelope.mjs';
 
 import {cinematicType,cinematicInvalid,cinematicUnavailable,cinematicSourceMissing,cinematicPayloadSchema,validateCinematic,cinematicSequenceType,cinematicSequencePayloadSchema,validateCinematicSequence,cinematicLegacyRetired,cinematicPlaybackType,cinematicPlaybackStale,cinematicPlaybackRequestPayloadSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,backgroundAnimationStageSchema,validBackgroundAnimationLoop,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
@@ -28,7 +28,7 @@ const version='2025-06-18';
 const maxBody=96*1024;
 const known={
  [cinematicInvalid]:400,[cinematicUnavailable]:503,[cinematicSourceMissing]:404,[cinematicLegacyRetired]:422,[cinematicPlaybackStale]:409,
- [propGenerateInvalid]:400,[propGenerateUnavailable]:503,[propGenerateMotionUnavailable]:503,[propMutationUnavailable]:503,
+ [propGenerateInvalid]:400,[propGenerateUnavailable]:503,[propGenerateMotionUnavailable]:503,[propMutationUnavailable]:503,[propRegenerateRetired]:422,
  NGS_FILE_UPDATE_PAYLOAD_INVALID:400,NGS_FILE_DELETE_PAYLOAD_INVALID:400,NGS_FILE_DELETE_UNAVAILABLE:503,NGS_MAP_PAYLOAD_INVALID:400,NGS_ASSEMBLY_PAYLOAD_INVALID:400,
  [propImageInvalid]:400,[propImageUnavailable]:503,
  REQUEST_UNSUPPORTED_RECREATE:422,REQUEST_SPACE_INVALID:400,REQUEST_SPACE_NOT_VERIFIED:403,REQUEST_SUBMIT_INVALID:400,NGS_ONE_STOP_PAYLOAD_INVALID:400,NGS_CONCEPT_CATEGORY_PAYLOAD_INVALID:400,
@@ -328,9 +328,6 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
     properties:{...propGeneratePayloadSchema.properties,motion:{const:'still'}}};
    submit=addPropFamily(submit,propGenerateType,generate);
    if(propMutationsEnabled===true){
-    const regenerate=propGenerateMotionEnabled===true?propRegeneratePayloadSchema:{...propRegeneratePayloadSchema,
-     properties:{...propRegeneratePayloadSchema.properties,motion:{const:'still'}}};
-    submit=addPropFamily(submit,propRegenerateType,regenerate);
     submit=addPropFamily(submit,propScaleType,propScalePayloadSchema);
     if(await animationReady())submit=addPropFamily(submit,propAnimationType,propAnimationPayloadSchema);
    }
@@ -345,6 +342,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
   return rpcError(res,id,-32602,'Unknown tool or invalid tool call');
  try{
   const args=site?await verifiedSpaceRequest(params.arguments,readSpaceRequest):params.arguments;
+  if((site||params.name===submitTool)&&args?.requestType===propRegenerateType)throw Error(propRegenerateRetired);
   if((site||params.name===submitTool)&&args?.requestType===fileDeleteType){
    const payload=site?JSON.parse(args.payload):args.payload;
    validateFileDelete(payload,'binari');

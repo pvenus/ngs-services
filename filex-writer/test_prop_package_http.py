@@ -61,7 +61,7 @@ class FixtureAuthority:
         p=packet['pin'] if operation=='asset' else packet
         if p['propId']!=PROP:raise Denied()
 
-def make(id_char,operation='create',prior=None,color=20,*,prop_id=PROP):
+def make(id_char,operation='create',prior=None,color=20,*,prop_id=PROP,motion_id='gentle-sway'):
     oid='request.official.'+id_char*64
     request_sha=digest(['formal',oid])
     scope={'officialRequestId':oid,'projectId':'binari','propId':prop_id,'requestSha256':request_sha}
@@ -87,7 +87,7 @@ def make(id_char,operation='create',prior=None,color=20,*,prop_id=PROP):
     if operation=='append-animation':
         m.update(title=prior['title'],media=copy.deepcopy(prior['media']),interaction=copy.deepcopy(prior['interaction']),
                  designContextSha256=prior['designContextSha256'])
-        group=pair(True);motion='gentle-sway'
+        group=pair(True);motion=motion_id
         m['animations']=copy.deepcopy(prior['animations'])+[{'id':motion,'title':'흔들림','officialRequestId':oid,'requestSha256':request_sha,'media':group}]
         scope['animationId']=motion;ref('prop_motion','i2v-rgb');media_refs(group,True)
     else:
@@ -147,8 +147,19 @@ class PropHTTP(PropFixture,unittest.TestCase):
         b=append['manifest'];proof=self.api('/read',self.pin(b));self.assertEqual(proof['prior'],a)
         self.assertEqual(proof['manifest']['media'],a['media'])
         self.assertEqual(len(proof['manifest']['animations']),1)
-        regen=make('c','regenerate',b,color=80);self.publish(regen)
-        c=regen['manifest'];self.assertEqual(self.current()['revision'],3)
+        regen=make('c','regenerate',b,color=80)
+        with self.assertRaises(Conflict):
+            self.props.publish({k:regen[k] for k in ('candidate','manifest','media')})
+        self.assertEqual(self.current()['revision'],2)
+        # Install an exact pre-retirement fixture to test durable read compatibility.
+        c=regen['manifest'];path=self.props.root/c['propId']
+        for name,value in regen['media'].items():
+            self.props.write(path/'assets'/name,base64.b64decode(value))
+        self.props.write(path/'releases'/'3'/'manifest.json',wire(c))
+        self.props.write(path/'releases'/'3'/'.receipt.json',wire({'schemaVersion':'ngs.prop-package-publication-receipt.v1',
+         'authority':'filex','status':'committed',**regen['candidate']}))
+        self.props.write(path/'metadata.json',wire({'schemaVersion':'ngs.prop-pointer.v1','projectId':'binari','title':c['title'],**self.pin(c)}))
+        self.assertEqual(self.current()['revision'],3)
         self.assertEqual(self.api('/read',self.pin(c))['manifest']['animations'],[])
         self.assertEqual(self.api('/read',self.pin(b))['manifest'],b)
         asset=b['animations'][0]['media']['pixel']['assetId']
@@ -242,12 +253,12 @@ class PropHTTP(PropFixture,unittest.TestCase):
         self.props.write=real
         self.publish(b)
         self.assertEqual(self.current()['revision'],2)
-        c=make('c','regenerate',b['manifest'],color=60)
+        c=make('c','append-animation',b['manifest'],color=60,motion_id='new-sway')
         wrong=copy.deepcopy(c);key=next(iter(wrong['media']));wrong['media'][key]='!'*len(wrong['media'][key])
         self.publish(wrong,expected=503)
         self.assertEqual(self.current()['revision'],2)
-        first=make('d','regenerate',b['manifest'],color=70)
-        second=make('e','regenerate',b['manifest'],color=90)
+        first=make('d','append-animation',b['manifest'],color=70,motion_id='new-sway')
+        second=make('e','append-animation',b['manifest'],color=90,motion_id='new-sway')
         def race(e,results):
             self.admit(e)
             req=Request(self.pds+PATH,data=wire({k:e[k] for k in ('claim','manifest')}),

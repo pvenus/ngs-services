@@ -16,7 +16,7 @@ import {allowedWorkflowSourceSql,officialIdFor} from './space-intake.mjs';
 
 import {ensurePendingReasonTable,unsupportedPlannerPolicy} from './pending-unsupported.mjs';
 
-import {propTypes,propScaleType,propGenerateType,propAnimationType,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable} from './prop-generate-envelope.mjs';
+import {propTypes,propScaleType,propRegenerateType,propRegenerateRetired,propGenerateType,propAnimationType,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable} from './prop-generate-envelope.mjs';
 import {propImageType,propImageUnavailable} from './prop-image-envelope.mjs';
 
 import {cinematicType,cinematicSequenceType,cinematicUnavailable,cinematicPlaybackType,allCinematicTypes} from './cinematic-envelope.mjs';
@@ -67,7 +67,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  const insert=db.prepare(`INSERT INTO official_requests(
   official_request_id,source_id,project_id,idempotency_key,request_type,schema_version,
   payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,?,?)`);
- const ownedStatus=db.prepare(`SELECT state FROM official_requests
+ const ownedStatus=db.prepare(`SELECT state,request_type FROM official_requests
   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
   AND ${propMutationsEnabled===true?'1=1':`request_type NOT IN ('${propTypes[1]}','${propTypes[2]}','${propScaleType}')`}
   AND ${propAnimationEnabled===true?'1=1':`request_type<>'${propAnimationType}'`}
@@ -96,6 +96,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
  }
  function register(request,isSite=false,raw){
    const {sourceId,projectId,requestType:kind,idempotencyKey,payload,payloadSha256,schemaVersion,npcId,npcSlug,categoryId}=request;
+   if(kind===propRegenerateType)throw Error(propRegenerateRetired);
    if(allCinematicTypes.includes(kind)&&cinematicEnabled!==true)throw Error(cinematicUnavailable);
    if(propTypes.includes(kind)){
     if(propGenerateEnabled!==true)throw Error(propGenerateUnavailable);
@@ -169,7 +170,8 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
     const row=ownedStatus.get(officialRequestId);
     if(!row)throw Error('OFFICIAL_REQUEST_NOT_FOUND');
     if(row.state!==status){
-     const allowed=status==='planned'?row.state==='registered':row.state==='planned';
+     const allowed=status==='planned'?row.state==='registered':row.state==='planned'||
+      status==='failed'&&row.state==='registered'&&row.request_type===propRegenerateType;
      if(!allowed||transition.run(status,officialRequestId,row.state).changes!==1)
       throw Error('OFFICIAL_REQUEST_STATUS_CONFLICT');
     }

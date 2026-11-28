@@ -202,7 +202,7 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
         self.exercise_three_static_assets('spirit-v2')
 
 
-    def test_multi_scale_generation_and_pinned_add_persists_originals(self):
+    def test_selected_scale_repairs_corrupt_or_missing_same_hash_bytes(self):
         prior,pixel_detail=self.exercise_three_static_assets('spirit-v2',[20,5])
         self.assertEqual([r['scalePercent'] for r in prior['scaleVariants']],[5,20])
         self.assertEqual(prior['scaleSourcePixel']['sha256'],sha(pixel_detail))
@@ -222,18 +222,26 @@ s.acknowledge(id);s.close();
             self.oid=oid;self.payload_sha=digest(p)
             with sqlite3.connect(self.db) as db:
                 self.assertEqual(db.execute('SELECT task_type,worker_type FROM workflow_tasks WHERE official_request_id=? ORDER BY task_type',(oid,)).fetchall(),
-                                 [('prop.scale.derive','postprocess')]*len(scales)+[('prop.scale.generate.publish','postprocess')])
-        register('d',src,[20])
-        self.api('/derive-scale',{'claim':self.mark('prop_scale_020',10)},expected=409)
-        register('e',src,[100,50])
+                                 [('prop.scale.derive','postprocess')]*len(scales)+[('prop.scale.generate.replace-publish','postprocess')])
+        asset_root=self.props.root/PROP/'assets'
+        old20=prior['scaleVariants'][1]
+        damaged=asset_root/old20['pixel']['assetId']; missing=asset_root/old20['spirit']['assetId']
+        pixel_original=damaged.read_bytes();spirit_original=missing.read_bytes()
+        damaged.write_bytes(b'!'*len(pixel_original));missing.unlink()
+        untouched={asset_root/a['assetId']:(asset_root/a['assetId']).stat().st_ino
+                   for a in (*prior['media'].values(),prior['scaleSourcePixel'],prior['scaleVariants'][0]['pixel'],
+                             prior['scaleVariants'][0]['spirit'])}
+        register('e',src,[100,50,20])
         self.api('/prepare',{'claim':self.mark('prop_pack_publish',18)},expected=403)
         self.api('/derive-scale',{'claim':self.mark('prop_scale_100',13)},expected=403)
         with sqlite3.connect(self.db) as db:
             db.execute("UPDATE workflow_tasks SET status='pending' WHERE task_id=?",(task_id(self.oid,'prop_scale_100'),))
             db.execute("UPDATE workflow_tasks SET status='pending' WHERE task_id=?",(task_id(self.oid,'prop_pack_publish'),))
-        for stamp,n in enumerate([50,100],14):
+        for stamp,n in enumerate([20,50,100],14):
             self.run_scale(n,stamp)
             self.assertEqual(self.filex_writer(WRITER+'/head',{'propId':PROP})['pointer']['revision'],prior['revision'])
+        self.assertEqual(damaged.read_bytes(),b'!'*len(pixel_original))
+        self.assertFalse(missing.exists())
         claim=self.mark('prop_pack_publish',18)
         with patch('project_data_service.workflow_prop_stage.derive',side_effect=AssertionError('must not resize during manifest prep')):
             pack=self.api('/prepare',{'claim':claim})['manifest']
@@ -251,8 +259,16 @@ s.acknowledge(id);s.close();
                 published=self.api('',{'claim':claim,'manifest':pack})
                 self.mark('prop_pack_publish',18,published['resultRef'])
         self.assertEqual(published['resultRef'],'prop.package.'+digest(pack))
-        self.assertEqual(self.api('/read',self.pin(pack))['prior'],prior)
+        proof=self.api('/read',self.pin(pack))
+        self.assertEqual(proof['prior'],prior)
+        self.assertEqual(proof['receipt']['scope']['operation'],'replace-scales')
         self.assertEqual(self.api('/read',original_pin)['manifest'],prior)
+        self.assertEqual(damaged.read_bytes(),pixel_original)
+        self.assertEqual(missing.read_bytes(),spirit_original)
+        self.assertEqual({path:path.stat().st_ino for path in untouched},untouched)
+        for k,raw in [('pixel',pixel_original),('spirit',spirit_original)]:
+            read=self.api('/asset',{'pin':original_pin,'assetId':old20[k]['assetId']})
+            self.assertEqual(base64.b64decode(read['base64']),raw)
         register('f',src,[90])
         self.api('/derive-scale',{'claim':self.mark('prop_scale_090',10)},expected=409)
 

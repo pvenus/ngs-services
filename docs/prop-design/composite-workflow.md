@@ -57,15 +57,14 @@ This is a source release candidate, not a deployment or proof of live
 model execution. The optional model is not verified in production. The
 separate single-image workflow and existing demo are untouched.
 
-## Selecting, regenerating and adding one animation
+## Selecting and adding one animation
 
-Select a published package by exact `{propId,revision,sha256}`.
-`prop.regenerate` (`ngs.prop-regenerate.v1`) takes the same project, prop ID,
-`source:{revision,sha256}`, replacement intent, a current design pin, and
-optional subtle motion. It runs the full generation graph with a fresh
-design, one base PNG and static lanes. No old animations are carried into
-the new current package. The previous version stays available to already
-pinned puzzles and remains the current version if regeneration fails.
+Select a published package by exact `{propId,revision,sha256}`. Full
+`prop.regenerate` was retired. Request Service no longer advertises or
+accepts it, the Planner no longer starts it, and workers/PDS/Filex no longer
+execute or publish it. Previously published full regeneration revisions and
+their proofs remain readable. To rerender a placement size without replacing
+the underlying prop, use the scale request below.
 
 `prop.animation.generate` (`ngs.prop-animation-generate.v1`) takes that
 same exact source pin and one named `motionId` plus a human prompt. This is
@@ -174,7 +173,7 @@ the real snapshot and both HTTP servers.
    a current verified worker adds `"append-animation"` after `"still"`.
    RS advertises and registers only that individual animation operation,
    and pauses its registered handoff if readiness is lost. Static create
-   and regenerate remain independent; `motion:"subtle"` is still not
+   remains independent; `motion:"subtle"` is still not
    admitted by the standard launcher. A later readiness lapse does not
    make already-staged bytes unverifiable, so admitted runs can complete
    valid CPU derivatives and publication.
@@ -216,13 +215,12 @@ deleted. Further prop work must use the newly published head and its pin.
 
 ### Spirit presentation
 
-`prop.generate` and `prop.regenerate` may include the exact optional field
+`prop.generate` may include the exact optional field
 `presentationProfile: "spirit-v1"`. Without it, the historical workflow and
 pixel canvas policy are unchanged. With it, `prop_pixel` and `prop_spirit`
 both read the pinned RGBA detail asset and use the canvas
 `round(detailWidth / 5) × round(detailHeight / 5)`. The spirit stage is an
-existing postprocess-worker operation (`prop.generate.spirit` or
-`prop.regenerate.spirit`) with a static `prop.spirit-rgba.<sha256>` receipt.
+existing postprocess-worker operation (`prop.generate.spirit`) with a static `prop.spirit-rgba.<sha256>` receipt.
 Publication waits for all required lanes and verifies each descriptor against
 the corresponding completed task and actual file bytes.
 
@@ -234,7 +232,7 @@ static media object. Filex asset lookup and replica enumeration include
 
 ### Pixel reference generation (`spirit-v2`)
 
-New `prop.generate` and `prop.regenerate` requests can opt into
+New `prop.generate` requests can opt into
 `presentationProfile: "spirit-v2"`. Earlier requests are unaffected.
 
 - `prop_detail` remains the cinematic original with transparency.
@@ -265,27 +263,34 @@ and clamping to one pixel. The popup detail and existing image slots are
 unchanged. Spirit-v2 requests which select scales retain a full pixel art
 basis (`scaleSourcePixel`, not a selectable image).
 
-Issue a separate `prop.scale.generate` request to add sizes to an existing
-prop. Its complete payload is
+Issue a separate `prop.scale.generate` request to create or regenerate selected
+sizes of an existing prop. Its complete payload is
 `{schemaVersion:"ngs.prop-scale-generate.v1",projectId:"binari",propId,source:{revision,sha256},scalePercents:[...]}`.
-For either initial generation or an append, the Planner registers one
+For either initial generation or selected-size generation, the Planner registers one
 `prop.scale.derive` postprocess task per scale (`prop_scale_005` through
 `prop_scale_100`). Each receives one integer percent and the exact source
 binding. The tasks are chained in numeric order on the current single
 postprocess lane, so normal workflow status and per-task retries apply
 without adding a worker role or exceeding the dependency-column limit.
-Initial scale tasks wait for the verified full-size pixel detail. Append
+Initial scale tasks wait for the verified full-size pixel detail. Existing-prop
 scale tasks read the pinned published source and do not schedule document
 or image generation. Each task stages only its PNG pair in PDS with an
 immutable descriptor receipt; it does not update the Filex head.
 
 One final postprocess publication checks all completed scale receipts,
 verifies their staged PNG bytes without resizing again, and updates the
-Filex head atomically. A stale head or already-published size is rejected;
-previous pins, assets, and animation remain readable. Legacy packages
-without a full-size pixel basis are resampled from their original pixel
-slot, so larger output changes dimensions but does not add drawn detail.
-Requests whose workflow was materialized before this change retain the
-former combined publish task and receipt. The request and package schemas
+Filex head atomically. Only the selected scales may be replaced; the
+original image, base pixel images, animations and all unselected scales
+are preserved. Valid existing content-addressed bytes are not rewritten.
+The writer may atomically restore a missing or corrupted selected asset
+with proven bytes at the exact hash; other versions pinning that same
+asset also become readable. A stale head is rejected. Unavailable
+canonical source bytes cannot be reconstructed, and damage confined to
+an independent replica requires a separate replica repair.
+
+Legacy packages without a full-size pixel basis are resampled from their
+original pixel slot, so larger output changes dimensions but does not add
+drawn detail. Historical combined and fan-out add-only workflows retain
+their exact persisted graph and receipts. The request and package schemas
 are unchanged. Deploy the compatible Filex/PDS and postprocess worker
-before the Planner starts scheduling the new tasks.
+before the Planner starts scheduling the replacement publisher.

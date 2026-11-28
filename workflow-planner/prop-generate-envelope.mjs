@@ -41,6 +41,7 @@ export const propGeneratePayloadSchema={type:'object',properties:{...generatePro
 },required:fields,additionalProperties:false,if:{required:['scalePercents']},
  then:{required:['presentationProfile'],properties:{presentationProfile:{const:pixelSourcePresentationProfile}}}};
 
+export const propRegenerateRetired='PROP_REGENERATE_RETIRED';
 export const propRegenerateType='prop.regenerate',propRegenerateSchema='ngs.prop-regenerate.v1';
 export const propAnimationType='prop.animation.generate',propAnimationSchema='ngs.prop-animation-generate.v1';
 export const candleChromaProfile='candle-chroma-headroom-v1',candleChromaPropId='candle-brass-petal-unlit-clean';

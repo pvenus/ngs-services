@@ -12,6 +12,7 @@ GENERATE='prop.generate'
 REGENERATE='prop.regenerate'
 APPEND='prop.animation.generate'
 SCALE='prop.scale.generate'
+SCALE_REPLACE_PUBLISH=SCALE+'.replace-publish'
 CANDLE_CHROMA_PROFILE='candle-chroma-headroom-v1'
 CANDLE_CHROMA_PROP='candle-brass-petal-unlit-clean'
 FAMILIES={GENERATE:'ngs.prop-generate.v1',REGENERATE:'ngs.prop-regenerate.v1',APPEND:'ngs.prop-animation-generate.v1',SCALE:'ngs.prop-scale-generate.v1'}
@@ -61,7 +62,9 @@ def payload_valid(p,kind):
         need(prop_id(p['motionId']) and text(p['prompt'],2000) and not re.search(r'\bembedding:',p['prompt'],re.I))
     elif kind!=SCALE:need(text(p['intent'],4000) and match(p['designContextSha256'],HASH) and p.get('motion','still') in ('still','subtle'))
 
-def build_graph(oid,kind,p,*,split_scales=True):
+def build_graph(oid,kind,p,*,split_scales=True,replace_scales=None):
+    if replace_scales is None:replace_scales=split_scales
+    need(kind!=SCALE or not replace_scales or split_scales)
     payload_valid(p,kind);rows={}
     make_id=lambda key:task_id(oid,key)
     scope={'propId':p['propId']}
@@ -81,7 +84,8 @@ def build_graph(oid,kind,p,*,split_scales=True):
         return parent
     if kind==SCALE:
         parent=add_scales(None)
-        add(PUBLISH,parent,{'scalePercents':p['scalePercents'],'dependsOnTaskIds':[row['task_id'] for row in rows.values()]})
+        add(PUBLISH,parent,{'scalePercents':p['scalePercents'],'dependsOnTaskIds':[row['task_id'] for row in rows.values()]},
+            'replace-publish' if replace_scales else None)
     elif kind==APPEND:
         id=p['motionId']
         add(MOTION,None,{'motionId':id,'prompt':p['prompt']},'raw')
@@ -117,7 +121,8 @@ def from_run(db,run):
          run['project_id']==P and run['request_type'] in FAMILIES and run['schema_version']==FAMILIES[run['request_type']])
     p=strict_json(run['payload'].encode());need(type(p)is dict and run['payload']==canonical(p).decode() and digest(p)==run['payload_sha256'])
     rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 23',(run['official_request_id'],)).fetchall()
-    expected=build_graph(run['official_request_id'],run['request_type'],p,split_scales=any(r['task_key'] in SCALE_KEYS for r in rows))
+    expected=build_graph(run['official_request_id'],run['request_type'],p,split_scales=any(r['task_key'] in SCALE_KEYS for r in rows),
+                         replace_scales=any(r['task_key']==PUBLISH and r['task_type']==SCALE_REPLACE_PUBLISH for r in rows))
     need(len(rows)==len(expected))
     exact_rows={r['task_key']:dict(r) for r in rows}
     need(len(exact_rows)==len(expected) and all(k in exact_rows and
@@ -137,7 +142,7 @@ class PropClaimAuthority:
             with self.claim.snapshot() as db:
                 oid=v['officialRequestId'];run=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
                 p,rows=from_run(db,run)
-                need(run['reason'] is None and run['payload_sha256']==v['payloadSha256'] and 0<=run['registered_at']<=v['claimStamp'])
+                need(run['request_type']!=REGENERATE and run['reason'] is None and run['payload_sha256']==v['payloadSha256'] and 0<=run['registered_at']<=v['claimStamp'])
                 found=[k for k in stages if k in rows and rows[k]['task_id']==v['taskId']]
                 need(len(found)==1);key=found[0];row=rows[key]
                 need(row['status']=='running' and row['result_ref'] is None and row['updated_at']==v['claimStamp'])

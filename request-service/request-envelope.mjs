@@ -17,7 +17,7 @@ import {audioSeparateType,audioSeparateSchema,validateAudioSeparate} from './aud
 
 import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
-import {propGenerateType,propGenerateSchema,validatePropGenerate,propRegenerateType,propRegenerateSchema,validatePropRegenerate,propAnimationType,propAnimationSchema,validatePropAnimation,propScaleType,propScaleSchema,validatePropScale} from './prop-generate-envelope.mjs';
+import {propGenerateType,propGenerateSchema,validatePropGenerate,propRegenerateType,propRegenerateRetired,propRegenerateSchema,validatePropRegenerate,propAnimationType,propAnimationSchema,validatePropAnimation,propScaleType,propScaleSchema,validatePropScale} from './prop-generate-envelope.mjs';
 import {propImageType,propImageSchema,validatePropImage} from './prop-image-envelope.mjs';
 
 import {cinematicType,cinematicSchema,validateCinematic,cinematicSequenceType,cinematicSequenceSchema,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackRequestSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,backgroundAnimationStageSchema,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
@@ -67,6 +67,7 @@ function validateSubmit(value,sourceId,allowedType){
   !fields.every(k=>Object.hasOwn(value,k))||value.sourceId!==sourceId||
   !allowedType(value.requestType)||!workflowFamilies.has(value.requestType)||!ident(value.idempotencyKey))throw Error('REQUEST_SUBMIT_INVALID');
  const projectId='binari',kind=value.requestType;
+ if(kind===propRegenerateType)throw Error(propRegenerateRetired);
  // Preserve the legacy family-specific error for malformed NPC payloads.
  const payload=workflowFamilies.get(kind).validate(value.payload,projectId);
  return {sourceId:value.sourceId,projectId,requestType:kind,idempotencyKey:value.idempotencyKey,payload,

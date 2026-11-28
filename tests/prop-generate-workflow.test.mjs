@@ -3,6 +3,7 @@ import {mkdtempSync,realpathSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import test from 'node:test';
+import {DatabaseSync} from 'node:sqlite';
 import {createRequestService} from '../request-service/request-service.mjs';
 import {makeLoopbackTransport} from '../workflow-planner/rs.mjs';
 import {canonical,sha} from '../workflow-planner/envelope.mjs';
@@ -174,21 +175,43 @@ function fixtureRows(row,values={}){
   status:task===last?'running':'completed',result_ref:task===last?null:propRef(task.key,values[task.key]??(i+1).toString(16).repeat(64)),updated_at:7}));
  return {run,rows,claim:{officialRequestId:run.officialRequestId,projectId:'binari',taskId:last.id,payloadSha256:row.payloadSha256,claimStamp:7}};
 }
-test('individual RS operations are independently gated and persist only exact selected-revision tasks',async t=>{
- const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true});
+test('full regenerate is retired at Local/Space intake; registered backlog settles without new tasks',async t=>{
+ const temp=root(t),queueId='ngs.space.request.retired';
+ const rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true,readSpaceRequest:async()=>({
+  queueId,idempotencyKey:queueId,requestType:'prop.regenerate',payload:editPayload
+ })});
  const submit=(requestType,payload,key)=>rs.call('request_submit',{sourceId:'local',requestType,payload,idempotencyKey:key});
  await assert.rejects(submit('prop.animation.generate',animPayload,'motion-off'),/PROP_GENERATE_MOTION_UNAVAILABLE/);
- await assert.rejects(submit('prop.regenerate',{...editPayload,source:{...sourcePin,motion:'subtle'}},'pin-extra'),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
- const meta=await submit('prop.regenerate',editPayload,'regenerate');
+ const retired={message:'PROP_REGENERATE_RETIRED',rsStatus:422};
+ await assert.rejects(submit('prop.regenerate',editPayload,'regenerate'),retired);
+ await assert.rejects(rs.call('request_submit_space',{queueId}),retired);
+ const schema=(await rs.rpc('tools/list',{})).tools.find(x=>x.name==='request_submit').inputSchema;
+ assert(!schema.properties.requestType.enum.includes('prop.regenerate'));
+ assert(schema.properties.requestType.enum.includes('prop.scale.generate'));
+ assert.deepEqual((await rs.call('request_list',{})).requests,[]);
+ const db=new DatabaseSync(join(temp,'official','official-requests.sqlite'));t.after(()=>db.close());
+ const newRow=revisionCase('prop.regenerate',editPayload,'f'),existing=revisionCase('prop.regenerate',editPayload,'e');
+ for(const legacy of [newRow,existing])
+  db.prepare(`INSERT INTO official_requests(official_request_id,source_id,project_id,idempotency_key,request_type,
+   schema_version,payload_json,payload_sha256,state,registered_at) VALUES(?,'local','binari',?,?,?, ?,?,'registered',?)`)
+   .run(legacy.officialRequestId,legacy.officialRequestId,legacy.requestType,legacy.schemaVersion,canonical(legacy.payload),legacy.payloadSha256,legacy.registeredAt);
  const store=new PlannerStore(':memory:',{propGenerateEnabled:true,propMutationsEnabled:true,readPropPublication:async()=>null});
- t.after(()=>store.close());assert.equal((await pollOnce(store,rs)).acknowledged,1);
- const tasks=store.db.prepare('SELECT task_key FROM workflow_tasks WHERE official_request_id=? ORDER BY rowid');
- assert.deepEqual(tasks.all(meta.officialRequestId).map(r=>r.task_key),[propKeys.design,propKeys.base,propKeys.detail,propKeys.pixel,propKeys.publish]);
- const animation=buildPlan(revisionCase('prop.animation.generate',animPayload,'a')).tasks;
- assert.deepEqual(animation.map(x=>x.key),[propKeys.motion,propKeys.animDetail,propKeys.animPixel,propKeys.publish]);
- assert.equal(animation[0].input.motionId,animPayload.motionId);
- assert.deepEqual(animation[0].input.source,sourcePin);
- assert(!animation.some(task=>task.workerType==='image'));
+ t.after(()=>store.close());
+ assert.throws(()=>store.stage(newRow),/PROP_REGENERATE_RETIRED/);
+ // Existing pending graph is settled without claiming any retired task.
+ store.db.prepare("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,'awaiting_rs',?,NULL)")
+  .run(existing.officialRequestId,existing.projectId,existing.requestType,existing.schemaVersion,canonical(existing.payload),
+   existing.payloadSha256,existing.registeredAt,8);
+ const plan=buildPlan(existing);
+ const add=store.db.prepare(`INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,
+  task_input,depends_on_task_id,updated_at) VALUES(?,?,?,?,?,?,?,8)`);
+ for(const t of plan.tasks)add.run(t.id,existing.officialRequestId,t.key,t.type,t.workerType,canonical(t.input),t.dependsOn);
+ const status=await pollOnce(store,rs);
+ assert.equal(status.acknowledged,0);assert.equal(status.failed,2);assert.equal(status.pollError,false);
+ const state=(await rs.call('request_list',{})).requests;
+ assert.equal(state.find(x=>x.officialRequestId===newRow.officialRequestId).status,'failed');
+ assert.equal(state.find(x=>x.officialRequestId===existing.officialRequestId).status,'failed');
+ assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM workflow_tasks').get().n,plan.tasks.length);
 });
 
 test('immutable regeneration and append enforce the pinned current head; append cannot replace base or overwrite prior clips',()=>{
@@ -227,7 +250,7 @@ test('normal RS capability gate pauses current prop intake and refuses to admit 
  await assert.rejects(rs.call('request_submit',command()),/PROP_GENERATE_RUNTIME_UNAVAILABLE/);
  ready=true;
  assert((await schema()).includes('prop.generate'));
- assert((await schema()).includes('prop.regenerate'));
+ assert(!(await schema()).includes('prop.regenerate'));
  assert(!(await schema()).includes('prop.animation.generate'));
  await assert.rejects(rs.call('request_submit',command({...p,motion:'subtle'})),/PROP_GENERATE_MOTION_UNAVAILABLE/);
  const accepted=await rs.call('request_submit',command());
@@ -324,7 +347,7 @@ test('reference CREATE retains exact optional pin across official Local and Spac
  await assert.rejects(rs.call('request_submit',command({...payload,reference:{...reference,propId:p.propId}})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
  await assert.rejects(rs.call('request_submit',command({...payload,reference:{...reference,url:'http://localhost/'}})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
  await assert.rejects(rs.call('request_submit',{...command(),requestType:'prop.regenerate',payload:{...payload,
-  schemaVersion:'ngs.prop-regenerate.v1',source:{revision:1,sha256:'c'.repeat(64)}}}),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+  schemaVersion:'ngs.prop-regenerate.v1',source:{revision:1,sha256:'c'.repeat(64)}}}),/PROP_REGENERATE_RETIRED/);
 });
 
 test('official scale intake plans independent postprocess tasks and one publish',async t=>{
@@ -343,7 +366,7 @@ test('official scale intake plans independent postprocess tasks and one publish'
   [[ 'prop_scale_005','prop.scale.derive','postprocess',5,null],
    ['prop_scale_020','prop.scale.derive','postprocess',20,first.id],
    ['prop_scale_100','prop.scale.derive','postprocess',100,second.id]]);
- assert.equal(pkg.type,'prop.scale.generate.publish');
+ assert.equal(pkg.type,'prop.scale.generate.replace-publish');
  assert.equal(pkg.dependsOn,third.id);
  assert.deepEqual(pkg.input,{propId:p.propId,source,scalePercents:[100,5,20],dependsOnTaskIds:[first.id,second.id,third.id]});
  assert.deepEqual(buildPlan(row,{splitPropScales:false}).tasks.map(t=>t.key),[propKeys.publish]);
@@ -359,25 +382,30 @@ test('official scale intake plans independent postprocess tasks and one publish'
  await assert.rejects(rs.call('request_submit',command({...p,scalePercents:[13]})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
 });
 
-test('append scale completion proof rejects changed old scales or unrelated metadata',()=>{
+test('scale repair replaces only selected pairs and completion proof preserves all unselected media',()=>{
  const a='a'.repeat(64),b='b'.repeat(64),c='c'.repeat(64);
  const asset=(sha256,width,height=width)=>({assetId:sha256+'.png',sha256,width,height,bytes:100,mediaType:'image/png',frameDurationsMs:[]});
  const base={schemaVersion:'ngs.prop-package.v1',projectId:'binari',propId:'lantern',revision:1,officialRequestId:'request.official.'+b,
   requestSha256:a,designContextSha256:a,title:'등롱',parentSha256:null,media:{detail:asset(a,100),pixel:asset(b,20)},
-  interaction:{pixelOpen:null,detailTrigger:null},animations:[],scaleVariants:[{scalePercent:20,pixel:asset(b,20),spirit:asset(c,20)}]};
+  interaction:{pixelOpen:null,detailTrigger:null},animations:[],scaleVariants:[{scalePercent:5,pixel:asset(c,5),spirit:asset(b,5)},
+   {scalePercent:20,pixel:asset(b,20),spirit:asset(c,20)}]};
  const source={revision:1,sha256:sha(canonical(base))},officialRequestId='request.official.'+a,requestType='prop.scale.generate';
  const payload={schemaVersion:'ngs.prop-scale-generate.v1',projectId:'binari',propId:'lantern',source,scalePercents:[5]};
  const run={...makeRow(payload),officialRequestId,requestType,state:'planned',reason:null};
  const [scale,task]=buildPlan({...makeRow(payload),officialRequestId,requestType}).tasks;
  const claim={officialRequestId,projectId:'binari',taskId:task.id,payloadSha256:run.payloadSha256,claimStamp:10};
  const pack={...base,officialRequestId,requestSha256:run.payloadSha256,revision:2,parentSha256:source.sha256,
-  scaleVariants:[{scalePercent:5,pixel:asset(b,5),spirit:asset(c,5)},...base.scaleVariants]};
+  scaleVariants:[{scalePercent:5,pixel:asset(b,5),spirit:asset(c,5)},base.scaleVariants[1]]};
  const rows=[scale,task].map((t,i)=>({task_id:t.id,task_key:t.key,task_type:t.type,worker_type:t.workerType,
   depends_on_task_id:t.dependsOn,task_input:canonical(t.input),official_request_id:officialRequestId,status:i?'running':'completed',
   result_ref:i?null:'prop.scale-pair.'+sha(canonical(pack.scaleVariants[0])),updated_at:i?10:9}));
  const proof=preparePropPublication(run,rows,claim,pack,{prior:base,head:source});
  const wrongPair={...pack,scaleVariants:[{...pack.scaleVariants[0],pixel:asset(a,5)},pack.scaleVariants[1]]};
  assert.throws(()=>preparePropPublication(run,rows,claim,wrongPair,{prior:base,head:source}),/PROP_PACKAGE_PROOF_INVALID/);
+ assert.equal(proof.scope.operation,'replace-scales');
+ const oldTask=buildPlan({...makeRow(payload),officialRequestId,requestType},{replacePropScales:false}).tasks.at(-1);
+ const legacy=rows.map(r=>r.task_key===propKeys.publish?{...r,task_type:oldTask.type}:r);
+ assert.throws(()=>preparePropPublication(run,legacy,claim,pack,{prior:base,head:source}),/PROP_PACKAGE_PROOF_INVALID/);
  const receipt={...proof,schemaVersion:'ngs.prop-package-publication-receipt.v1',authority:'filex',status:'committed'};
  assert(verifyPropPublicationProof(proof,{manifest:pack,receipt,prior:base}));
  assert.throws(()=>preparePropPublication(run,rows,claim,{...pack,title:'수정'}, {prior:base,head:source}),/PROP_PACKAGE_PROOF_INVALID/);

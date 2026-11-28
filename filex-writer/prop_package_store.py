@@ -54,12 +54,12 @@ def validate_candidate(c,m):
     profile=type(scope)is dict and 'presentationProfile' in scope
     if profile:need(op in (None,'regenerate') and scope['presentationProfile'] in ('spirit-v1','spirit-v2'))
     scales='scalePercents' in scope if type(scope)is dict else False
-    need(scales==(op=='append-scales' or op is None and 'scaleVariants' in m) and (op is not None or scales or 'scaleSourcePixel' not in m))
-    need(op in (None,'regenerate','append-animation','remove-animation','append-scales') and keys(scope,base+(('presentationProfile',) if profile else ())+(('scalePercents',) if scales else ())+(
+    need(scales==(op in ('append-scales','replace-scales') or op is None and 'scaleVariants' in m) and (op is not None or scales or 'scaleSourcePixel' not in m))
+    need(op in (None,'regenerate','append-animation','remove-animation','append-scales','replace-scales') and keys(scope,base+(('presentationProfile',) if profile else ())+(('scalePercents',) if scales else ())+(
         ('designContextSha256','motion') if op is None else
         ('operation','source','motion','designContextSha256') if op=='regenerate' else
         ('operation','source','motionIds') if op=='remove-animation' else
-        ('operation','source') if op=='append-scales' else ('operation','source','animationId'))) and
+        ('operation','source') if op in ('append-scales','replace-scales') else ('operation','source','animationId'))) and
         all(scope[k]==m[k] for k in base))
     if op=='regenerate':need('scaleVariants' not in m and 'scaleSourcePixel' not in m)
     if scales:
@@ -84,12 +84,12 @@ def validate_candidate(c,m):
         elif op=='append-animation':
             need(prop_id(scope['animationId']));expected=[];initial=True
             need(m['animations'] and m['animations'][-1]['id']==scope['animationId'])
-        elif op=='append-scales':expected=[];initial=False
+        elif op in ('append-scales','replace-scales'):expected=[];initial=False
         else:
             ids=scope['motionIds']
             need(type(ids)is list and 1<=len(ids)<=30 and all(prop_id(i) for i in ids) and len(set(ids))==len(ids))
             expected=[];initial=False
-    if op not in ('append-animation','remove-animation','append-scales'):
+    if op not in ('append-animation','remove-animation','append-scales','replace-scales'):
         need(scope['designContextSha256']==m['designContextSha256'] and profile==('spirit' in m['media']))
         if scope.get('presentationProfile')=='spirit-v2':
             expected[3:3]=['prop_pixel_source','prop_pixel_detail']
@@ -102,7 +102,7 @@ def validate_candidate(c,m):
     # Read old receipts unchanged; split topology contributes every selected
     # scale pair in numeric order, content-bound to independently verified PNGs.
     need(type(members) is list)
-    if scales and len(members)>len(expected):
+    if scales and (op=='replace-scales' or len(members)>len(expected)):
         pairs={v['scalePercent']:v for v in m['scaleVariants']}
         tail=[f'prop_scale_{n:03d}' for n in sorted(values)]
         need(len(members)==len(expected)+len(tail))
@@ -126,12 +126,13 @@ def successor(a,b,scope):
              all(a[k]==b[k] for k in ('media','title','interaction','designContextSha256')))
     if scope['operation'] in ('append-animation','remove-animation'):
         need(all(a.get(k)==b.get(k) for k in ('scaleVariants','scaleSourcePixel')))
-    if scope['operation']=='append-scales':
+    if scope['operation'] in ('append-scales','replace-scales'):
         need(all(a.get(k)==b.get(k) for k in ('media','title','interaction','designContextSha256','animations','scaleSourcePixel')))
         old={r['scalePercent']:r for r in a.get('scaleVariants',[])}
         new={r['scalePercent']:r for r in b['scaleVariants']}
-        need(not (set(old)&set(scope['scalePercents'])) and set(new)==set(old)|set(scope['scalePercents']) and
-             all(new[k]==v for k,v in old.items()))
+        selected=set(scope['scalePercents'])
+        need((scope['operation']=='replace-scales' or not (set(old)&selected)) and
+             set(new)==set(old)|selected and all(new[k]==v for k,v in old.items() if k not in selected))
     if scope['operation']=='remove-animation':
         ids=set(scope['motionIds'])
         need(ids<={i['id'] for i in a['animations']} and
@@ -284,12 +285,15 @@ class PropPackageStore(Store):
         need(keys(command,('candidate','manifest','media')));c,m,body=[command[k] for k in ('candidate','manifest','media')]
         validate_candidate(c,m)
         prop=m['propId'];n=m['revision'];scope=c['scope']; expected=scope.get('source')
+        if scope.get('operation')=='regenerate':raise Conflict('prop full regeneration retired')
         need(type(body) is dict and len(body)<=(28 if 'scalePercents' in scope else 5 if scope.get('presentationProfile') in ('spirit-v1','spirit-v2') else 4))
         scale_assets={row[k]['assetId'] for row in m.get('scaleVariants',[]) for k in ('pixel','spirit')}
         original_groups=[m['media'],*(clip['media'] for clip in m['animations'])]
         scale_assets-={a['assetId'] for group in original_groups for a in group.values()}
         if m.get('scaleSourcePixel'):scale_assets.discard(m['scaleSourcePixel']['assetId'])
         all_next=all_media(m)
+        repair_ids={row[k]['assetId'] for row in m.get('scaleVariants',[]) if row['scalePercent'] in scope['scalePercents']
+                   for k in ('pixel','spirit')} if scope.get('operation')=='replace-scales' else set()
         decoded={}
         for key,text in body.items():
             member=all_next.get(key);need(member is not None and type(text) is str and len(text)==4*((member['bytes']+2)//3))
@@ -310,9 +314,10 @@ class PropPackageStore(Store):
                 raise Conflict('prop head changed')
             if expected:
                 a=self.release_locked({'propId':prop,**expected},head);successor(a,m,scope)
-                prior=all_media(a) if scope['operation'] in ('append-animation','remove-animation','append-scales') else {}
+                prior=all_media(a) if scope['operation'] in ('append-animation','remove-animation','append-scales','replace-scales') else {}
             else:prior={}
-            need(set(decoded)==set(all_next)-set(prior) and all(prior[k]==all_next[k] for k in set(prior)&set(all_next)))
+            need(set(decoded)==(set(all_next)-set(prior))|repair_ids and
+                 all(prior[k]==all_next[k] for k in set(prior)&set(all_next)))
             if rel.exists():
                 # A crash between revision write and head CAS can only resume the same input.
                 need(read_json(self.beneath(prop,'releases',str(n),'manifest.json'),MAX_MANIFEST)==m and
@@ -325,15 +330,29 @@ class PropPackageStore(Store):
                     self.write(temp/'.prop-managed-v1',MANAGED);os.rename(temp,target);fsync_dir(self.root)
                 finally:
                     if temp.exists():shutil.rmtree(temp)
+            # Preflight every retained original/unselected asset before touching
+            # an asset. Only selected, stage-proven, exact-hash bytes can repair.
+            # Such a repair also safely restores any older pin to the same ID.
+            writes=[]
             for key,member in all_next.items():
                 ap=self.beneath(prop,'assets',key)
-                if key in decoded:
-                    if ap.exists():need(bytes_of(ap,MAX_MEDIA)==decoded[key])
-                    else:self.write(ap,decoded[key])
-                    need(bytes_of(ap,MAX_MEDIA)==decoded[key])
+                try:
+                    info=ap.lstat()
+                except FileNotFoundError:
+                    if key not in decoded:raise
+                    writes.append((ap,decoded[key]))
+                    continue
+                if key in repair_ids:
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:raise Conflict('unsafe prop asset shape')
+                    current=bytes_of(ap,MAX_MEDIA) if 0<info.st_size<=MAX_MEDIA else None
+                    if current!=decoded[key]:writes.append((ap,decoded[key]))
                 else:
                     raw=bytes_of(ap,MAX_MEDIA)
-                    need(len(raw)==member['bytes'] and sha(raw)==member['sha256'])
+                    if key in decoded:need(raw==decoded[key])
+                    else:need(len(raw)==member['bytes'] and sha(raw)==member['sha256'])
+            for ap,raw in writes:
+                self.write(ap,raw)
+                need(bytes_of(ap,MAX_MEDIA)==raw)
             if not rel.exists():
                 rel.parent.mkdir(exist_ok=True)
                 staging=Path(tempfile.mkdtemp(prefix='.prop-release-',dir=rel.parent))

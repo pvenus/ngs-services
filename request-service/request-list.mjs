@@ -88,7 +88,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${mapTypes[1]}' THEN json_extract(payload_json,'$.graph.title')
    WHEN '${fileUpdateType}' THEN '파일 수정 · '||json_extract(payload_json,'$.content.title')
    WHEN '${propRegenerateType}' THEN '프랍 재생성'
-   WHEN '${propScaleType}' THEN '프랍 배율 추가'
+   WHEN '${propScaleType}' THEN '프랍 배율 생성'
    WHEN '${propAnimationType}' THEN '프랍 애니메이션 추가'
    WHEN '${cinematicType}' THEN '시네마틱 영상 생성'
    WHEN '${cinematicSequenceType}' THEN '시네마틱 프레임 생성'
