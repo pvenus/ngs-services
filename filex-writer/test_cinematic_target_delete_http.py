@@ -69,11 +69,11 @@ store.close();"""
         return json.loads(subprocess.run(['node','--input-type=module','-e',self.js,str(self.db),id,typ,json.dumps(payload),status,''],
             cwd=REPO,check=True,capture_output=True).stdout)
 
-    def stage(self,id,path,source=None):
+    def stage(self,id,path,source=None,sequence_id=None):
         source=source or self.source
         target={'root':CINEMATIC_ROOT,'path':path,'kind':'directory' if path.startswith(('sequences/','scenes/')) else 'file'}
         claim=self.planner_claim(id,'file.delete',{'schemaVersion':'ngs.file-delete.v1','projectId':'binari',
-            'target':target,'expected':{'sourceSha256':source}})
+            'target':target,'expected':{'sourceSha256':source,**({'sequenceId':sequence_id} if sequence_id else {})}})
         return {'target':target,'claim':claim}
 
     def pds_call(self,path,body=None,status=200):
@@ -84,9 +84,10 @@ store.close();"""
         except HTTPError as e:
             with e:self.assertEqual(e.code,status);return json.load(e)
 
-    def seq(self,source,sequenceId):
+    def seq(self,source,sequenceId,*,nested=False):
         frames=[{'index':i,'bytes':1,'sha256':'a'*64} for i in range(45)]
-        path=self.root_scope/'sequences'/sequenceId
+        if nested:self.store._bind_scene('sequences',sequenceId,source)
+        path=self.store._seq_dir(sequenceId)
         self.store.write(path/'manifest.json',wire({'schemaVersion':'ngs.cinematic-sequence-result.v1','projectId':'binari',
             'officialRequestId':sequenceId,'sourceSha256':source,'width':128,'height':128,'frameCount':45,'masterFps':24,'frames':frames,'playback':PLAYBACK}))
         self.store.write(path/'frames'/'0000.png',png(1))
@@ -159,6 +160,37 @@ store.close();"""
         # Reads and late publishes cannot recreate a retired visibility path.
         from server import Conflict
         with self.assertRaises(Conflict):self.store.cinematic_source({'sourceSha256':self.source})
+
+    def test_nested_animation_folder_formal_delete_preserves_siblings_and_rejects_stale_alias(self):
+        self.setup_scope(legacy=False)
+        child=oid('a'); sibling=oid('b')
+        removed=self.seq(self.source,child,nested=True)
+        kept=self.seq(self.source,sibling,nested=True)
+        scene=self.root_scope/'scenes'/self.source
+        self.store.cinematic_playback_update({'officialRequestId':oid('8'),'sequenceId':child,'expectedRevision':0,'playback':PLAYBACK})
+        self.assertTrue((removed/'timeline.json').is_file())
+        sibling_source={'schemaVersion':'ngs.cinematic-sequence-generate.v1','projectId':'binari',
+                        'sourceSha256':self.source,'motionPrompt':'sibling motion','playback':PLAYBACK}
+        self.planner_claim(oid('5'),'cinematic.sequence.generate',sibling_source,status='pending')
+        edit={'schemaVersion':'ngs.cinematic-playback-update.v1','projectId':'binari','sequenceId':child,
+              'expectedRevision':1,'playback':PLAYBACK}
+        self.planner_claim(oid('6'),'cinematic.playback.update',edit,status='pending')
+        old=self.stage(oid('1'),f'sequences/{child}',sequence_id=child)
+        exact=self.stage(oid('2'),f'scenes/{self.source}/sequences/{child}',sequence_id=child)
+        self.pds_call(PATH,exact,status=403)
+        from sqlite3 import connect
+        with connect(self.db) as conn:
+            conn.execute("UPDATE workflow_tasks SET status='completed' WHERE official_request_id=?",(oid('6'),))
+        self.pds_call(PATH,old,status=409)
+        preserved={p:p.read_bytes() for p in [scene/'source.png',scene/'source.json',kept/'manifest.json',kept/'frames'/'0000.png']}
+        receipt=self.pds_call(PATH,exact)
+        self.assertEqual(self.pds_call(PATH,exact),receipt)
+        self.assertTrue(receipt['targetAbsent'])
+        self.assertFalse(removed.exists())
+        self.assertTrue(scene.is_dir())
+        self.assertFalse((self.root_scope/'sources'/('.removed-'+self.source+'.json')).exists())
+        self.assertFalse((self.root_scope/'sequence-archive.json').exists())
+        for p,content in preserved.items():self.assertEqual(p.read_bytes(),content)
 
     def test_pending_generation_protects_source_and_disables_inventory(self):
         self.setup_scope()

@@ -815,15 +815,36 @@ class CinematicTargetDelete:
             raise PinnedDeleteRejected('cinematic scene migration incomplete')
         return raw
 
+    def _remove_sequence(self,command,target,source,oid):
+        if (type(oid)is not str or not re.fullmatch(OID,oid) or target['kind']!='directory' or
+                target['path'] not in ('sequences/'+oid,'scenes/'+source+'/sequences/'+oid)):
+            raise ValueError('cinematic sequence delete pin')
+        mover=SingleTargetDelete(self.store,ROOT)
+        move={'operationId':command['operationId'],'target':target}
+        with self.store.lock():
+            resolved=self.store._seq_dir(oid)
+            # Never alias a stale flat request to a migrated folder or infer
+            # another scene from the same ID. Preserve the location index.
+            if resolved!=self.store.root/target['path']:
+                raise PinnedDeleteRejected('cinematic sequence location changed')
+            try:resolved.lstat()
+            except FileNotFoundError:return mover.remove_locked(move)
+            _,manifest=self.store._playback_base(oid)
+            if manifest['sourceSha256']!=source or manifest.get('group'):
+                raise PinnedDeleteRejected('cinematic sequence source changed')
+            return mover.remove_locked(move)
+
     def remove(self,command):
         from media_store import CINEMATIC_MAX,source_entry,source_image,wire
         if type(command)is not dict or set(command)!={'operationId','target','expected'}:raise ValueError('cinematic delete command')
         t=validate_target(command['target']);expected=command['expected']
-        if t['root']!=ROOT or type(expected)is not dict or set(expected)!={'sourceSha256'}:
+        if t['root']!=ROOT or type(expected)is not dict or set(expected) not in ({'sourceSha256'},{'sourceSha256','sequenceId'}):
             raise ValueError('cinematic delete pin')
         source=expected['sourceSha256']
         if type(source)is not str or not re.fullmatch(DIGEST,source):raise ValueError('cinematic delete source')
         path=t['path']
+        if 'sequenceId' in expected:
+            return self._remove_sequence(command, t, source, expected['sequenceId'])
         scene_target=t['kind']=='directory' and path=='scenes/'+source
         alias=SOURCE.fullmatch(path) if t['kind']=='file' else None
         seq=SEQUENCE.fullmatch(path) if t['kind']=='directory' else None

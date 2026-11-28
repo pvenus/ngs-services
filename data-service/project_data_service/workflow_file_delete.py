@@ -23,11 +23,16 @@ NPC_ID=r'(?:character|npc|entity|enemy)\.[a-z0-9._-]{2,80}'
 TASK_ID=r'workflow\.task\.[a-f0-9]{64}'
 
 def cinematic_binding(target,expected):
-    if not (target_value(target) and target['root']==CINEMATIC_ROOT and keys(expected,('sourceSha256',)) and
+    if not (target_value(target) and target['root']==CINEMATIC_ROOT and
+            (keys(expected,('sourceSha256',)) or keys(expected,('sourceSha256','sequenceId'))) and
             type(expected['sourceSha256']) is str and re.fullmatch('[a-f0-9]{64}',expected['sourceSha256'])):
         return False
     source=expected['sourceSha256'];path=target['path']
     oid=r'request\.official\.[a-f0-9]{64}'
+    if 'sequenceId' in expected:
+        ident=expected['sequenceId']
+        return (type(ident)is str and re.fullmatch(oid,ident) is not None and target['kind']=='directory' and
+                path in ('sequences/'+ident,'scenes/'+source+'/sequences/'+ident))
     if target['kind']=='directory':return re.fullmatch('sequences/'+oid,path) is not None or path=='scenes/'+source
     return path in ('sources/'+source+'.json','sources/'+source+'.png') or re.fullmatch('results/'+oid+r'\.(mp4|json)',path) is not None
 
@@ -51,6 +56,15 @@ def active_cinematic(db,source,sequence_ids=(),*,whole_scene=False):
       json_extract(r.payload,'$.sequenceId') IN (SELECT value FROM json_each(?)) AND
       (t.status IN ('pending','running') OR t.status='failed' AND t.retry_count<t.retry_limit) LIMIT 1""",
       (canonical(list(sequence_ids)).decode(),)).fetchone() is not None
+
+def active_sequence_delete_dependency(db,sequence_id):
+    return db.execute("""SELECT 1 FROM workflow_runs r JOIN workflow_tasks t USING(official_request_id)
+      WHERE r.project_id='binari' AND r.state IN ('awaiting_rs','planned') AND r.reason IS NULL
+      AND ((r.request_type IN ('cinematic.sequence.generate','cinematic.sequence.upscale') AND r.official_request_id=?)
+        OR (r.request_type IN ('cinematic.playback.update','cinematic.sequence.upscale') AND
+          json_extract(r.payload,'$.sequenceId')=?))
+      AND (t.status IN ('pending','running','saving') OR t.status='failed' AND t.retry_count<t.retry_limit)
+      LIMIT 1""",(sequence_id,sequence_id)).fetchone() is not None
 
 def cinematic_storage_provider(planner,writer_factory,readiness):
     return AuthorizedStorage(authorize_for(planner,CINEMATIC_ROOT),lambda command:filex_execute(writer_factory,command),readiness)
@@ -94,9 +108,12 @@ def authorize_for(planner,root):
                  re.fullmatch(MAP_ID,expected['officialRequestId']))
         elif root==CINEMATIC_ROOT:
             need(cinematic_binding(target,expected))
-            sequence_ids=[target['path'].split('/')[1]] if target['kind']=='directory' else []
-            whole_scene=target['path']=='scenes/'+expected['sourceSha256']
-            need(not active_cinematic(db,expected['sourceSha256'],sequence_ids,whole_scene=whole_scene))
+            if 'sequenceId' in expected:
+                need(not active_sequence_delete_dependency(db,expected['sequenceId']))
+            else:
+                sequence_ids=[target['path'].split('/')[1]] if target['kind']=='directory' else []
+                whole_scene=target['path']=='scenes/'+expected['sourceSha256']
+                need(not active_cinematic(db,expected['sourceSha256'],sequence_ids,whole_scene=whole_scene))
         else:
             need(target['kind']=='directory' and root==NPC_ROOT and re.fullmatch(NPC_ID,target['path']) and keys(expected,('creationTaskId',))
                  and type(expected['creationTaskId']) is str and re.fullmatch(TASK_ID,expected['creationTaskId']))
