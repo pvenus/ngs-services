@@ -229,7 +229,7 @@ console.log(payloadSha256);s.close();"""
         artifact={'sha256':sha(raw),'bytes':len(raw),'width':1536,'height':1024,'base64':base64.b64encode(raw).decode()}
         offer={'claim':claim,'artifact':artifact}
         receipt=root/'.source-receipts'/(OID+'.json')
-        path=root/'sources'/(artifact['sha256']+'.png')
+        path=root/'scenes'/artifact['sha256']/'source.png'
         ref='binari/cinematics/sources/'+artifact['sha256']+'.json'
         call('/reconcile',{'claim':{**claim,'claimStamp':4}},403,base=base)
         self.assertEqual(call('/reconcile',{'claim':claim},base=base),{'state':'absent_fenced'})

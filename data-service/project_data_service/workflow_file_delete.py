@@ -28,10 +28,10 @@ def cinematic_binding(target,expected):
         return False
     source=expected['sourceSha256'];path=target['path']
     oid=r'request\.official\.[a-f0-9]{64}'
-    if target['kind']=='directory':return re.fullmatch('sequences/'+oid,path) is not None
+    if target['kind']=='directory':return re.fullmatch('sequences/'+oid,path) is not None or path=='scenes/'+source
     return path in ('sources/'+source+'.json','sources/'+source+'.png') or re.fullmatch('results/'+oid+r'\.(mp4|json)',path) is not None
 
-def active_cinematic(db,source,sequence_ids=()):
+def active_cinematic(db,source,sequence_ids=(),*,whole_scene=False):
     # Match only the trusted structured fields, never free-form prompt text.
     render=db.execute("""SELECT 1 FROM workflow_runs r JOIN workflow_tasks t USING(official_request_id)
       WHERE r.project_id='binari' AND r.state IN ('awaiting_rs','planned') AND r.reason IS NULL
@@ -39,6 +39,11 @@ def active_cinematic(db,source,sequence_ids=()):
       AND json_extract(r.payload,'$.sourceSha256')=? AND
       (t.status IN ('pending','running') OR t.status='failed' AND t.retry_count<t.retry_limit) LIMIT 1""",(source,)).fetchone()
     if render is not None:return True
+    if whole_scene and db.execute("""SELECT 1 FROM workflow_runs edit JOIN workflow_tasks t USING(official_request_id)
+      JOIN workflow_runs seq ON seq.official_request_id=json_extract(edit.payload,'$.sequenceId')
+      WHERE edit.project_id='binari' AND edit.state IN ('awaiting_rs','planned') AND edit.reason IS NULL
+      AND edit.request_type='cinematic.playback.update' AND json_extract(seq.payload,'$.sourceSha256')=?
+      AND (t.status IN ('pending','running') OR t.status='failed' AND t.retry_count<t.retry_limit) LIMIT 1""",(source,)).fetchone() is not None:return True
     if not sequence_ids:return False
     return db.execute("""SELECT 1 FROM workflow_runs r JOIN workflow_tasks t USING(official_request_id)
       WHERE r.project_id='binari' AND r.state IN ('awaiting_rs','planned') AND r.reason IS NULL
@@ -90,7 +95,8 @@ def authorize_for(planner,root):
         elif root==CINEMATIC_ROOT:
             need(cinematic_binding(target,expected))
             sequence_ids=[target['path'].split('/')[1]] if target['kind']=='directory' else []
-            need(not active_cinematic(db,expected['sourceSha256'],sequence_ids))
+            whole_scene=target['path']=='scenes/'+expected['sourceSha256']
+            need(not active_cinematic(db,expected['sourceSha256'],sequence_ids,whole_scene=whole_scene))
         else:
             need(target['kind']=='directory' and root==NPC_ROOT and re.fullmatch(NPC_ID,target['path']) and keys(expected,('creationTaskId',))
                  and type(expected['creationTaskId']) is str and re.fullmatch(TASK_ID,expected['creationTaskId']))

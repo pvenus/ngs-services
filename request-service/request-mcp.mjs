@@ -120,7 +120,7 @@ const backgroundFileDeletePayload={...fileDeletePayload,properties:{...fileDelet
 }};
 const cinematicFileDeletePayload={...fileDeletePayload,properties:{...fileDeletePayload.properties,
  target:{...fileDeletePayload.properties.target,properties:{root:{const:cinematicDeleteRoot},
-  kind:{enum:['file','directory']},path:{type:'string',pattern:'^(?:sources/[a-f0-9]{64}\\.(?:json|png)|sequences/request\\.official\\.[a-f0-9]{64}|results/request\\.official\\.[a-f0-9]{64}\\.(?:json|mp4))$'}}},
+  kind:{enum:['file','directory']},path:{type:'string',pattern:'^(?:scenes/[a-f0-9]{64}|sources/[a-f0-9]{64}\\.(?:json|png)|sequences/request\\.official\\.[a-f0-9]{64}|results/request\\.official\\.[a-f0-9]{64}\\.(?:json|mp4))$'}}},
  expected:{type:'object',properties:{sourceSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['sourceSha256'],additionalProperties:false},
 }};
 const mapFileDeletePayload={...fileDeletePayload,properties:{...fileDeletePayload.properties,

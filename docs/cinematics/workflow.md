@@ -87,3 +87,32 @@ For the pixel variant only, the same claim runs a deterministic full-canvas shar
 New background animation intake (v2) is composition only. It supplies the background-specific prompt and pinned source(s) to the same media operations: render, upscale, palette correction (pixel branch only), and publish. Both source branches are independent. Each operation is a durable OPS task, linked to its preceding operation by task ID. The existing animation resident owns the GPU slots and its protected temporary checkpoint storage; only the final publish task can stage or publish to Filex. Predecessor frames are consumed by verified digest and removed after their successor succeeds. Prior v1 jobs and result IDs are read-compatible.
 
 Compact v2 background requests use 17 Wan frames (model alignment), take 16 as the logical source sequence and retain every other frame before SeedVR2. Only eight final frames per variant are published. In this profile the pixel variant halves both dimensions of the SeedVR2 output with nearest-neighbor sampling before the reference-palette correction. This does not affect earlier background or other cinematic requests.
+
+## One folder per cinematic scene
+
+A new source (or migrated legacy source) is stored as `cinematics/scenes/<source-sha256>/`.
+The directory contains `source.png`, `source.json`, its `sequences/<request-id>/`
+(manifest, frames, and timeline revisions), and any `results/` movie pair.
+`scene-index/` stores only lookup keys for the existing request-ID API. The
+manifest and digest still bind each lookup to its source. Background assets and
+grouped background sequences are not moved. Existing workflow receipts retain
+their logical IDs; they do not point consumers directly at a filesystem mount.
+
+An editable actor deletes an individual scene via the existing `file.delete`
+contract, passing the exact `scenes/<sha256>` directory and its source SHA. PDS
+refuses a scene with active render or playback work. Filex checks source
+identity and legacy membership and uses the existing recoverable directory
+move; stale or split scenes cannot be reported as deleted. No new writer,
+worker, or deletion request type is required.
+
+Roll out Filex, PDS, Request Service, Planner, file worker, relay and the shared
+UI readers before moving production media. Continue serving legacy files while
+these components are staged. With writers, workers and replica sync paused,
+rehearse against a separate copy; run `filex-writer/cinematic_scene_migration.py`
+for each verified source. Without `--apply-offline` it reports the exact source
+and file count and copies nothing. Apply stages and checks SHA-256 before the
+atomic scene publish, then archives each legacy entry under the private
+`.scene-migration/<sha256>/`. If interrupted, reconcile the staged/live copies
+and private backups before retrying; never overwrite either tree. Check the
+canonical reader and sampled playback before resuming sync. Do not expose
+the Space capability until the matching services and readers are live.

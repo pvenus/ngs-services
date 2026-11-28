@@ -26,10 +26,11 @@ def oid(c):return 'request.official.'+c*64
 
 
 class CinematicTargetDeleteFixture(UnifiedFixture):
-    def setup_scope(self):
+    def setup_scope(self,*,legacy=True):
         root=self.data/'cinematics';store=CinematicProjectStore(root)
         raw=png(1,1536,1024)
         self.source=sha(raw)
+        if legacy:store.write(root/'sources'/(self.source+'.png'),raw)
         store.cinematic_source_generate({'manifest':{'schemaVersion':'ngs.cinematic-source-result.v1',
             'projectId':'binari','officialRequestId':OID,'title':'삭제용 장면',
             'sha256':self.source,'bytes':len(raw),'width':1536,'height':1024},
@@ -70,7 +71,7 @@ store.close();"""
 
     def stage(self,id,path,source=None):
         source=source or self.source
-        target={'root':CINEMATIC_ROOT,'path':path,'kind':'directory' if path.startswith('sequences/') else 'file'}
+        target={'root':CINEMATIC_ROOT,'path':path,'kind':'directory' if path.startswith(('sequences/','scenes/')) else 'file'}
         claim=self.planner_claim(id,'file.delete',{'schemaVersion':'ngs.file-delete.v1','projectId':'binari',
             'target':target,'expected':{'sourceSha256':source}})
         return {'target':target,'claim':claim}
@@ -195,3 +196,48 @@ store.close();"""
         from server import Conflict
         with self.assertRaisesRegex(Conflict,'cinematic source retired'):
             self.store.cinematic_sequence_publish({'manifest':manifest})
+
+
+    def test_scene_is_one_pinned_common_delete_and_archives_the_directory(self):
+        self.setup_scope(legacy=False)
+        scene=self.root_scope/'scenes'/self.source
+        self.assertTrue((scene/'source.png').is_file())
+        sid=oid('6')
+        frames=[]
+        for i in range(45):
+            raw=png(i)
+            frame={'index':i,'bytes':len(raw),'sha256':sha(raw)}
+            self.store.cinematic_sequence_frame({'officialRequestId':sid,'frame':{**frame,'base64':base64.b64encode(raw).decode()}})
+            frames.append(frame)
+        manifest={'schemaVersion':'ngs.cinematic-sequence-result.v1','projectId':'binari','officialRequestId':sid,
+                  'sourceSha256':self.source,'width':128,'height':128,'frameCount':45,'masterFps':24,'frames':frames,'playback':PLAYBACK}
+        self.assertEqual(self.store.cinematic_sequence_publish({'manifest':manifest}),manifest)
+        self.assertEqual(self.store.cinematic_sequence_publish({'manifest':manifest}),manifest)
+        deck=scene/'sequences'/sid
+        self.assertTrue((deck/'frames'/'0000.png').is_file())
+        edit={'officialRequestId':oid('7'),'sequenceId':sid,'expectedRevision':0,'playback':PLAYBACK}
+        self.assertEqual(self.store.cinematic_playback_update(edit)['revision'],1)
+        self.assertTrue((deck/'timeline.json').is_file())
+        inventory=self.pds_call(CINEMATIC_INVENTORY+'?sourceSha256='+self.source)
+        self.assertEqual([t['path'] for t in inventory['targets']],['scenes/'+self.source])
+        packet=self.stage(oid('4'),'scenes/'+self.source)
+        result=self.pds_call(PATH,packet)
+        self.assertTrue(result['targetAbsent'])
+        self.assertFalse(scene.exists())
+        self.assertTrue((self.root_scope/'.storage-quarantine'/result['recoveryId']/'target'/'source.png').is_file())
+        self.assertEqual(self.pds_call(PATH,packet),result)
+
+    def test_migration_rehomes_old_source_with_exact_bytes_before_common_delete(self):
+        from cinematic_scene_migration import migrate
+        self.setup_scope()
+        source=self.root_scope/'sources'/(self.source+'.png')
+        data=source.read_bytes()
+        plan=migrate(self.store,self.source)
+        self.assertEqual(plan['files'],2)
+        self.assertTrue(source.exists())
+        self.assertEqual(migrate(self.store,self.source,apply=True)['targets'],plan['targets'])
+        self.assertFalse(source.exists())
+        self.assertEqual((self.root_scope/'scenes'/self.source/'source.png').read_bytes(),data)
+        self.assertEqual((self.root_scope/'.scene-migration'/self.source/'sources'/source.name).read_bytes(),data)
+        self.assertEqual(self.store.cinematic_source({'sourceSha256':self.source},status=True),{'sourceSha256':self.source})
+        self.assertRaises(ValueError,migrate,self.store,self.source,apply=True)

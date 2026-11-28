@@ -94,6 +94,47 @@ class CinematicStore(Store):
   p=self.root/folder/name
   require(not p.is_symlink(),'cinematic symlink')
   return p
+ def _scene_dir(self,source):
+  require(cinematic_match(source,CINEMATIC_DIGEST),'cinematic scene key')
+  base=self.root/'scenes';scene=base/source
+  require(not base.is_symlink() and not scene.is_symlink(),'cinematic scene links')
+  return scene
+ def _scene_child(self,scene,folder,name):
+  require(folder in ('sequences','results'),'cinematic scene child type')
+  base=scene/folder;child=base/name
+  require(not base.is_symlink() and not child.is_symlink(),'cinematic scene child links')
+  return child
+ def _source_path(self,source,ext,*,write=False):
+  require(ext in ('png','json'),'cinematic source extension')
+  scene=self._scene_dir(source)
+  leaf=scene/('source.'+ext)
+  require(not leaf.is_symlink(),'cinematic source link')
+  old=self._path('sources',source+'.'+ext)
+  if scene.exists():return leaf
+  if write and not any(self._path('sources',source+'.'+kind).exists() for kind in ('png','json')):return leaf
+  return old
+ def _location(self,folder,oid):
+  require(cinematic_match(oid,CINEMATIC_ID) and folder in ('sequences','results'),'cinematic location key')
+  root=self.root/'scene-index'
+  base=root/folder; p=base/(oid+'.json')
+  require(not root.is_symlink() and not base.is_symlink() and not p.is_symlink(),'cinematic location links')
+  return p
+ def _located_scene(self,folder,oid):
+  try:raw=self._read(self._location(folder,oid),256)
+  except FileNotFoundError:return None
+  value=json.loads(raw)
+  require(type(value)is dict and set(value)=={'sourceSha256'} and raw==wire(value),'cinematic location integrity')
+  return self._scene_dir(value['sourceSha256'])
+ def _bind_scene(self,folder,oid,source):
+  previous=self._located_scene(folder,oid)
+  scene=self._scene_dir(source)
+  if previous is not None and previous!=scene:raise Conflict('cinematic location already assigned')
+  if previous is None:self.write(self._location(folder,oid),wire({'sourceSha256':source}))
+  return scene
+ def _result_path(self,oid,ext):
+  require(ext in ('json','mp4'),'cinematic result extension')
+  scene=self._located_scene('results',oid)
+  return (self._scene_child(scene,'results',oid+'.'+ext) if scene is not None else self._path('results',oid+'.'+ext))
  def _read(self,path,maximum):
   # Directories and final entry are opened without following symlinks.
   import os,stat
@@ -111,7 +152,7 @@ class CinematicStore(Store):
   h=p['sourceSha256']
   with self.lock():
    self._ensure_unretired_source(h)
-   raw=self._read(self._path('sources',h+'.png'),CINEMATIC_MAX)
+   raw=self._read(self._source_path(h,'png'),CINEMATIC_MAX)
    require(raw[:16]==b'\x89PNG\r\n\x1a\n\0\0\0\rIHDR' and len(raw)>=33 and sha(raw)==h,'cinematic source integrity')
    w,y=struct.unpack_from('>II',raw,16)
    require(0<w<=4096 and 0<y<=4096 and w*y<=8388608,'cinematic source dimensions')
@@ -124,11 +165,13 @@ class CinematicStore(Store):
   return {'sourceSha256':h} if status else {'sourceSha256':h,'base64':base64.b64encode(raw).decode()}
  def _result(self,oid):
   require(cinematic_match(oid,CINEMATIC_ID),'cinematic result id')
-  manifest_raw=self._read(self._path('results',oid+'.json'),8192)
+  manifest_raw=self._read(self._result_path(oid,'json'),8192)
   m=json.loads(manifest_raw)
   validate_cinematic_manifest(m)
   require(m['officialRequestId']==oid and wire(m)==manifest_raw,'cinematic manifest integrity')
-  data=self._read(self._path('results',oid+'.mp4'),CINEMATIC_MAX)
+  scene=self._located_scene('results',oid)
+  require(scene is None or scene.name==m['sourceSha256'],'cinematic result location integrity')
+  data=self._read(self._result_path(oid,'mp4'),CINEMATIC_MAX)
   validate_cinematic_mp4(data,m)
   return m
  def cinematic_result(self,p):
@@ -142,7 +185,10 @@ class CinematicStore(Store):
   oid=m['officialRequestId']
   with self.lock():
    self._ensure_unretired_source(m['sourceSha256'])
-   video=self._path('results',oid+'.mp4'); metadata=self._path('results',oid+'.json')
+   source=m['sourceSha256']
+   if self._scene_dir(source).exists() and not any(self._path('results',oid+'.'+x).exists() for x in ('json','mp4')):
+    self._bind_scene('results',oid,source)
+   video=self._result_path(oid,'mp4'); metadata=self._result_path(oid,'json')
    if metadata.exists():
     if self._result(oid)!=m:raise Conflict('cinematic immutable receipt conflict')
     return m
@@ -250,6 +296,9 @@ class CinematicSequenceStore(CinematicStore):
  def _seq_dir(self,name):
   base=self.root/'sequences'
   require(not base.is_symlink(),'sequence scope folder')
+  if not name.startswith('.'):
+   scene=self._located_scene('sequences',name)
+   if scene is not None:return self._scene_child(scene,'sequences',name)
   child=base/name
   require(not child.is_symlink(),'sequence result folder')
   return child
@@ -270,6 +319,8 @@ class CinematicSequenceStore(CinematicStore):
   raw=self._read(folder/'manifest.json',64*1024)
   m=seq_manifest(json.loads(raw))
   require(m['officialRequestId']==oid and wire(m)==raw,'sequence receipt integrity')
+  scene=self._located_scene('sequences',oid)
+  require(scene is None or scene.name==m['sourceSha256'] and not m.get('group'),'sequence scene integrity')
   self._seq_verify_frames(folder,m)
   return m
  def cinematic_sequence_result(self,p):
@@ -325,6 +376,10 @@ class CinematicSequenceStore(CinematicStore):
    require(self._read(stage/'manifest.json',64*1024)==wire(manifest),'sequence pre-publication manifest readback')
    # The rename is the single visibility boundary. Its source and destination
    # are siblings in the same controlled mount. Folders are committed once.
+   if not manifest.get('group') and self._scene_dir(manifest['sourceSha256']).exists():
+    scene=self._bind_scene('sequences',oid,manifest['sourceSha256'])
+    final=self._scene_child(scene,'sequences',oid)
+    final.parent.mkdir(mode=0o700,exist_ok=True)
    os.rename(stage,final)
    seq_sync_dir(final.parent)
    return self._seq_result(oid)
@@ -355,6 +410,8 @@ class CinematicPlaybackStore(CinematicSequenceStore):
   raw=self._read(folder/'manifest.json',64*1024)
   m=seq_manifest(json.loads(raw))
   require(m['officialRequestId']==oid and wire(m)==raw,'playback original manifest integrity')
+  scene=self._located_scene('sequences',oid)
+  require(scene is None or scene.name==m['sourceSha256'] and not m.get('group'),'playback scene integrity')
   return folder,m
  def _playback_current(self,folder,manifest):
   oid=manifest['officialRequestId'];path=folder/'timeline.json'
@@ -504,9 +561,9 @@ class CinematicProjectStore(CinematicPlaybackStore):
   receipt=self._private_result('.background-receipts' if background else '.source-receipts',oid)
   raw=self._read(receipt,8192);m=source_entry(json.loads(raw),background)
   require(wire(m)==raw and m['officialRequestId']==oid,'source receipt integrity')
-  p=self._path('backgrounds' if background else 'sources',m['sha256']+'.png')
+  p=self._path('backgrounds',m['sha256']+'.png') if background else self._source_path(m['sha256'],'png')
   source_image(self._read(p,CINEMATIC_MAX),m)
-  public=self._read(self._path('backgrounds' if background else 'sources',m['sha256']+'.json'),8192)
+  public=self._read(self._path('backgrounds',m['sha256']+'.json') if background else self._source_path(m['sha256'],'json'),8192)
   alias=source_entry(json.loads(public),background)
   require(wire(alias)==public and all(alias[k]==m[k] for k in ('sha256','bytes','width','height')),'source alias integrity')
   return m
@@ -552,7 +609,8 @@ class CinematicProjectStore(CinematicPlaybackStore):
    if receipt.exists() or receipt.is_symlink():
     if self._read(receipt,8192)!=frozen:raise Conflict('source image request reused')
    else:self.write(receipt,frozen)
-   image=self._path('backgrounds' if background else 'sources',s+'.png'); meta=self._path('backgrounds' if background else 'sources',s+'.json')
+   image=self._path('backgrounds',s+'.png') if background else self._source_path(s,'png',write=True)
+   meta=self._path('backgrounds',s+'.json') if background else self._source_path(s,'json',write=True)
    if image.exists():
     require(self._read(image,CINEMATIC_MAX)==raw,'source bytes collision')
    else:self.write(image,raw)
@@ -665,6 +723,7 @@ class CinematicTargetDelete:
             for entry in path.iterdir():
                 if folder=='sequences' and re.fullmatch(OID,entry.name):
                     _,manifest=self.store._playback_base(entry.name)
+                    if manifest.get('group'):continue
                 elif folder=='results' and re.fullmatch(OID+r'\.json',entry.name):
                     manifest=self._legacy(entry.stem)
                 elif folder=='results' and re.fullmatch(OID+r'\.mp4',entry.name):
@@ -689,6 +748,10 @@ class CinematicTargetDelete:
         if type(source)is not str or not re.fullmatch(DIGEST,source):raise ValueError('cinematic delete source')
         with self.store.lock():
             marker=self._marker(source)
+            scene=self.store._scene_dir(source)
+            if scene.exists():
+                self._validate_scene(scene,source)
+                return {'sourceSha256':source,'targets':[{'root':ROOT,'path':'scenes/'+source,'kind':'directory'}]}
             metadata=self.store._path('sources',source+'.json')
             image=self.store._path('sources',source+'.png')
             raw=self.store._read(metadata if metadata.exists() else marker,8192)
@@ -701,6 +764,16 @@ class CinematicTargetDelete:
             targets.append({'root':ROOT,'path':'sources/'+image.name,'kind':'file'})
             return {'sourceSha256':source,'targets':targets}
 
+    def _validate_scene(self,scene,source):
+        raw=self.store._read(scene/'source.json',8192)
+        m=source_entry(json.loads(raw))
+        if wire(m)!=raw or m['sha256']!=source:raise PinnedDeleteRejected('cinematic scene source changed')
+        source_image(self.store._read(scene/'source.png',CINEMATIC_MAX),m)
+        self._uncorrelated_sources(source,m['officialRequestId'])
+        if any(self.store._path('sources',source+'.'+ext).exists() for ext in ('png','json')) or self._remaining_children(source):
+            raise PinnedDeleteRejected('cinematic scene migration incomplete')
+        return raw
+
     def remove(self,command):
         from media_store import CINEMATIC_MAX,source_entry,source_image,wire
         if type(command)is not dict or set(command)!={'operationId','target','expected'}:raise ValueError('cinematic delete command')
@@ -710,13 +783,23 @@ class CinematicTargetDelete:
         source=expected['sourceSha256']
         if type(source)is not str or not re.fullmatch(DIGEST,source):raise ValueError('cinematic delete source')
         path=t['path']
+        scene_target=t['kind']=='directory' and path=='scenes/'+source
         alias=SOURCE.fullmatch(path) if t['kind']=='file' else None
         seq=SEQUENCE.fullmatch(path) if t['kind']=='directory' else None
         result=RESULT.fullmatch(path) if t['kind']=='file' else None
-        if not (alias or seq or result) or alias and alias[1]!=source:raise ValueError('cinematic delete target')
+        if not (scene_target or alias or seq or result) or alias and alias[1]!=source:raise ValueError('cinematic delete target')
         mover=SingleTargetDelete(self.store,ROOT)
         move={k:command[k] for k in ('operationId','target')}
         with self.store.lock():
+            if scene_target:
+                scene=self.store._scene_dir(source)
+                if not scene.exists():return mover.remove_locked(move)
+                raw=self._validate_scene(scene,source)
+                marker=self._marker(source)
+                if marker.exists() and self.store._read(marker,8192)!=raw:
+                    raise PinnedDeleteRejected('cinematic retirement marker changed')
+                if not marker.exists():self.store.write(marker,raw)
+                return mover.remove_locked(move)
             if seq:
                 leaf=self.store._seq_dir(seq[1])
             else:
