@@ -326,3 +326,48 @@ test('reference CREATE retains exact optional pin across official Local and Spac
  await assert.rejects(rs.call('request_submit',{...command(),requestType:'prop.regenerate',payload:{...payload,
   schemaVersion:'ngs.prop-regenerate.v1',source:{revision:1,sha256:'c'.repeat(64)}}}),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
 });
+
+test('official prop-scale intake is validated and independently plans one postprocess publish',async t=>{
+ const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true});
+ const advertised=(await rs.rpc('tools/list',{})).tools.find(tool=>tool.name==='request_submit');
+ assert(advertised.inputSchema.properties.requestType.enum.includes('prop.scale.generate'));
+ const source={revision:2,sha256:'c'.repeat(64)},base={schemaVersion:'ngs.prop-scale-generate.v1',projectId:'binari',propId:p.propId,source};
+ const submit=(payload,key)=>rs.call('request_submit',{sourceId:'local',requestType:'prop.scale.generate',idempotencyKey:key,payload});
+ for(const [index,scalePercents] of [[],[5,5],[15],[1],[0],[105],['10']].entries())
+  await assert.rejects(submit({...base,scalePercents},'invalid-scale-'+index),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+ const {officialRequestId}=await submit({...base,scalePercents:[100,5,20]},'add-prop-scales');
+ const {requests}=await rs.call('request_workflow_list',{});
+ const row=requests.find(r=>r.officialRequestId===officialRequestId);
+ const [pkg,...rest]=buildPlan(row).tasks;
+ assert.deepEqual(rest,[]);assert.equal(pkg.workerType,'postprocess');assert.equal(pkg.type,'prop.scale.generate.publish');
+ assert.deepEqual(pkg.input,{propId:p.propId,source,scalePercents:[100,5,20],dependsOnTaskIds:[]});
+ const generating={...p,scalePercents:[40,5],presentationProfile:'spirit-v2'};
+ const tasks=buildPlan(makeRow(generating)).tasks;
+ assert.deepEqual(tasks.at(-1).input.scalePercents,[40,5]);
+ assert.equal(tasks.filter(t=>t.workerType==='image').length,2);
+ await assert.rejects(rs.call('request_submit',command({...p,scalePercents:[13]})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
+});
+
+test('append scale completion proof rejects changed old scales or unrelated metadata',()=>{
+ const a='a'.repeat(64),b='b'.repeat(64),c='c'.repeat(64);
+ const asset=(sha256,width,height=width)=>({assetId:sha256+'.png',sha256,width,height,bytes:100,mediaType:'image/png',frameDurationsMs:[]});
+ const base={schemaVersion:'ngs.prop-package.v1',projectId:'binari',propId:'lantern',revision:1,officialRequestId:'request.official.'+b,
+  requestSha256:a,designContextSha256:a,title:'등롱',parentSha256:null,media:{detail:asset(a,100),pixel:asset(b,20)},
+  interaction:{pixelOpen:null,detailTrigger:null},animations:[],scaleVariants:[{scalePercent:20,pixel:asset(b,20),spirit:asset(c,20)}]};
+ const source={revision:1,sha256:sha(canonical(base))},officialRequestId='request.official.'+a,requestType='prop.scale.generate';
+ const payload={schemaVersion:'ngs.prop-scale-generate.v1',projectId:'binari',propId:'lantern',source,scalePercents:[5]};
+ const run={...makeRow(payload),officialRequestId,requestType,state:'planned',reason:null};
+ const [task]=buildPlan({...makeRow(payload),officialRequestId,requestType}).tasks;
+ const claim={officialRequestId,projectId:'binari',taskId:task.id,payloadSha256:run.payloadSha256,claimStamp:10};
+ const rows=[{task_id:task.id,task_key:task.key,task_type:task.type,worker_type:task.workerType,depends_on_task_id:null,
+  task_input:canonical(task.input),official_request_id:officialRequestId,status:'running',result_ref:null,updated_at:10}];
+ const pack={...base,officialRequestId,requestSha256:run.payloadSha256,revision:2,parentSha256:source.sha256,
+  scaleVariants:[{scalePercent:5,pixel:asset(b,5),spirit:asset(c,5)},...base.scaleVariants]};
+ const proof=preparePropPublication(run,rows,claim,pack,{prior:base,head:source});
+ const receipt={...proof,schemaVersion:'ngs.prop-package-publication-receipt.v1',authority:'filex',status:'committed'};
+ assert(verifyPropPublicationProof(proof,{manifest:pack,receipt,prior:base}));
+ assert.throws(()=>preparePropPublication(run,rows,claim,{...pack,title:'수정'}, {prior:base,head:source}),/PROP_PACKAGE_PROOF_INVALID/);
+ const [next,old]=pack.scaleVariants;
+ assert.throws(()=>preparePropPublication(run,rows,claim,{...pack,scaleVariants:[next,{...old,spirit:asset(a,20)}]},
+  {prior:base,head:source}),/PROP_PACKAGE_PROOF_INVALID/);
+});

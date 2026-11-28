@@ -3,7 +3,7 @@ import time
 from .workflow_save_reservation import optionally_save
 from .filex_read import canonical,digest
 from .filex_writer_binding import writer as connect
-from .assembly_contract import pin as prop_pin
+from .assembly_contract import pin as prop_pin,image_scale
 from .workflow_cinematic import WorkflowCinematic,CinematicConflict,need,keys,match,serve as serve_workflow
 from .workflow_cinematic_sequence import exact_claim,strict_json,OFFICIAL,SAFE_INT
 
@@ -47,8 +47,9 @@ def validate_decorations(v,regions):
     found=set()
     fields={'id','regionId','prop','anchor','scale','visibility'}
     for d in v:
-        need(type(d)is dict and fields<=set(d)<=fields|{'rotation','flipX','flipY','zOrder'} and
+        need(type(d)is dict and fields<=set(d)<=fields|{'rotation','flipX','flipY','zOrder','imageScalePercent'} and
              ('rotation' not in d or type(d['rotation'])is int and 0<=d['rotation']<360) and
+             ('imageScalePercent' not in d or image_scale(d['imageScalePercent'])) and
              ('zOrder' not in d or type(d['zOrder'])is int and -1000<=d['zOrder']<=1000) and
              all(k not in d or type(d[k])is bool for k in ('flipX','flipY')) and
              match(d['id'],r'[a-z][a-z0-9-]{0,31}') and d['id'] not in found and
@@ -191,9 +192,9 @@ def identity(oid,p):return p.get('mapId',oid),p.get('expectedRevision',0)+1
 def ref(mid,rev):return f'binari/cinematics/maps/{mid}/{rev}.json'
 
 def changed_decoration_pins(previous,current):
-    def binding(row):return {k:row[k] for k in ('prop','visibility')}
+    def binding(row):return {k:row[k] for k in ('prop','visibility','imageScalePercent') if k in row}
     old={d['id']:binding(d) for d in previous.get('decorations',())}
-    unique={(tuple(sorted(row['prop'].items())),row['visibility']):binding(row) for row in current.get('decorations',())
+    unique={(tuple(sorted(row['prop'].items())),row['visibility'],row.get('imageScalePercent')):binding(row) for row in current.get('decorations',())
             if old.get(row['id'])!=binding(row)}
     return list(unique.values())
 

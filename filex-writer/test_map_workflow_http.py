@@ -186,14 +186,39 @@ s.close();"""
                 tkey='prop_spirit'
                 candidate['members'].append({'key':tkey,'taskId':'workflow.task.'+digest([package['officialRequestId'],tkey]),
                     'ref':'prop.spirit-rgba.'+media['sha256']})
+        variant={'scalePercent':50}
+        for i,lane in enumerate(('pixel','spirit')):
+            variant[lane],raw=artifact_store(16,16,110+i)
+            layered['media'][variant[lane]['assetId']]=base64.b64encode(raw).decode()
+        package['scaleVariants']=[variant]
+        candidate['scope']['scalePercents']=[50]
+
         candidate['scope']['presentationProfile']='spirit-v1'
         candidate['manifestSha256']=digest(package);candidate['resultRef']='prop.package.'+digest(package)
-        old_assets={m['assetId'] for m in package['media'].values()}
+        old_assets={m['assetId'] for m in package['media'].values()}|{variant[k]['assetId'] for k in ('pixel','spirit')}
         layered['media']={k:v for k,v in layered['media'].items() if k in old_assets}
         self.call('/v1/scopes/props/workflow/props','concept',{k:layered[k] for k in ('candidate','manifest','media')})
         layered_pin={'propId':'layered-lantern','revision':1,'sha256':digest(package)}
         self.assertEqual(json.loads(self.call('/v1/scopes/props/workflow/props/assembly-bindings','concept',
              {'decorationPins':[{'prop':layered_pin,'visibility':'both'}]})),{'ok':True})
+        path='/v1/scopes/props/workflow/props/assembly-bindings'
+        def check_selected(n,status=200):
+            self.call(path,'concept',{'decorationPins':[{'prop':layered_pin,'visibility':'both','imageScalePercent':n}]},status=status)
+            self.call(path,'concept',{'pins':[{**layered_pin,'imageScalePercent':n}]},status=status)
+        check_selected(50)
+        check_selected(100,404)
+        check_selected(55,400)
+        variant_file=self.data/'props'/'layered-lantern'/'assets'/variant['spirit']['assetId']
+        image=variant_file.read_bytes()
+        variant_file.unlink()
+        check_selected(50,404)
+        self.call(path,'concept',{'decorationPins':[{'prop':layered_pin,'visibility':'pixel','imageScalePercent':50}]})
+        variant_file.write_bytes(image)
+        latest=make('f','regenerate',package,120,prop_id=layered_pin['propId'])
+        self.call('/v1/scopes/props/workflow/props','concept',{k:latest[k] for k in ('candidate','manifest','media')})
+        check_selected(50) # a newer head without 50% must not invalidate this exact historical pin
+        for wrong in ({**layered_pin,'revision':3},{**layered_pin,'sha256':'a'*64}):
+            self.call(path,'concept',{'pins':[{**wrong,'imageScalePercent':50}]},status=404)
         def init_decor(i,mode):
             mid='request.official.'+i*64
             b3={**staged,'schemaVersion':'ngs.map-generate.v3','decorationDesign':{'mode':mode,'notes':'',
@@ -229,17 +254,20 @@ s.close();"""
         self.assertEqual(map_revision(store,{'mapId':decor_id,'revision':1})['graph'],final_graph)
 
         def move_decor(ch,rev,publisher,content):
-            return stage('request.official.'+ch*64,{'schemaVersion':'ngs.file-update.v1','projectId':'binari',
+            return stage('request.official.'+(ch*64 if len(ch)==1 else digest([ch])),{'schemaVersion':'ngs.file-update.v1','projectId':'binari',
                 'target':{'root':MAP_ROOT,'path':decor_id,'kind':'metadata'},
                 'expected':{'revision':rev,'officialRequestId':publisher},'content':content},'file.update')
         changed_visibility=move_decor('2',1,decor_id,{**valid,'decorations':[{**decoration,'visibility':'both'}]})
         self.assertEqual(call(packet={'claim':changed_visibility},prefix=UPDATE,status=409),
             {'error':'FILE_UPDATE_MAP_DECORATION_PROP_UNAVAILABLE'})
-        rotated={**decoration,'rotation':75,'flipX':True,'flipY':True,'zOrder':21}
+        rotated={**decoration,'prop':layered_pin,'imageScalePercent':50,'rotation':75,'flipX':True,'flipY':True,'zOrder':21}
         omission=move_decor('3',1,decor_id,{**valid,'decorations':[rotated]})
         output=call(packet={'claim':omission},prefix=UPDATE)
         self.assertEqual(call(packet={'claim':omission},prefix=UPDATE),output)
         self.assertEqual(map_revision(store,{'mapId':decor_id,'revision':2})['graph']['decorations'],[rotated])
+        scale_missing=move_decor('scale-missing',2,omission['officialRequestId'],{**valid,'decorations':[{**rotated,'imageScalePercent':100}]})
+        self.assertEqual(call(packet={'claim':scale_missing},prefix=UPDATE,status=409),
+                         {'error':'FILE_UPDATE_MAP_DECORATION_PROP_UNAVAILABLE'})
         orphan=move_decor('4',2,omission['officialRequestId'],{**valid,
             'regions':[row for row in valid['regions'] if row['id']!='zone-2'],
             'connections':[edge for edge in valid['connections'] if not ('zone-2' in (edge['from'],edge['to']))]})

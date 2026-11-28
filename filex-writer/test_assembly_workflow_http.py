@@ -213,9 +213,15 @@ s.close();"""
                 key='prop_spirit'
                 candidate['members'].append({'key':key,'taskId':'workflow.task.'+digest([manifest['officialRequestId'],key]),
                     'ref':'prop.spirit-rgba.'+m['sha256']})
+        variant={'scalePercent':50}
+        for i,lane in enumerate(('pixel','spirit')):
+            variant[lane],raw=artifact_store(16,16,226+i)
+            layered['media'][variant[lane]['assetId']]=base64.b64encode(raw).decode()
+        manifest['scaleVariants']=[variant]
+        candidate['scope']['scalePercents']=[50]
         candidate['scope']['presentationProfile']='spirit-v1'
         candidate['manifestSha256']=digest(manifest);candidate['resultRef']='prop.package.'+digest(manifest)
-        asset_ids={m['assetId'] for m in manifest['media'].values()}
+        asset_ids={m['assetId'] for m in manifest['media'].values()}|{variant[k]['assetId'] for k in ('pixel','spirit')}
         layered['media']={k:v for k,v in layered['media'].items() if k in asset_ids}
         self.call('/v1/scopes/props/workflow/props','concept',{k:layered[k] for k in ('candidate','manifest','media')})
         pin={'propId':'ghost-fixture','revision':1,'sha256':digest(manifest)}
@@ -244,6 +250,11 @@ s.close();"""
         blocked=file_update('a5',expected,[bad_station])
         self.assertEqual(call(packet={'claim':blocked},expect=409,base=UPDATE),
             {'error':'FILE_UPDATE_ASSEMBLY_ROUTE_NOT_PLAYABLE'})
+        missing_scale={**spirit,'bindings':{'spirit':{**pin,'imageScalePercent':100}}}
+        missing=file_update('fa',expected,[*unchanged,missing_scale])
+        self.assertEqual(call(packet={'claim':missing},expect=409,base=UPDATE),
+            {'error':'FILE_UPDATE_ASSEMBLY_SPIRIT_PROP_UNAVAILABLE'})
+        spirit={**spirit,'bindings':{'spirit':{**pin,'imageScalePercent':50}}}
         add_spirit=file_update('b5',expected,[*unchanged,spirit])
         result=call(packet={'claim':add_spirit},base=UPDATE)
         complete(add_spirit,result)

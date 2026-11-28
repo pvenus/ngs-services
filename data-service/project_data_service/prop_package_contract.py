@@ -42,12 +42,30 @@ def pair(v,animated,small=False):
     need(bw<=aw and bh<=ah and bw*bh<aw*ah and abs(bw*ah-bh*aw)<=max(aw,ah) and a['frameDurationsMs']==b['frameDurationsMs'])
 
 def manifest(v):
-    need(keys(v,KEYS) and v['schemaVersion']=='ngs.prop-package.v1' and v['projectId']=='binari' and
+    need(type(v)is dict and keys(v,KEYS|({'scaleVariants'} if 'scaleVariants' in v else set())|({'scaleSourcePixel'} if 'scaleSourcePixel' in v else set())) and v['schemaVersion']=='ngs.prop-package.v1' and v['projectId']=='binari' and
          prop_id(v['propId']) and number(v['revision'],1,MAX_REVISION) and official(v['officialRequestId']) and
          hex64(v['requestSha256']) and hex64(v['designContextSha256']) and title(v['title']) and
          (v['parentSha256'] is None if v['revision']==1 else hex64(v['parentSha256'])) and
          type(v['animations']) is list and len(v['animations'])<=1024 and keys(v['interaction'],('pixelOpen','detailTrigger')))
     media=v['media'];pair(media,False)
+    if 'scaleSourcePixel' in v:
+        a=v['scaleSourcePixel']
+        need(keys(a,('assetId','sha256','bytes','width','height','mediaType','frameDurationsMs')) and
+             hex64(a['sha256']) and a['assetId']==a['sha256']+'.png' and number(a['bytes'],57,MAX_MEDIA) and
+             number(a['width'],1,2048) and number(a['height'],1,2048) and a['mediaType']=='image/png' and a['frameDurationsMs']==[])
+    if 'scaleVariants' in v:
+        variants=v['scaleVariants'];need(type(variants)is list and 1<=len(variants)<=11)
+        seen=[]
+        for row in variants:
+            need(keys(row,('scalePercent','pixel','spirit')))
+            n=row['scalePercent'];need(type(n)is int and n in (5,10,20,30,40,50,60,70,80,90,100) and (not seen or n>seen[-1]))
+            seen.append(n)
+            for lane in ('pixel','spirit'):
+                a=row[lane]
+                need(keys(a,('assetId','sha256','bytes','width','height','mediaType','frameDurationsMs')) and
+                     hex64(a['sha256']) and a['assetId']==a['sha256']+'.png' and number(a['bytes'],57,MAX_MEDIA) and
+                     all(number(a[d],1,2048) and a[d]==max(1,(media['detail'][d]*n+50)//100) for d in ('width','height')) and
+                     a['mediaType']=='image/png' and a['frameDurationsMs']==[])
     for key,action,lane in (('pixelOpen','open','pixel'),('detailTrigger','activate','detail')):
         r=v['interaction'][key];m=media[lane]
         if r is None:continue
@@ -65,12 +83,15 @@ def manifest(v):
 
 def all_media(m):
     out={}
-    for group in (m['media'],*(clip['media'] for clip in m['animations'])):
+    for group in (m['media'],*(clip['media'] for clip in m['animations']),*({k:v for k,v in r.items() if k!='scalePercent'} for r in m.get('scaleVariants',[]))):
         for v in group.values():
             key=v['assetId'];need(key not in out or out[key]==v);out[key]=v
+    a=m.get('scaleSourcePixel')
+    if a:
+        key=a['assetId'];need(key not in out or out[key]==a);out[key]=a
     return out
 
-def _rgba(parts,w,h):
+def _rgba(parts,w,h,variant=False):
     size=h*(1+w*4);d=zlib.decompressobj()
     raw=d.decompress(b''.join(parts),size+1)
     need(len(raw)==size and d.eof and not d.unused_data and not d.unconsumed_tail)
@@ -87,9 +108,9 @@ def _rgba(parts,w,h):
             cur[i]=x=v&255
             zero|=x==0;visible|=x>0
         prior=cur
-    need(zero and visible)
+    need(visible and (variant or zero))
 
-def verify_media(raw,m):
+def verify_media(raw,m,*,variant=False):
     need(type(raw) is bytes and len(raw)==m['bytes'] and sha(raw)==m['sha256'] and raw[:8]==b'\x89PNG\r\n\x1a\n')
     times=m['frameDurationsMs'];w,h=m['width'],m['height']
     at=8;seen_data=False;end=False;apng=False;frames=[];seq=0
@@ -116,4 +137,4 @@ def verify_media(raw,m):
         else:need(not seen_data and kind in (b'sRGB',b'gAMA',b'cHRM',b'pHYs'))
         at=finish
     need(end)
-    for chunks in frames:_rgba(chunks,w,h)
+    for chunks in frames:_rgba(chunks,w,h,variant)

@@ -50,3 +50,12 @@ test('both request and planner validate new shapes and strict optional legacy ge
  assert.deepEqual(options[1].properties.shape.enum,['rect','ellipse']);
  assert.equal(options[1].properties.rotation.maximum,359);
 });
+
+test('map placement image scale is optional and independent of placement scale',()=>{
+ const decoration={id:'lantern',regionId:'start',prop:{propId:'lantern',revision:2,sha256:image},anchor:{x:20,y:30},scale:125,visibility:'both'};
+ validate(update({...graph,decorations:[decoration]}),'map.update',true);
+ for(const imageScalePercent of [5,10,20,30,40,50,60,70,80,90,100])
+  validate(update({...graph,decorations:[{...decoration,imageScalePercent}]}),'map.update',true);
+ for(const imageScalePercent of [0,15,95,110,50.5,'50',true,null])
+  validate(update({...graph,decorations:[{...decoration,imageScalePercent}]}),'map.update',false);
+});

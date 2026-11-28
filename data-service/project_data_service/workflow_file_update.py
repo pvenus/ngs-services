@@ -97,7 +97,9 @@ class AssemblyMetadata:
         prior_spirit={x['id']:x['bindings']['spirit'] for x in prior['puzzles'] if x['type']==SPIRIT_TYPE}
         changed={tuple(sorted(x['bindings']['spirit'].items())):x['bindings']['spirit'] for x in rows
                  if x['type']==SPIRIT_TYPE and prior_spirit.get(x['id'])!=x['bindings']['spirit']}
-        provider.verify_prop_pins([{'prop':pin,'visibility':'both'} for pin in changed.values()],
+        provider.verify_prop_pins([{'prop':{k:v for k,v in pin.items() if k!='imageScalePercent'},'visibility':'both',
+                                   **({'imageScalePercent':pin['imageScalePercent']} if 'imageScalePercent' in pin else {})}
+                                  for pin in changed.values()],
                                  unavailable='FILE_UPDATE_ASSEMBLY_SPIRIT_PROP_UNAVAILABLE',decorations=True)
         next_state={**prior,'revision':rev,'updatedAt':int(time.time()*1000),'officialRequestId':oid,'puzzles':rows}
         return provider.storage(ASSEMBLY_WRITER+'/metadata-update',{'expected':expected,'state':next_state})

@@ -15,7 +15,7 @@ import {fileDeleteType} from './file-delete-envelope.mjs';
 import {audioSeparateType} from './audio-separate-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
 import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
-import {propTypes,propGenerateType,propRegenerateType,propAnimationType} from './prop-generate-envelope.mjs';
+import {propTypes,propGenerateType,propRegenerateType,propScaleType,propAnimationType} from './prop-generate-envelope.mjs';
 import {cinematicType,cinematicSequenceType,cinematicPlaybackType,allCinematicTypes,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
 import {propImageType} from './prop-image-envelope.mjs';
 export const listTool='request_list',workflowListTool='request_workflow_list';
@@ -49,6 +49,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${fileDeleteType}' THEN json_extract(payload_json,'$.target.path')
    WHEN '${audioSeparateType}' THEN json_extract(payload_json,'$.sourceOfficialRequestId')
    WHEN '${propRegenerateType}' THEN json_extract(payload_json,'$.propId')
+   WHEN '${propScaleType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${propAnimationType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${cinematicType}' THEN official_request_id
    WHEN '${cinematicSequenceType}' THEN official_request_id
@@ -87,6 +88,7 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${mapTypes[1]}' THEN json_extract(payload_json,'$.graph.title')
    WHEN '${fileUpdateType}' THEN '파일 수정 · '||json_extract(payload_json,'$.content.title')
    WHEN '${propRegenerateType}' THEN '프랍 재생성'
+   WHEN '${propScaleType}' THEN '프랍 배율 추가'
    WHEN '${propAnimationType}' THEN '프랍 애니메이션 추가'
    WHEN '${cinematicType}' THEN '시네마틱 영상 생성'
    WHEN '${cinematicSequenceType}' THEN '시네마틱 프레임 생성'

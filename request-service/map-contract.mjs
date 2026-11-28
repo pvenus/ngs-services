@@ -32,10 +32,13 @@ const decorationFields=['id','regionId','prop','anchor','scale','visibility'];
 export const propZMin=-1000,propZMax=1000;
 export const validPropZOrder=v=>Number.isInteger(v)&&v>=propZMin&&v<=propZMax;
 export const validRoleZOrder=(v,roles)=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length>0&&Object.keys(v).every(k=>roles.includes(k)&&validPropZOrder(v[k]));
+export const propImageScales=Object.freeze([5,10,20,30,40,50,60,70,80,90,100]);
+export const validPropImageScale=v=>propImageScales.includes(v);
 export const mapDecorationRotation=row=>row.rotation??0;
 export const validDecorations=(v,ids)=>Array.isArray(v)&&v.length<=48&&new Set(v.map(x=>x?.id)).size===v.length&&v.every(r=>
- mapFields(r,[...decorationFields,...['rotation','flipX','flipY','zOrder'].filter(k=>r&&Object.hasOwn(r,k))])&&
+ mapFields(r,[...decorationFields,...['rotation','flipX','flipY','zOrder','imageScalePercent'].filter(k=>r&&Object.hasOwn(r,k))])&&
  (!Object.hasOwn(r,'rotation')||(Number.isInteger(r.rotation)&&r.rotation>=0&&r.rotation<360))&&
+ (!Object.hasOwn(r,'imageScalePercent')||validPropImageScale(r.imageScalePercent))&&
  (!Object.hasOwn(r,'zOrder')||validPropZOrder(r.zOrder))&&['flipX','flipY'].every(k=>!Object.hasOwn(r,k)||typeof r[k]==='boolean')&&regionId(r.id)&&ids.has(r.regionId)&&mapPropPin(r.prop)&&
  mapPoint(r.anchor)&&Number.isInteger(r.scale)&&10<=r.scale&&r.scale<=300&&visibility(r.visibility));
 export const validDecorationDesign=v=>mapFields(v,['mode','notes','candidates'])&&['none','suggest'].includes(v.mode)&&note(v.notes)&&
@@ -96,7 +99,7 @@ const regionSchema=generate=>obj({id:key,name:title,description:{type:'string',m
 const propPinSchema=obj({propId:{type:'string',minLength:2,maxLength:80,pattern:'^[a-z0-9]+(?:[-._][a-z0-9]+)*$'},
   revision:count(1,Number.MAX_SAFE_INTEGER-1),sha256:{type:'string',pattern:'^[a-f0-9]{64}$'}});
 const visibilitySchema={enum:['both','pixel','cinematic']};
-const decorationSchema=obj({id:key,regionId:key,prop:propPinSchema,anchor:pointSchema,scale:count(10,300),visibility:visibilitySchema,rotation:count(0,359),flipX:{type:'boolean'},flipY:{type:'boolean'},zOrder:count(propZMin,propZMax)},decorationFields);
+const decorationSchema=obj({id:key,regionId:key,prop:propPinSchema,anchor:pointSchema,scale:count(10,300),visibility:visibilitySchema,rotation:count(0,359),flipX:{type:'boolean'},flipY:{type:'boolean'},zOrder:count(propZMin,propZMax),imageScalePercent:{enum:propImageScales}},decorationFields);
 const graphSchema=(generate)=>obj({title,startRegionId:key,...(generate?{}:{startPoint:pointSchema,decorations:{type:'array',maxItems:48,items:decorationSchema}}),
  regions:{type:'array',minItems:generate?2:1,maxItems:generate?12:24,items:regionSchema(generate)},
  connections:{type:'array',minItems:generate?1:0,maxItems:96,items:obj({id:key,from:key,to:key,

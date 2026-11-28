@@ -56,3 +56,9 @@ through the existing `file.update` target. Each such puzzle has one reachable
 binding must have both its pixel and reduced spirit assets at the pinned
 revision. It cannot carry the well puzzle's portal conditions. Initial
 assembly generation and already-queued legacy well requests remain unchanged.
+
+An individual role binding may include `imageScalePercent` (5 or 10–100
+in steps of 10). A selection pins that exact image variant on the binding's
+immutable prop release and verifies both pixel and cinematic asset bytes.
+Omitting the field preserves the existing placement asset behavior. The
+puzzle's separate role `scale` still controls display size.

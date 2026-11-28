@@ -251,3 +251,27 @@ The existing immutable publication receipt names all stage outputs, and the
 publisher verifies the intermediate bytes and their lineage before exposing
 the final detail, pixel, and spirit files. Neither the package schema nor the
 two-lane animation output contract changes.
+
+### Prop placement image sizes
+
+An optional `scalePercents` array on Spirit-v2 `prop.generate` requests one or more
+placement sizes in the same original generation. Supported percentages are
+5, 10, 20, 30, 40, 50, 60, 70, 80, 90 and 100. Duplicate or empty selections
+are invalid. Omission retains the existing package and playback defaults.
+For each requested percentage the publisher records a still pixel and spirit
+PNG in ascending `scaleVariants` order. Their dimensions are derived from
+the final detail canvas by rounding each dimension to the nearest integer
+and clamping to one pixel. The popup detail and existing image slots are
+unchanged. Spirit-v2 requests which select scales retain a full pixel art
+basis (`scaleSourcePixel`, not a selectable image).
+
+Issue a separate `prop.scale.generate` request to add sizes to an existing
+prop. Its complete payload is
+`{schemaVersion:"ngs.prop-scale-generate.v1",projectId:"binari",propId,source:{revision,sha256},scalePercents:[...]}`.
+The planner schedules exactly one postprocess publication, without image
+or document generation. PDS reads and verifies the pinned source, resizes
+its pixel and cinematic images, and publishes one immutable successor via
+Filex compare-and-swap. A stale head or already-published size is rejected;
+previous pins, assets, and animation remain readable. Legacy packages
+without a full-size pixel basis are resampled from their original pixel
+slot, so larger output changes dimensions but does not add drawn detail.

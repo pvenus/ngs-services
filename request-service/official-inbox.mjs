@@ -16,7 +16,7 @@ import {allowedWorkflowSourceSql,officialIdFor} from './space-intake.mjs';
 
 import {ensurePendingReasonTable,unsupportedPlannerPolicy} from './pending-unsupported.mjs';
 
-import {propTypes,propGenerateType,propAnimationType,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable} from './prop-generate-envelope.mjs';
+import {propTypes,propScaleType,propGenerateType,propAnimationType,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable} from './prop-generate-envelope.mjs';
 import {propImageType,propImageUnavailable} from './prop-image-envelope.mjs';
 
 import {cinematicType,cinematicSequenceType,cinematicUnavailable,cinematicPlaybackType,allCinematicTypes} from './cinematic-envelope.mjs';
@@ -69,7 +69,7 @@ export function openOfficialInbox(directory,{now=Date.now,readSpaceRequest,propI
   payload_json,payload_sha256,state,registered_at) VALUES(?,?,?,?,?,?,?,?,?,?)`);
  const ownedStatus=db.prepare(`SELECT state FROM official_requests
   WHERE official_request_id=? AND ${allowedWorkflowSourceSql} AND project_id='binari'
-  AND ${propMutationsEnabled===true?'1=1':`request_type NOT IN ('${propTypes[1]}','${propTypes[2]}')`}
+  AND ${propMutationsEnabled===true?'1=1':`request_type NOT IN ('${propTypes[1]}','${propTypes[2]}','${propScaleType}')`}
   AND ${propAnimationEnabled===true?'1=1':`request_type<>'${propAnimationType}'`}
   AND ${propGenerateMotionEnabled===true?'1=1':`(request_type NOT IN ('${propGenerateType}','${propTypes[1]}') OR json_extract(payload_json,'$.motion') IS NOT 'subtle')`}
   AND ${propGenerateEnabled===true?'1=1':`request_type<>'${propGenerateType}'`}

@@ -11,7 +11,7 @@ from prop_package_contract import (
 WRITER='/v1/workflow/props'
 WRITER_ROUTES=(WRITER,WRITER+'/read',WRITER+'/asset',WRITER+'/head')
 RECEIPT_SCHEMA='ngs.prop-package-publication-receipt.v1'
-MAX_BODY=5*((MAX_MEDIA+2)//3)*4+MAX_MANIFEST+64*1024
+MAX_BODY=28*((MAX_MEDIA+2)//3)*4+MAX_MANIFEST+64*1024
 PIN_KEYS=('propId','revision','sha256')
 CANDIDATE_KEYS=('scope','members','manifestSha256','resultRef')
 HEAD_SCHEMA='ngs.prop-pointer.v1'
@@ -53,11 +53,21 @@ def validate_candidate(c,m):
     base=('officialRequestId','projectId','propId','requestSha256')
     profile=type(scope)is dict and 'presentationProfile' in scope
     if profile:need(op in (None,'regenerate') and scope['presentationProfile'] in ('spirit-v1','spirit-v2'))
-    need(op in (None,'regenerate','append-animation','remove-animation') and keys(scope,base+(('presentationProfile',) if profile else ())+(
+    scales='scalePercents' in scope if type(scope)is dict else False
+    need(scales==(op=='append-scales' or op is None and 'scaleVariants' in m) and (op is not None or scales or 'scaleSourcePixel' not in m))
+    need(op in (None,'regenerate','append-animation','remove-animation','append-scales') and keys(scope,base+(('presentationProfile',) if profile else ())+(('scalePercents',) if scales else ())+(
         ('designContextSha256','motion') if op is None else
         ('operation','source','motion','designContextSha256') if op=='regenerate' else
-        ('operation','source','motionIds') if op=='remove-animation' else ('operation','source','animationId'))) and
+        ('operation','source','motionIds') if op=='remove-animation' else
+        ('operation','source') if op=='append-scales' else ('operation','source','animationId'))) and
         all(scope[k]==m[k] for k in base))
+    if op=='regenerate':need('scaleVariants' not in m and 'scaleSourcePixel' not in m)
+    if scales:
+        if op is None:need(scope.get('presentationProfile')=='spirit-v2' and 'scaleSourcePixel' in m)
+        values=scope['scalePercents']
+        need(type(values)is list and 1<=len(values)<=11 and all(type(n)is int and n in (5,10,20,30,40,50,60,70,80,90,100) for n in values) and len(set(values))==len(values))
+        actual={r['scalePercent'] for r in m.get('scaleVariants',[])}
+        need(set(values)==actual if op is None else set(values)<=actual)
     if op is None:
         need(scope['motion'] in ('still','subtle') and m['revision']==1 and m['parentSha256'] is None)
         expected=['prop_design','prop_base','prop_detail','prop_pixel']
@@ -74,11 +84,12 @@ def validate_candidate(c,m):
         elif op=='append-animation':
             need(prop_id(scope['animationId']));expected=[];initial=True
             need(m['animations'] and m['animations'][-1]['id']==scope['animationId'])
+        elif op=='append-scales':expected=[];initial=False
         else:
             ids=scope['motionIds']
             need(type(ids)is list and 1<=len(ids)<=30 and all(prop_id(i) for i in ids) and len(set(ids))==len(ids))
             expected=[];initial=False
-    if op not in ('append-animation','remove-animation'):
+    if op not in ('append-animation','remove-animation','append-scales'):
         need(scope['designContextSha256']==m['designContextSha256'] and profile==('spirit' in m['media']))
         if scope.get('presentationProfile')=='spirit-v2':
             expected[3:3]=['prop_pixel_source','prop_pixel_detail']
@@ -94,6 +105,8 @@ def validate_candidate(c,m):
             row['taskId']=='workflow.task.'+digest([scope['officialRequestId'],key]) and
             match(row['ref'],r'prop\.[a-z0-9-]+\.[a-f0-9]{64}'))
     refs(m,scope,{x['key']:x for x in members})
+    if 'scaleSourcePixel' in m and op is None:
+        need(any(row['key']=='prop_pixel_detail' and row['ref']=='prop.pixel-detail-rgba.'+m['scaleSourcePixel']['sha256'] for row in members))
 
 def successor(a,b,scope):
     need(a['propId']==b['propId'] and a['officialRequestId']!=b['officialRequestId'] and
@@ -101,6 +114,14 @@ def successor(a,b,scope):
     if scope['operation']=='append-animation':
         n=len(a['animations']);need(b['animations'][:n]==a['animations'] and len(b['animations'])==n+1 and
              all(a[k]==b[k] for k in ('media','title','interaction','designContextSha256')))
+    if scope['operation'] in ('append-animation','remove-animation'):
+        need(all(a.get(k)==b.get(k) for k in ('scaleVariants','scaleSourcePixel')))
+    if scope['operation']=='append-scales':
+        need(all(a.get(k)==b.get(k) for k in ('media','title','interaction','designContextSha256','animations','scaleSourcePixel')))
+        old={r['scalePercent']:r for r in a.get('scaleVariants',[])}
+        new={r['scalePercent']:r for r in b['scaleVariants']}
+        need(not (set(old)&set(scope['scalePercents'])) and set(new)==set(old)|set(scope['scalePercents']) and
+             all(new[k]==v for k,v in old.items()))
     if scope['operation']=='remove-animation':
         ids=set(scope['motionIds'])
         need(ids<={i['id'] for i in a['animations']} and
@@ -160,31 +181,38 @@ class PropPackageStore(Store):
         need(prop_id(prop))
         with self.lock():return self.head_locked(prop)
     def assembly_bindings(self,query):
-        from assembly_contract import ROLES,pin as assembly_pin
+        from assembly_contract import ROLES,pin as assembly_pin,binding_pin,image_scale
         generate=keys(query,())
         decorate=keys(query,('decorationPins',))
         if decorate:
             rows=query['decorationPins']
             need(type(rows)is list and len(rows)<=48 and all(
-                keys(row,('prop','visibility')) and assembly_pin(row['prop']) and
+                type(row)is dict and set(row) in ({'prop','visibility'},{'prop','visibility','imageScalePercent'}) and
+                assembly_pin(row['prop']) and ('imageScalePercent' not in row or image_scale(row['imageScalePercent'])) and
                 row['visibility'] in ('both','pixel','cinematic') for row in rows))
         need(generate or decorate or keys(query,('pins',)) and type(query['pins']) is list and len(query['pins'])<=128 and
-             all(assembly_pin(q) for q in query['pins']))
+             all(binding_pin(q) for q in query['pins']))
         with self.lock():
             self.check_root()
-            def verified(q,head,lanes=('pixel',)):
+            def verified(q,head,lanes=('pixel',),scale=None):
                 m=self.release_locked(q,head)
+                media=m['media']
+                if scale is not None:
+                    media=next((row for row in m.get('scaleVariants',()) if row['scalePercent']==scale),None)
+                    if media is None:raise FileNotFoundError('pinned prop image scale missing')
                 for lane in lanes:
-                    if lane not in m['media']:raise FileNotFoundError('decoration prop lane missing')
-                    self.asset_locked(q['propId'],m,m['media'][lane]['assetId'])
+                    if lane not in media:raise FileNotFoundError('bound prop lane missing')
+                    self.asset_locked(q['propId'],m,media[lane]['assetId'])
                 return q
             if not generate:
-                rows=query['decorationPins'] if decorate else [{'prop':q,'visibility':'pixel'} for q in query['pins']]
+                rows=query['decorationPins'] if decorate else [
+                    {'prop':{k:q[k] for k in PIN_KEYS},'visibility':'both','imageScalePercent':q['imageScalePercent']}
+                    if 'imageScalePercent' in q else {'prop':q,'visibility':'pixel'} for q in query['pins']]
                 for row in rows:
                     q=row['prop'];v=row['visibility']
                     if not self.verify_managed(self.beneath(q['propId'])):raise FileNotFoundError('bound prop missing')
                     lanes=('pixel','spirit') if v=='both' else ('spirit',) if v=='cinematic' else ('pixel',)
-                    verified(q,self.head_locked(q['propId']),lanes)
+                    verified(q,self.head_locked(q['propId']),lanes,row.get('imageScalePercent'))
                 return {'ok':True}
             candidates={k:[] for k in ROLES}
             for dir in self.root.iterdir():
@@ -246,12 +274,16 @@ class PropPackageStore(Store):
         need(keys(command,('candidate','manifest','media')));c,m,body=[command[k] for k in ('candidate','manifest','media')]
         validate_candidate(c,m)
         prop=m['propId'];n=m['revision'];scope=c['scope']; expected=scope.get('source')
-        need(type(body) is dict and len(body)<=(5 if scope.get('presentationProfile') in ('spirit-v1','spirit-v2') else 4))
+        need(type(body) is dict and len(body)<=(28 if 'scalePercents' in scope else 5 if scope.get('presentationProfile') in ('spirit-v1','spirit-v2') else 4))
+        scale_assets={row[k]['assetId'] for row in m.get('scaleVariants',[]) for k in ('pixel','spirit')}
+        original_groups=[m['media'],*(clip['media'] for clip in m['animations'])]
+        scale_assets-={a['assetId'] for group in original_groups for a in group.values()}
+        if m.get('scaleSourcePixel'):scale_assets.discard(m['scaleSourcePixel']['assetId'])
         all_next=all_media(m)
         decoded={}
         for key,text in body.items():
             member=all_next.get(key);need(member is not None and type(text) is str and len(text)==4*((member['bytes']+2)//3))
-            raw=base64.b64decode(text,validate=True);verify_media(raw,member);decoded[key]=raw
+            raw=base64.b64decode(text,validate=True);verify_media(raw,member,variant=key in scale_assets);decoded[key]=raw
         receipt={'schemaVersion':RECEIPT_SCHEMA,'authority':'filex','status':'committed',**c}
         with self.lock():
             self.check_root()
@@ -268,7 +300,7 @@ class PropPackageStore(Store):
                 raise Conflict('prop head changed')
             if expected:
                 a=self.release_locked({'propId':prop,**expected},head);successor(a,m,scope)
-                prior=all_media(a) if scope['operation'] in ('append-animation','remove-animation') else {}
+                prior=all_media(a) if scope['operation'] in ('append-animation','remove-animation','append-scales') else {}
             else:prior={}
             need(set(decoded)==set(all_next)-set(prior) and all(prior[k]==all_next[k] for k in set(prior)&set(all_next)))
             if rel.exists():

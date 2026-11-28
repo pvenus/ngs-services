@@ -57,3 +57,10 @@ the pinned reduced spirit file, and `both` requires both. Omission on an
 ordinary metadata edit preserves existing placements; an explicit empty list
 removes all. Removing a region with a placement requires removing or moving
 that placement in the same official metadata request.
+
+Decoration rows may opt into `imageScalePercent` (5 or 10–100 in steps of
+10). This selects the published image variant from the exact pinned prop
+release; `scale` still controls on-map display size independently. A missing
+selection continues to use the original placement assets. Saving a new or
+changed selection checks the required visibility lanes and original bytes
+against that release.

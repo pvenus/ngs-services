@@ -25,6 +25,11 @@ def clean(v,n):
 def slug(v):return match(v,SLUG) and 2<=len(v)<=80
 def pin(v):
     return keys(v,('propId','revision','sha256')) and slug(v['propId']) and int_range(v['revision'],1,MAX_REV) and match(v['sha256'],HASH)
+def image_scale(v):return type(v)is int and (v==5 or 10<=v<=100 and v%10==0)
+def binding_pin(v):
+    if type(v)is not dict:return False
+    if 'imageScalePercent' not in v:return pin(v)
+    return image_scale(v['imageScalePercent']) and pin({k:x for k,x in v.items() if k!='imageScalePercent'})
 def xy(v,a,b):return int_range(v['x'],a,b) and int_range(v['y'],a,b)
 def station(v):return keys(v,('regionId','x','y')) and match(v['regionId'],REGION) and xy(v,10,90)
 def offset(v):return keys(v,('x','y')) and xy(v,-12,12)
@@ -109,7 +114,7 @@ def puzzles(v,well_only=False):
         if p['type']==SPIRIT_TYPE and not well_only:
             if 'portalConditions' in optional or 'definition' in optional:return False
             if not (keys(p['layout'],('spirit',)) and station(p['layout']['spirit']) and
-                    keys(p['attachments'],()) and keys(p['bindings'],('spirit',)) and pin(p['bindings']['spirit']) and
+                    keys(p['attachments'],()) and keys(p['bindings'],('spirit',)) and binding_pin(p['bindings']['spirit']) and
                     ('scale' not in optional or keys(p['scale'],('spirit',)) and int_range(p['scale']['spirit'],10,300))):return False
         else:
             if 'definition' in optional and not valid_definition(p['definition']):return False
@@ -118,7 +123,7 @@ def puzzles(v,well_only=False):
             if not (p['type']==TYPE and
                     keys(p['layout'],('altar','well')) and all(station(x) for x in p['layout'].values()) and
                     keys(p['attachments'],('bowl','lid')) and all(offset(x) for x in p['attachments'].values()) and
-                    keys(p['bindings'],ROLES) and all(pin(x) for x in p['bindings'].values()) and
+                    keys(p['bindings'],ROLES) and all(binding_pin(x) for x in p['bindings'].values()) and
                     len({x['propId'] for x in p['bindings'].values()})==4):return False
         if 'zOrder' in optional and not valid_z_order(p['zOrder'],('spirit',) if p['type']==SPIRIT_TYPE else ROLES):return False
         ids.add(p['id'])

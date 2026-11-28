@@ -6,10 +6,11 @@ from urllib.parse import urlsplit
 from .workflow_save_reservation import save_handoff
 from .filex_read import digest
 from .workflow_delete_claim import ClaimDenied
-from .prop_package_contract import sha
+from .prop_package_contract import sha,all_media
+from .prop_scale import derive
 from .prop_design_context import PropDesignContext
 from .prop_stage_claim import (
-    APPEND,BASE,DESIGN,DETAIL,GENERATE,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PIXEL_SOURCE,PIXEL_DETAIL,SPIRIT,PUBLISH,REGENERATE,
+    APPEND,BASE,DESIGN,DETAIL,GENERATE,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PIXEL_SOURCE,PIXEL_DETAIL,SPIRIT,PUBLISH,REGENERATE,SCALE,
     PropClaimAuthority,ref_name,task_id,valid_ref,
 )
 from .prop_stage_store import PropStageStore,STAGES
@@ -81,7 +82,7 @@ class RealPropAuthority:
         return self.staging.get(run['official_request_id'],r['task_id'],key,r['result_ref'])
 
     def current_source(self,p,kind):
-        if kind not in (APPEND,REGENERATE):return None
+        if kind not in (APPEND,REGENERATE,SCALE):return None
         head=self.writer(WRITER+'/head',{'propId':p['propId']})['pointer']
         if _pointer(head)!=p['source']:raise Stale()
         prior=self.writer(WRITER+'/read',{'propId':p['propId'],**p['source']})['manifest']
@@ -98,7 +99,7 @@ class RealPropAuthority:
     def snapshot(self,claim):
         with self.planner.selected(claim,(PUBLISH,)) as (run,p,rows,key), save_handoff(self.planner.claim,claim):
             self.require_mode(run,p)
-            # The DB shared read transaction spans all Filex read/write operations.
+            # Claim checks and save reservation precede the Filex operations.
             members=[];records={}
             for k,r in rows.items():
                 if k==PUBLISH:continue
@@ -137,6 +138,9 @@ class RealPropAuthority:
                     need(prior is not None and type(clips)is list and bool(clips) and type(clips[-1])is dict and
                          clips[-1].get('title')==p['motionId'])
                     scope.update(operation='append-animation',source=p['source'],animationId=p['motionId'])
+                elif kind==SCALE:
+                    need(prior is not None)
+                    scope.update(operation='append-scales',source=p['source'],scalePercents=p['scalePercents'])
                 else:
                     # A superseded design pin must not silently become a published bundle.
                     if not replayed:
@@ -148,6 +152,7 @@ class RealPropAuthority:
                     need(m['title']==design['title'] and m['interaction']==expected_interaction(design,m['media']))
                     if 'presentationProfile' in p:scope['presentationProfile']=p['presentationProfile']
                     if kind==REGENERATE:scope.update(operation='regenerate',source=p['source'])
+                    if 'scalePercents' in p:scope['scalePercents']=p['scalePercents']
                 d=digest(m);return {'scope':scope,'members':members,'manifestSha256':d,'resultRef':ref_name(PUBLISH,d)}
             yield prepare
 
@@ -155,7 +160,12 @@ class RealPropAuthority:
         with self.planner.selected(claim,(PUBLISH,)) as (run,p,rows,key):
             kind=run['request_type']
             self.require_mode(run,p)
-            need(kind==APPEND or kind in (GENERATE,REGENERATE) and p.get('motion','still')=='still')
+            need(kind in (APPEND,SCALE) or kind in (GENERATE,REGENERATE) and p.get('motion','still')=='still')
+            if kind==SCALE:
+                prior=self.current_source(p,kind)
+                variants,_,_=self.derive_scales(run,rows,p,prior)
+                return {**prior,'revision':prior['revision']+1,'officialRequestId':run['official_request_id'],
+                        'requestSha256':run['payload_sha256'],'parentSha256':p['source']['sha256'],'scaleVariants':variants}
             if kind==APPEND:
                 pin={'propId':p['propId'],**p['source']}
                 prior=self.writer(WRITER+'/read',pin)['manifest']
@@ -181,17 +191,45 @@ class RealPropAuthority:
             media={lane:self.stored(run,rows,k)['artifact'] for lane,k in
                    (('detail',DETAIL),('pixel',PIXEL),('spirit',SPIRIT)) if k in rows}
             design=self.stored(run,rows,DESIGN)['artifact']
-            return {'schemaVersion':'ngs.prop-package.v1','projectId':'binari','propId':p['propId'],
+            out={'schemaVersion':'ngs.prop-package.v1','projectId':'binari','propId':p['propId'],
                 'revision':prior['revision']+1 if prior else 1,'officialRequestId':run['official_request_id'],
                 'requestSha256':run['payload_sha256'],'designContextSha256':p['designContextSha256'],'title':design['title'],
                 'parentSha256':p['source']['sha256'] if prior else None,'media':media,'animations':[],
                 'interaction':expected_interaction(design,media)}
+            if 'scalePercents' in p:
+                variants,_,basis=self.derive_scales(run,rows,p)
+                out['scaleVariants']=variants
+                if basis:out['scaleSourcePixel']=basis
+            return out
+
+    def derive_scales(self,run,rows,p,prior=None):
+        def staged(key):
+            r=self.stored(run,rows,key)
+            return (self.staging.bytes(run['official_request_id'],r['taskId'],key,r['resultRef']),r['artifact'])
+        if prior is not None:
+            pin={'propId':p['propId'],**p['source']}
+            def saved(a):
+                data=self.writer(WRITER+'/asset',{'pin':pin,'assetId':a['assetId']})
+                return (base64.b64decode(data['base64'],validate=True),a)
+            old=prior.get('scaleVariants',[])
+            if any(v['scalePercent'] in p['scalePercents'] for v in old):raise Stale()
+            basis=prior.get('scaleSourcePixel')
+            pixel=saved(basis or prior['media']['pixel'])
+            spirit=saved(prior['media']['detail'])
+        else:
+            old=[]
+            pixel=staged(PIXEL_DETAIL if PIXEL_DETAIL in rows else PIXEL)
+            spirit=staged(DETAIL)
+            basis=pixel[1] if PIXEL_DETAIL in rows else None
+        variant,raw=derive(spirit[1],{'pixel':pixel,'spirit':spirit},p['scalePercents'])
+        if prior is None and basis:raw[basis['assetId']]=pixel[0]
+        return sorted([*old,*variant],key=lambda r:r['scalePercent']),raw,basis
 
     def read_media(self,claim,c,m,prior):
         # Caller still holds a verified snapshot; read only exact final member
         # bytes, never a process-global cache or caller filesystem path.
         oid=claim['officialRequestId'];op=c['scope'].get('operation');groups=[]
-        if op!='append-animation':
+        if op not in ('append-animation','append-scales'):
             groups.append((m['media'],[(lane,k) for lane,k in (('detail',DETAIL),('pixel',PIXEL),('spirit',SPIRIT)) if lane in m['media']]))
         if op=='append-animation' or c['scope'].get('motion')=='subtle':
             groups.append((m['animations'][-1]['media'],(('detail',MOTION_DETAIL),('pixel',MOTION_PIXEL))))
@@ -201,13 +239,18 @@ class RealPropAuthority:
                 r=members[k];v=self.staging.get(oid,r['taskId'],k,r['ref'])
                 need(v['artifact']==group[lane])
                 if op=='append-animation':
-                    existing=[prior['media'],*(x['media'] for x in prior['animations'])]
-                    same=[x[lane] for x in existing if x[lane]['assetId']==v['artifact']['assetId']]
-                    if not same:same=[a for y in existing for a in y.values() if a['assetId']==v['artifact']['assetId']]
+                    same=[a for key,a in all_media(prior).items() if key==v['artifact']['assetId']]
                     if same:
                         need(all(a==v['artifact'] for a in same));continue
                 data=self.staging.bytes(oid,r['taskId'],k,r['ref'])
                 media[v['artifact']['assetId']]=base64.b64encode(data).decode()
+        if 'scalePercents' in c['scope']:
+            with self.planner.selected(claim,(PUBLISH,)) as (run,p,rows,key):
+                pass
+            variants,raw,basis=self.derive_scales(run,rows,p,prior)
+            need(m.get('scaleVariants')==variants and m.get('scaleSourcePixel')==basis)
+            existing=all_media(prior) if prior is not None else {}
+            media.update({k:base64.b64encode(v).decode() for k,v in raw.items() if k not in existing and k not in media})
         return media
 
     def authorize_read(self,operation,packet):

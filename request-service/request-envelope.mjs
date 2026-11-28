@@ -17,7 +17,7 @@ import {audioSeparateType,audioSeparateSchema,validateAudioSeparate} from './aud
 
 import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
-import {propGenerateType,propGenerateSchema,validatePropGenerate,propRegenerateType,propRegenerateSchema,validatePropRegenerate,propAnimationType,propAnimationSchema,validatePropAnimation} from './prop-generate-envelope.mjs';
+import {propGenerateType,propGenerateSchema,validatePropGenerate,propRegenerateType,propRegenerateSchema,validatePropRegenerate,propAnimationType,propAnimationSchema,validatePropAnimation,propScaleType,propScaleSchema,validatePropScale} from './prop-generate-envelope.mjs';
 import {propImageType,propImageSchema,validatePropImage} from './prop-image-envelope.mjs';
 
 import {cinematicType,cinematicSchema,validateCinematic,cinematicSequenceType,cinematicSequenceSchema,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackRequestSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,backgroundAnimationStageSchema,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
@@ -34,6 +34,7 @@ const workflowFamilies=new Map([
  [cinematicType,{schemas:[cinematicSchema],validate:validateCinematic}],
  [cinematicSequenceType,{schemas:[cinematicSequenceSchema],validate:validateCinematicSequence}],
  [propRegenerateType,{schemas:[propRegenerateSchema],validate:validatePropRegenerate}],
+ [propScaleType,{schemas:[propScaleSchema],validate:validatePropScale}],
  [propAnimationType,{schemas:[propAnimationSchema],validate:validatePropAnimation}],
  [propGenerateType,{schemas:[propGenerateSchema],validate:validatePropGenerate}],
  [propImageType,{schemas:[propImageSchema],validate:validatePropImage}],

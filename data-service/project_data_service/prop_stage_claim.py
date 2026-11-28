@@ -11,9 +11,10 @@ P='binari'
 GENERATE='prop.generate'
 REGENERATE='prop.regenerate'
 APPEND='prop.animation.generate'
+SCALE='prop.scale.generate'
 CANDLE_CHROMA_PROFILE='candle-chroma-headroom-v1'
 CANDLE_CHROMA_PROP='candle-brass-petal-unlit-clean'
-FAMILIES={GENERATE:'ngs.prop-generate.v1',REGENERATE:'ngs.prop-regenerate.v1',APPEND:'ngs.prop-animation-generate.v1'}
+FAMILIES={GENERATE:'ngs.prop-generate.v1',REGENERATE:'ngs.prop-regenerate.v1',APPEND:'ngs.prop-animation-generate.v1',SCALE:'ngs.prop-scale-generate.v1'}
 DESIGN='prop_design';BASE='prop_base';MOTION='prop_motion';DETAIL='prop_detail';PIXEL='prop_pixel';PIXEL_SOURCE='prop_pixel_source';PIXEL_DETAIL='prop_pixel_detail';SPIRIT='prop_spirit'
 MOTION_DETAIL='prop_animation_detail';MOTION_PIXEL='prop_animation_pixel';PUBLISH='prop_pack_publish'
 ROLES={DESIGN:('design','document','design-spec'),BASE:('base','image','base-png'),
@@ -38,14 +39,17 @@ def text(v,maximum):
 
 def payload_valid(p,kind):
     required={'schemaVersion','projectId','propId'}
-    if kind in (REGENERATE,APPEND):required.add('source')
+    if kind in (REGENERATE,APPEND,SCALE):required.add('source')
     if kind==APPEND:
         required.update(('motionId','prompt'))
         if 'renderProfile' in p:required.add('renderProfile')
-    else:required.update(('intent','designContextSha256'))
-    if kind!=APPEND and 'presentationProfile' in p:
+    elif kind!=SCALE:required.update(('intent','designContextSha256'))
+    if kind==SCALE or kind==GENERATE and 'scalePercents' in p:
+        from .prop_scale import percents
+        required.add('scalePercents');need(percents(p.get('scalePercents')) and (kind==SCALE or p.get('presentationProfile')=='spirit-v2'))
+    if kind not in (APPEND,SCALE) and 'presentationProfile' in p:
         required.add('presentationProfile');need(p['presentationProfile'] in ('spirit-v1','spirit-v2'))
-    if kind!=APPEND and 'motion' in p:required.add('motion')
+    if kind not in (APPEND,SCALE) and 'motion' in p:required.add('motion')
     if kind==GENERATE and 'reference' in p:required.add('reference')
     need(keys(p,required) and p['schemaVersion']==FAMILIES[kind] and p['projectId']==P and prop_id(p['propId']))
     if 'reference' in p:need(pin(p['reference'])['propId']!=p['propId'])
@@ -53,7 +57,7 @@ def payload_valid(p,kind):
     if kind==APPEND:
         if 'renderProfile' in p:need(p['renderProfile']==CANDLE_CHROMA_PROFILE and p['propId']==CANDLE_CHROMA_PROP)
         need(prop_id(p['motionId']) and text(p['prompt'],2000) and not re.search(r'\bembedding:',p['prompt'],re.I))
-    else:need(text(p['intent'],4000) and match(p['designContextSha256'],HASH) and p.get('motion','still') in ('still','subtle'))
+    elif kind!=SCALE:need(text(p['intent'],4000) and match(p['designContextSha256'],HASH) and p.get('motion','still') in ('still','subtle'))
 
 def build_graph(oid,kind,p):
     payload_valid(p,kind);rows={}
@@ -61,12 +65,14 @@ def build_graph(oid,kind,p):
     scope={'propId':p['propId']}
     if 'presentationProfile' in p:scope['presentationProfile']=p['presentationProfile']
     if 'source' in p:scope['source']=p['source']
-    if kind!=APPEND:scope['designContextSha256']=p['designContextSha256']
+    if kind not in (APPEND,SCALE):scope['designContextSha256']=p['designContextSha256']
     def add(key,parent,extra,role=None):
         base,worker,_=ROLES[key];t=make_id(key)
         rows[key]={'task_id':t,'task_key':key,'task_type':kind+'.'+(role or base),'worker_type':worker,
                    'depends_on_task_id':make_id(parent) if parent else None,'task_input':canonical({**scope,**extra}).decode()}
-    if kind==APPEND:
+    if kind==SCALE:
+        add(PUBLISH,None,{'scalePercents':p['scalePercents'],'dependsOnTaskIds':[]})
+    elif kind==APPEND:
         id=p['motionId']
         add(MOTION,None,{'motionId':id,'prompt':p['prompt']},'raw')
         add(MOTION_DETAIL,MOTION,{'motionId':id,'rawTaskId':make_id(MOTION)},'detail')
@@ -88,7 +94,7 @@ def build_graph(oid,kind,p):
             add(MOTION,BASE,{'designTaskId':design,'baseTaskId':base})
             add(MOTION_DETAIL,MOTION,{'designTaskId':design,'baseTaskId':base,'sourceTaskId':make_id(MOTION)})
             add(MOTION_PIXEL,MOTION_DETAIL,{'designTaskId':design,'detailTaskId':make_id(MOTION_DETAIL)})
-        add(PUBLISH,MOTION_PIXEL if m=='subtle' else PIXEL,{'dependsOnTaskIds':[x['task_id'] for x in rows.values()]})
+        add(PUBLISH,MOTION_PIXEL if m=='subtle' else PIXEL,{'dependsOnTaskIds':[x['task_id'] for x in rows.values()],**({'scalePercents':p['scalePercents']} if 'scalePercents' in p else {})})
         if 'presentationProfile' in p:
             parents=([make_id(PIXEL)] if m=='subtle' else [])+[make_id(SPIRIT)]
             rows[PUBLISH].update({f'depends_on_task_id_{i+2}':dep for i,dep in enumerate(parents)})

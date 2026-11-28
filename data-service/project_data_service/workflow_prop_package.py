@@ -84,7 +84,7 @@ class WorkflowPropPackage:
                 receipt=replay['receipt']
             else:
                 media=self.authority.read_media(claim,c,m,prior)
-                need(type(media)is dict and len(media)<=(5 if c['scope'].get('presentationProfile') in ('spirit-v1','spirit-v2') else 4))
+                need(type(media)is dict and len(media)<=(28 if 'scalePercents' in c['scope'] else 5 if c['scope'].get('presentationProfile') in ('spirit-v1','spirit-v2') else 4))
                 receipt=self.writer(WRITER,{'candidate':c,'manifest':m,'media':media})
             need(keys(receipt,(*KEYS,'schemaVersion','authority','status')) and
               receipt['schemaVersion']=='ngs.prop-package-publication-receipt.v1' and receipt['authority']=='filex' and

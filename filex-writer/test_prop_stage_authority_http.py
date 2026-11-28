@@ -45,11 +45,12 @@ class StageFixture(PropFixture,TestCase):
                              workflow_prop_stage=actual)
         self.actual=actual
 
-    def register_generate(self,db,profile=False):
+    def register_generate(self,db,profile=False,scales=None):
         blob={
           'schemaVersion':'ngs.prop-generate.v1','projectId':'binari','propId':PROP,
           'intent':'테스트 등롱','designContextSha256':DESIGN_HASH}
         if profile:blob['presentationProfile']=profile
+        if scales is not None:blob['scalePercents']=scales
         self.oid='request.official.'+('c' if profile else 'b')*64
         subprocess.run(['node','--input-type=module','-e',"""import {PlannerStore} from './workflow-planner/planner.mjs';
 import {canonical,sha} from './workflow-planner/envelope.mjs';
@@ -197,8 +198,45 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
     def test_spirit_v2_pixel_source_and_detail_assets(self):
         self.exercise_three_static_assets('spirit-v2')
 
-    def exercise_three_static_assets(self,profile):
-        self.register_generate(self.db,profile=profile)
+
+    def test_multi_scale_generation_and_pinned_add_persists_originals(self):
+        prior,pixel_detail=self.exercise_three_static_assets('spirit-v2',[20,5])
+        self.assertEqual([r['scalePercent'] for r in prior['scaleVariants']],[5,20])
+        self.assertEqual(prior['scaleSourcePixel']['sha256'],sha(pixel_detail))
+        original_pin=self.pin(prior)
+        src={k:v for k,v in original_pin.items() if k!='propId'}
+        def register(marker,source,scales):
+            oid='request.official.'+marker*64
+            p={'schemaVersion':'ngs.prop-scale-generate.v1','projectId':'binari','propId':PROP,'source':source,'scalePercents':scales}
+            subprocess.run(['node','--input-type=module','-e',"""import {PlannerStore} from './workflow-planner/planner.mjs';
+import {canonical,sha} from './workflow-planner/envelope.mjs';
+const [db,id,raw]=process.argv.slice(1),payload=JSON.parse(raw);
+const s=new PlannerStore(db,{propGenerateEnabled:true,propMutationsEnabled:true,readPropPublication:async()=>null});
+s.stage({officialRequestId:id,requestType:'prop.scale.generate',projectId:'binari',schemaVersion:payload.schemaVersion,
+ payload,payloadSha256:sha(canonical(payload)),status:'registered',registeredAt:2});
+s.acknowledge(id);s.close();
+""",str(self.db),oid,json.dumps(p)],cwd=REPO,check=True,capture_output=True)
+            self.oid=oid;self.payload_sha=digest(p)
+            with sqlite3.connect(self.db) as db:
+                self.assertEqual(db.execute('SELECT task_type,worker_type FROM workflow_tasks WHERE official_request_id=?',(oid,)).fetchall(),
+                                 [('prop.scale.generate.publish','postprocess')])
+            return self.mark('prop_pack_publish',18)
+        self.api('/prepare',{'claim':register('d',src,[20])},expected=409)
+        claim=register('e',src,[100,50])
+        pack=self.api('/prepare',{'claim':claim})['manifest']
+        self.assertEqual([x['scalePercent'] for x in pack['scaleVariants']],[5,20,50,100])
+        self.assertEqual(pack['scaleVariants'][:2],prior['scaleVariants'])
+        self.assertEqual(pack['media'],prior['media']);self.assertEqual(pack['scaleSourcePixel'],prior['scaleSourcePixel'])
+        self.assertEqual(pack['scaleVariants'][-1]['pixel'],prior['scaleSourcePixel'])
+        self.assertEqual(pack['scaleVariants'][-1]['spirit'],prior['media']['detail'])
+        published=self.api('',{'claim':claim,'manifest':pack})
+        self.mark('prop_pack_publish',18,published['resultRef'])
+        self.assertEqual(self.api('/read',self.pin(pack))['prior'],prior)
+        self.assertEqual(self.api('/read',original_pin)['manifest'],prior)
+        self.api('/prepare',{'claim':register('f',src,[90])},expected=409)
+
+    def exercise_three_static_assets(self,profile,scales=None):
+        self.register_generate(self.db,profile=profile,scales=scales)
         d=self.mark('prop_design',2)
         self.assertEqual(self.stage(DESIGN_ROUTE,'/read',{'claim':d})['input']['presentationProfile'],profile)
         doc={'schemaVersion':'ngs.prop-design-spec.v1','propId':PROP,'designContextSha256':DESIGN_HASH,
@@ -258,6 +296,7 @@ console.log(JSON.stringify(JSON.parse(arg).map(([requestType,payload])=>buildPla
         self.assertEqual(self.api('/read',self.pin(pack))['manifest'],pack)
         actual=self.api('/asset',{'pin':self.pin(pack),'assetId':media['assetId']})
         self.assertEqual(base64.b64decode(actual['base64']),raw)
+        return pack,assets.get('prop_pixel_detail')
 
     def test_live_lease_and_append_uses_exact_original_preserves_static_metadata_and_reconciles(self):
         self.exercise_append(PROP)
