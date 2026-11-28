@@ -369,11 +369,21 @@ class CinematicSequenceStore(CinematicStore):
   stamp=p['claimStamp'];require(type(stamp)is int and 0<stamp<2**53,'sequence attempt stamp')
   return '-'+str(stamp)
  def cinematic_sequence_publish(self,p):
-  require(type(p)is dict and set(p) in ({'manifest'},{'manifest','claimStamp'}),'sequence publish request')
+  require(type(p)is dict and set(p) in ({'manifest'},{'manifest','claimStamp','expectedRevision'}),'sequence publish request')
   manifest=seq_manifest(p['manifest']);oid=manifest['officialRequestId'];attempt=self._upscale_stage_suffix(p)
   require(bool(attempt)==('upscale' in manifest and 'group' not in manifest),'sequence upscale attempt binding')
   with self.lock():
    self._ensure_unretired_source(manifest['sourceSha256'])
+   if attempt:
+    revision=p['expectedRevision']; original=manifest['upscale']['sourceSequenceId']
+    require(type(revision)is int and 0<=revision<MAX_SAFE_INTEGER and original!=oid,'sequence upscale source pin')
+    pin_folder,pin=self._playback_base(original)
+    require('group' not in pin and 'upscale' not in pin and pin['sourceSha256']==manifest['sourceSha256'] and
+     (pin['width'],pin['height'])==(manifest['upscale']['sourceWidth'],manifest['upscale']['sourceHeight']) and
+     (not hasattr(self,'_archived') or original not in self._archived()),'sequence upscale source pin')
+    timeline=self._playback_current(pin_folder,pin)
+    if timeline['revision']!=revision or timeline['playback']!=manifest['playback']:
+     raise Conflict('upscale playback revision changed')
    final=self._seq_dir(oid)
    if final.exists():
     if self._seq_result(oid)!=manifest:raise Conflict('immutable sequence manifest')

@@ -134,6 +134,11 @@ s.close();"""
                 self.assertEqual(current(),('running',100000,None))
             m={**orig,'officialRequestId':dest,'width':256,'height':256,'frames':up,
                'upscale':{'model':'seedvr2-7b-fp16','scale':2,'sourceWidth':128,'sourceHeight':128,'sourceSequenceId':original_id}}
+            from media_store import CinematicProjectStore, Conflict
+            with self.assertRaisesRegex(Conflict,'playback revision changed'):
+                CinematicProjectStore(root).cinematic_sequence_publish(
+                    {'manifest':m,'claimStamp':c['claimStamp'],'expectedRevision':1})
+            self.assertFalse((root/'sequences'/dest).exists())
             with patch('project_data_service.workflow_save_reservation.time',SimpleNamespace(time=lambda: 200)):
                 self.assertEqual(call('',{'claim':c,'manifest':m}),{'ok':True,'resultRef':ref})
             self.assertEqual(current(),('completed',None,ref))

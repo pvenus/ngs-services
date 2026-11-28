@@ -320,7 +320,7 @@ class WorkflowCinematicSequence(WorkflowCinematic):
             original=self.upscale_source(inp)
             manifest=packet['manifest']
             verify_manifest(manifest,oid,inp,original=original)
-            need(self.seq_call('',{'manifest':manifest,'claimStamp':c['claimStamp']})==manifest)
+            need(self.seq_call('',{'manifest':manifest,'claimStamp':c['claimStamp'],'expectedRevision':inp['expectedRevision']})==manifest)
             reservation.complete(ref(oid))
             return {'ok':True,'resultRef':ref(oid)}
 
