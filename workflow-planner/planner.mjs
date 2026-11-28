@@ -22,7 +22,7 @@ import {buildMotion2DTasks,hasCompleteMotion2DGraph,motion2DCompletionReadLimit}
 import {npcAnimationRegenerateType,validateNpcAnimationRegenerate} from './npc-animation-regenerate-envelope.mjs';
 
 import {propGenerateType,propGenerateInvalid,propGenerateUnavailable,propGenerateMotionUnavailable,propMutationUnavailable,propRegenerateType,propAnimationType,propTypes,propValidator} from './prop-generate-envelope.mjs';
-import {buildPropGeneratePlan,exactPropTask,isPropRef,propCompletionLimit} from './prop-generate-plan.mjs';
+import {buildPropGeneratePlan,exactPropTask,isPropRef,isPropScaleKey,propCompletionLimit} from './prop-generate-plan.mjs';
 import {propCompletionCandidate,verifyPropPublicationProof} from './prop-package-proof.mjs';
 import {propImageType,propImageKey,propImageInvalid,propImageUnavailable,validatePropImage,validPropImageRef} from './prop-image-envelope.mjs';
 
@@ -73,11 +73,11 @@ export function checkRow(row){
  return payload;
 }
 
-export function buildPlan(row,{pixelPortraits=true,multiDependencies=false}={}){
- return materializePlan(row,checkRow(row),pixelPortraits,multiDependencies);
+export function buildPlan(row,{pixelPortraits=true,multiDependencies=false,splitPropScales=true}={}){
+ return materializePlan(row,checkRow(row),pixelPortraits,multiDependencies,splitPropScales);
 }
 
-function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false){
+function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false,splitPropScales=true){
  if(assemblyTypes.includes(row.requestType))return {payload,tasks:[{
   id:'workflow.task.'+sha(canonical([row.officialRequestId,assemblyStage])),key:assemblyStage,type:row.requestType,
   workerType:'document',dependsOn:null,input:row.payload,
@@ -140,7 +140,7 @@ function materializePlan(row,payload,pixelPortraits=true,multiDependencies=false
   return {payload,tasks:[{id:'workflow.task.'+sha(canonical([row.officialRequestId,cinematicTask])),
    key:cinematicTask,type:cinematicTaskType,workerType:'animation',dependsOn:null,input:{sourceSha256,motionPrompt}}]};
  }
- if(propTypes.includes(row.requestType))return {payload,tasks:buildPropGeneratePlan(row)};
+ if(propTypes.includes(row.requestType))return {payload,tasks:buildPropGeneratePlan(row,{splitScales:splitPropScales})};
  if(row.requestType===propImageType)return {payload,tasks:[{
   id:'workflow.task.'+sha(canonical([row.officialRequestId,propImageKey])),key:propImageKey,type:propImageType,
   workerType:'image',dependsOn:null,input:JSON.parse(payload),
@@ -284,11 +284,11 @@ export function migrateNpcPortraitReadOwner(db){
 // A legal worker transition cannot make this exact graph runnable again. In
 // particular, a running claim is never inferred to have failed, and a failed
 // task below the cap is still live even while its retry cooldown is in effect.
-function restoreStoredPlan(run,{multiDependencies=false}={}){
+function restoreStoredPlan(run,{multiDependencies=false,splitPropScales=true}={}){
  try{
   const plan=buildPlan({officialRequestId:run.official_request_id,projectId:run.project_id,
    requestType:run.request_type,schemaVersion:run.schema_version,payload:JSON.parse(run.payload),
-   payloadSha256:run.payload_sha256,status:'registered',registeredAt:run.registered_at},{multiDependencies});
+   payloadSha256:run.payload_sha256,status:'registered',registeredAt:run.registered_at},{multiDependencies,splitPropScales});
   return plan.payload===run.payload?plan:null;
  }catch{return null;}
 }
@@ -342,9 +342,9 @@ function hasExhaustedMapGraph(run,readTasks){
 }
 
 function hasExhaustedPropGraph(run,readTasks){
- const plan=restoreStoredPlan(run);
- if(!plan)return false;
  const rows=readTasks.all(run.official_request_id,propCompletionLimit);
+ const plan=restoreStoredPlan(run,{splitPropScales:rows.some(row=>isPropScaleKey(row.task_key))});
+ if(!plan)return false;
  if(rows.length!==plan.tasks.length||!rows.some(exhausted))return false;
  const byId=new Map(rows.map(row=>[row.task_id,row])),blocked=new Set();
  return plan.tasks.every(task=>{

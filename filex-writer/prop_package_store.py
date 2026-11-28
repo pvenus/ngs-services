@@ -99,7 +99,17 @@ def validate_candidate(c,m):
         clip=m['animations'][-1]
         need(clip['officialRequestId']==m['officialRequestId'] and clip['requestSha256']==m['requestSha256'])
     members=c['members']
-    need(type(members) is list and len(members)==len(expected))
+    # Read old receipts unchanged; split topology contributes every selected
+    # scale pair in numeric order, content-bound to independently verified PNGs.
+    need(type(members) is list)
+    if scales and len(members)>len(expected):
+        pairs={v['scalePercent']:v for v in m['scaleVariants']}
+        tail=[f'prop_scale_{n:03d}' for n in sorted(values)]
+        need(len(members)==len(expected)+len(tail))
+        for n,row in zip(sorted(values),members[len(expected):]):
+            need(type(row) is dict and row.get('ref')=='prop.scale-pair.'+digest(pairs[n]))
+        expected+=tail
+    need(len(members)==len(expected))
     for key,row in zip(expected,members):
         need(keys(row,('key','taskId','ref')) and row['key']==key and
             row['taskId']=='workflow.task.'+digest([scope['officialRequestId'],key]) and

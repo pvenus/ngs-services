@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request,urlopen
 from unittest import main,TestCase
+from unittest.mock import patch
 from test_prop_package_http import PropFixture,PROP,artifact_store,make
 
 from prop_package_contract import wire,digest,sha
@@ -107,12 +108,14 @@ console.log(JSON.stringify(await runPropDesignFromPath({dbPath:db,officialReques
             ('prop.generate',{'motion':'subtle'},'ngs.prop-generate.v1'),
             ('prop.generate',{'presentationProfile':'spirit-v1'},'ngs.prop-generate.v1'),
             ('prop.generate',{'presentationProfile':'spirit-v2'},'ngs.prop-generate.v1'),
+            ('prop.generate',{'presentationProfile':'spirit-v2','scalePercents':[100,10,5,20,30,40,50,60,70,80,90],'motion':'subtle'},'ngs.prop-generate.v1'),
+            ('prop.scale.generate',{'source':source,'scalePercents':[100,5]},'ngs.prop-scale-generate.v1'),
             ('prop.regenerate',{'source':source,'motion':'subtle','presentationProfile':'spirit-v2'},'ngs.prop-regenerate.v1'),
             ('prop.regenerate',{'source':source,'motion':'subtle','presentationProfile':'spirit-v1'},'ngs.prop-regenerate.v1'),
             ('prop.regenerate',{'source':source,'motion':'subtle'},'ngs.prop-regenerate.v1'),
             ('prop.animation.generate',{'source':source,'motionId':'gentle-sway','prompt':'one motion'},'ngs.prop-animation-generate.v1')):
             p={**self.payload,**extra,'schemaVersion':schema}
-            if kind=='prop.animation.generate':
+            if kind in ('prop.animation.generate','prop.scale.generate'):
                 p.pop('intent');p.pop('designContextSha256')
             all_rows.append((kind,p))
         cmd="""import {buildPlan} from './workflow-planner/planner.mjs';
@@ -218,22 +221,103 @@ s.acknowledge(id);s.close();
 """,str(self.db),oid,json.dumps(p)],cwd=REPO,check=True,capture_output=True)
             self.oid=oid;self.payload_sha=digest(p)
             with sqlite3.connect(self.db) as db:
-                self.assertEqual(db.execute('SELECT task_type,worker_type FROM workflow_tasks WHERE official_request_id=?',(oid,)).fetchall(),
-                                 [('prop.scale.generate.publish','postprocess')])
-            return self.mark('prop_pack_publish',18)
-        self.api('/prepare',{'claim':register('d',src,[20])},expected=409)
-        claim=register('e',src,[100,50])
-        pack=self.api('/prepare',{'claim':claim})['manifest']
+                self.assertEqual(db.execute('SELECT task_type,worker_type FROM workflow_tasks WHERE official_request_id=? ORDER BY task_type',(oid,)).fetchall(),
+                                 [('prop.scale.derive','postprocess')]*len(scales)+[('prop.scale.generate.publish','postprocess')])
+        register('d',src,[20])
+        self.api('/derive-scale',{'claim':self.mark('prop_scale_020',10)},expected=409)
+        register('e',src,[100,50])
+        self.api('/prepare',{'claim':self.mark('prop_pack_publish',18)},expected=403)
+        self.api('/derive-scale',{'claim':self.mark('prop_scale_100',13)},expected=403)
+        with sqlite3.connect(self.db) as db:
+            db.execute("UPDATE workflow_tasks SET status='pending' WHERE task_id=?",(task_id(self.oid,'prop_scale_100'),))
+            db.execute("UPDATE workflow_tasks SET status='pending' WHERE task_id=?",(task_id(self.oid,'prop_pack_publish'),))
+        for stamp,n in enumerate([50,100],14):
+            self.run_scale(n,stamp)
+            self.assertEqual(self.filex_writer(WRITER+'/head',{'propId':PROP})['pointer']['revision'],prior['revision'])
+        claim=self.mark('prop_pack_publish',18)
+        with patch('project_data_service.workflow_prop_stage.derive',side_effect=AssertionError('must not resize during manifest prep')):
+            pack=self.api('/prepare',{'claim':claim})['manifest']
         self.assertEqual([x['scalePercent'] for x in pack['scaleVariants']],[5,20,50,100])
         self.assertEqual(pack['scaleVariants'][:2],prior['scaleVariants'])
         self.assertEqual(pack['media'],prior['media']);self.assertEqual(pack['scaleSourcePixel'],prior['scaleSourcePixel'])
         self.assertEqual(pack['scaleVariants'][-1]['pixel'],prior['scaleSourcePixel'])
         self.assertEqual(pack['scaleVariants'][-1]['spirit'],prior['media']['detail'])
-        published=self.api('',{'claim':claim,'manifest':pack})
-        self.mark('prop_pack_publish',18,published['resultRef'])
+        with patch('project_data_service.workflow_prop_stage.derive',side_effect=AssertionError('must publish staged bytes')):
+            if self.worker_modules():
+                with sqlite3.connect(self.db) as db:
+                    db.execute("UPDATE workflow_tasks SET status='pending' WHERE task_id=?",(claim['taskId'],))
+                published=self.run_postprocess('prop_pack_publish')
+            else:
+                published=self.api('',{'claim':claim,'manifest':pack})
+                self.mark('prop_pack_publish',18,published['resultRef'])
+        self.assertEqual(published['resultRef'],'prop.package.'+digest(pack))
         self.assertEqual(self.api('/read',self.pin(pack))['prior'],prior)
         self.assertEqual(self.api('/read',original_pin)['manifest'],prior)
-        self.api('/prepare',{'claim':register('f',src,[90])},expected=409)
+        register('f',src,[90])
+        self.api('/derive-scale',{'claim':self.mark('prop_scale_090',10)},expected=409)
+
+    def test_historical_single_publish_scale_append_uses_the_original_graph(self):
+        fixture=make('a',prop_id=PROP)
+        prior=fixture['manifest']
+        self.filex_writer(WRITER,{k:fixture[k] for k in ('candidate','manifest','media')})
+        source={'revision':prior['revision'],'sha256':digest(prior)}
+        oid='request.official.'+'f'*64
+        kind='prop.scale.generate'
+        p={'schemaVersion':'ngs.prop-scale-generate.v1','projectId':'binari','propId':PROP,'source':source,'scalePercents':[5]}
+        graph=build_graph(oid,kind,p,split_scales=False)
+        self.oid=oid;self.payload_sha=digest(p)
+        [row]=graph.values()
+        with sqlite3.connect(self.db) as db:
+            db.execute("""INSERT INTO workflow_runs(official_request_id,project_id,request_type,schema_version,payload,payload_sha256,
+                        registered_at,state,updated_at,reason) VALUES(?,?,?,?,?,?,1,'planned',1,NULL)""",
+                       (oid,'binari',kind,p['schemaVersion'],wire(p).decode(),self.payload_sha))
+            db.execute("""INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,result_ref,
+                        updated_at,depends_on_task_id,status,retry_count) VALUES(?,?,?,?,?,?,NULL,1,NULL,'pending',0)""",
+                       (row['task_id'],oid,row['task_key'],row['task_type'],row['worker_type'],row['task_input']))
+        claim=self.mark('prop_pack_publish',10)
+        artifact=self.api('/prepare',{'claim':claim})['manifest']
+        result=self.api('',{'claim':claim,'manifest':artifact})
+        self.mark('prop_pack_publish',10,result['resultRef'])
+        proof=self.api('/read',self.pin(artifact))
+        self.assertEqual(proof['prior'],prior)
+        self.assertEqual(proof['receipt']['members'],[])
+        self.assertEqual([v['scalePercent'] for v in artifact['scaleVariants']],[5])
+
+    def run_scale(self,n,stamp):
+        key=f'prop_scale_{n:03d}'
+        if self.worker_modules():
+            r=self.run_postprocess(key)
+        else:
+            claim=self.mark(key,stamp)
+            r=self.api('/derive-scale',{'claim':claim})
+            self.mark(key,stamp,r['resultRef'])
+        self.assertTrue(r['resultRef'].startswith('prop.scale-pair.'))
+
+    def worker_modules(self):
+        return os.getenv('PROP_POSTPROCESS_MODULE_DIR')
+
+    def run_postprocess(self,key):
+        package=self.worker_modules()
+        cmd="""import {pathToFileURL} from 'node:url';import {join} from 'node:path';
+const [root,dbPath,officialRequestId,taskId,base]=process.argv.slice(1);
+const imp=name=>import(pathToFileURL(join(root,name)).href);
+const {propStagePorts}=await imp('prop-stage-ports.mjs');
+const {nextPropPackageFromPath,runPropPackageFromPath}=await imp('prop-package-worker.mjs');
+const pds=propStagePorts({transport:async(path,{body,timeout})=>{
+ const r=await fetch(base+path,{method:'POST',body:JSON.stringify(body),headers:{'Content-Type':'application/json'},signal:AbortSignal.timeout(timeout)});
+ if(!r.ok)throw Error('HTTP '+r.status);
+ return Buffer.from(await r.arrayBuffer());
+}});
+const pick=nextPropPackageFromPath(dbPath);
+if(pick?.officialRequestId!==officialRequestId||pick?.taskId!==taskId)throw Error('unexpected eligible task');
+console.log(JSON.stringify(await runPropPackageFromPath({dbPath,officialRequestId,taskId,pds})));
+"""
+        out=subprocess.run(['node','--input-type=module','-e',cmd,package,str(self.db),self.oid,task_id(self.oid,key),self.pds],
+                           cwd=REPO,capture_output=True)
+        self.assertEqual(out.returncode,0,out.stderr.decode())
+        reply=json.loads(out.stdout)
+        self.assertEqual(reply['state'],'completed',reply)
+        return reply
 
     def exercise_three_static_assets(self,profile,scales=None):
         self.register_generate(self.db,profile=profile,scales=scales)
@@ -279,6 +363,10 @@ s.acknowledge(id);s.close();
             r=self.stage(STAGE,'',{'claim':claim,'artifact':{'media':media,'base64':base64.b64encode(raw).decode()}})
             self.mark(key,i,r['resultRef']);refs[key]=r['resultRef'];assets[key]=raw
         self.assertTrue(r['resultRef'].startswith('prop.spirit-rgba.'))
+        if scales:
+            for n in sorted(scales):
+                self.run_scale(n,next_stamp);next_stamp+=1
+                self.assertIsNone(self.filex_writer(WRITER+'/head',{'propId':PROP})['pointer'])
         final=self.mark('prop_pack_publish',next_stamp)
         pack=self.api('/prepare',{'claim':final})['manifest']
         if v2:
@@ -287,6 +375,13 @@ s.acknowledge(id);s.close();
             path.write_bytes(assets['prop_detail'])
             self.api('',{'claim':final,'manifest':pack},expected=403)
             path.write_bytes(assets[key])
+        if scales:
+            path=self.actual.staging.root/self.oid/task_id(self.oid,f'prop_scale_{min(scales):03d}')/'pixel.png'
+            exact=path.read_bytes()
+            path.write_bytes(exact[:-1]+b'!')
+            self.api('',{'claim':final,'manifest':pack},expected=403)
+            self.assertIsNone(self.filex_writer(WRITER+'/head',{'propId':PROP})['pointer'])
+            path.write_bytes(exact)
         self.assertEqual(set(pack['media']),{'detail','pixel','spirit'})
         self.assertEqual(pack['media']['spirit'],media)
         invalid={**pack,'media':{**pack['media'],'spirit':pack['media']['pixel']}}

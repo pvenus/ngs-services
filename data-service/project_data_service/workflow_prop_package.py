@@ -6,7 +6,7 @@ from .workflow_delete_claim import ClaimDenied
 from .workflow_motion_2d import strict_json
 
 PATH='/v1/props/ownership/workflow-package'
-ROUTES=(PATH,PATH+'/prepare',PATH+'/read',PATH+'/asset',PATH+'/head')
+ROUTES=(PATH,PATH+'/prepare',PATH+'/derive-scale',PATH+'/read',PATH+'/asset',PATH+'/head')
 WRITER='/v1/workflow/props'
 CAPABILITY='workflow.prop-package-write.v1'
 MAX_MANIFEST=512*1024
@@ -128,6 +128,10 @@ def serve(handler):
         raw=handler.rfile.read(int(n))
         if len(raw)!=int(n):return handler.respond(400,{'error':'WORKFLOW_PROP_PACKAGE_BAD_BODY'})
         body=strict_json(raw)
+        if parsed.path==PATH+'/derive-scale':
+            derive=getattr(obj.authority,'derive_scale_task',None)
+            need(callable(derive) and keys(body,('claim',)))
+            return handler.respond(200,derive(body['claim']))
         if parsed.path==PATH+'/prepare':
             prepare=getattr(obj.authority,'prepare_manifest',None)
             need(callable(prepare) and keys(body,('claim',)))

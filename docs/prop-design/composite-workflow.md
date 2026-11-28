@@ -268,10 +268,24 @@ basis (`scaleSourcePixel`, not a selectable image).
 Issue a separate `prop.scale.generate` request to add sizes to an existing
 prop. Its complete payload is
 `{schemaVersion:"ngs.prop-scale-generate.v1",projectId:"binari",propId,source:{revision,sha256},scalePercents:[...]}`.
-The planner schedules exactly one postprocess publication, without image
-or document generation. PDS reads and verifies the pinned source, resizes
-its pixel and cinematic images, and publishes one immutable successor via
-Filex compare-and-swap. A stale head or already-published size is rejected;
+For either initial generation or an append, the Planner registers one
+`prop.scale.derive` postprocess task per scale (`prop_scale_005` through
+`prop_scale_100`). Each receives one integer percent and the exact source
+binding. The tasks are chained in numeric order on the current single
+postprocess lane, so normal workflow status and per-task retries apply
+without adding a worker role or exceeding the dependency-column limit.
+Initial scale tasks wait for the verified full-size pixel detail. Append
+scale tasks read the pinned published source and do not schedule document
+or image generation. Each task stages only its PNG pair in PDS with an
+immutable descriptor receipt; it does not update the Filex head.
+
+One final postprocess publication checks all completed scale receipts,
+verifies their staged PNG bytes without resizing again, and updates the
+Filex head atomically. A stale head or already-published size is rejected;
 previous pins, assets, and animation remain readable. Legacy packages
 without a full-size pixel basis are resampled from their original pixel
 slot, so larger output changes dimensions but does not add drawn detail.
+Requests whose workflow was materialized before this change retain the
+former combined publish task and receipt. The request and package schemas
+are unchanged. Deploy the compatible Filex/PDS and postprocess worker
+before the Planner starts scheduling the new tasks.

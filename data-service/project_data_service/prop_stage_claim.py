@@ -22,6 +22,8 @@ ROLES={DESIGN:('design','document','design-spec'),BASE:('base','image','base-png
        PIXEL_SOURCE:('pixel-source','image','pixel-source-png'),PIXEL_DETAIL:('pixel-detail','postprocess','pixel-detail-rgba'),
        PIXEL:('pixel','postprocess','pixel-rgba'),SPIRIT:('spirit','postprocess','spirit-rgba'),MOTION_DETAIL:('motion-detail','postprocess','animation-detail-rgba'),
        MOTION_PIXEL:('motion-pixel','postprocess','animation-pixel-rgba'),PUBLISH:('publish','postprocess','package')}
+SCALE_KEYS=tuple(f'prop_scale_{n:03d}' for n in (5,10,20,30,40,50,60,70,80,90,100))
+ROLES.update((key,('derive','postprocess','scale-pair')) for key in SCALE_KEYS)
 CLAIM=('officialRequestId','taskId','projectId','payloadSha256','claimStamp')
 OFFICIAL=r'request\.official\.[a-f0-9]{64}'
 HASH=r'[a-f0-9]{64}'
@@ -59,7 +61,7 @@ def payload_valid(p,kind):
         need(prop_id(p['motionId']) and text(p['prompt'],2000) and not re.search(r'\bembedding:',p['prompt'],re.I))
     elif kind!=SCALE:need(text(p['intent'],4000) and match(p['designContextSha256'],HASH) and p.get('motion','still') in ('still','subtle'))
 
-def build_graph(oid,kind,p):
+def build_graph(oid,kind,p,*,split_scales=True):
     payload_valid(p,kind);rows={}
     make_id=lambda key:task_id(oid,key)
     scope={'propId':p['propId']}
@@ -68,10 +70,18 @@ def build_graph(oid,kind,p):
     if kind not in (APPEND,SCALE):scope['designContextSha256']=p['designContextSha256']
     def add(key,parent,extra,role=None):
         base,worker,_=ROLES[key];t=make_id(key)
-        rows[key]={'task_id':t,'task_key':key,'task_type':kind+'.'+(role or base),'worker_type':worker,
+        rows[key]={'task_id':t,'task_key':key,'task_type':'prop.scale.derive' if key in SCALE_KEYS else kind+'.'+(role or base),'worker_type':worker,
                    'depends_on_task_id':make_id(parent) if parent else None,'task_input':canonical({**scope,**extra}).decode()}
+    def add_scales(parent):
+        if not split_scales:return parent
+        for n in sorted(p.get('scalePercents',[])):
+            key=f'prop_scale_{n:03d}'
+            add(key,parent,{'scalePercent':n})
+            parent=key
+        return parent
     if kind==SCALE:
-        add(PUBLISH,None,{'scalePercents':p['scalePercents'],'dependsOnTaskIds':[]})
+        parent=add_scales(None)
+        add(PUBLISH,parent,{'scalePercents':p['scalePercents'],'dependsOnTaskIds':[row['task_id'] for row in rows.values()]})
     elif kind==APPEND:
         id=p['motionId']
         add(MOTION,None,{'motionId':id,'prompt':p['prompt']},'raw')
@@ -94,9 +104,11 @@ def build_graph(oid,kind,p):
             add(MOTION,BASE,{'designTaskId':design,'baseTaskId':base})
             add(MOTION_DETAIL,MOTION,{'designTaskId':design,'baseTaskId':base,'sourceTaskId':make_id(MOTION)})
             add(MOTION_PIXEL,MOTION_DETAIL,{'designTaskId':design,'detailTaskId':make_id(MOTION_DETAIL)})
+        scale_parent=add_scales(PIXEL_DETAIL)
         add(PUBLISH,MOTION_PIXEL if m=='subtle' else PIXEL,{'dependsOnTaskIds':[x['task_id'] for x in rows.values()],**({'scalePercents':p['scalePercents']} if 'scalePercents' in p else {})})
         if 'presentationProfile' in p:
             parents=([make_id(PIXEL)] if m=='subtle' else [])+[make_id(SPIRIT)]
+            if split_scales and 'scalePercents' in p:parents.append(make_id(scale_parent))
             rows[PUBLISH].update({f'depends_on_task_id_{i+2}':dep for i,dep in enumerate(parents)})
     return rows
 
@@ -104,8 +116,8 @@ def from_run(db,run):
     need(run is not None and run['state']=='planned' and run['reason'] in (None,'RS_COMPLETED') and
          run['project_id']==P and run['request_type'] in FAMILIES and run['schema_version']==FAMILIES[run['request_type']])
     p=strict_json(run['payload'].encode());need(type(p)is dict and run['payload']==canonical(p).decode() and digest(p)==run['payload_sha256'])
-    expected=build_graph(run['official_request_id'],run['request_type'],p)
-    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 12',(run['official_request_id'],)).fetchall()
+    rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 23',(run['official_request_id'],)).fetchall()
+    expected=build_graph(run['official_request_id'],run['request_type'],p,split_scales=any(r['task_key'] in SCALE_KEYS for r in rows))
     need(len(rows)==len(expected))
     exact_rows={r['task_key']:dict(r) for r in rows}
     need(len(exact_rows)==len(expected) and all(k in exact_rows and

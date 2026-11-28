@@ -1,7 +1,7 @@
 /** Boundary contract for the trusted PDS/Filex prop publisher, never a worker-local file. */
 import {canonical,sha} from './envelope.mjs';
 import {exactProp,propHash,propGenerateType,propRegenerateType,propAnimationType,propScaleType,validPropScalePercents,propValidator,propPresentationProfiles,pixelSourcePresentationProfile} from './prop-generate-envelope.mjs';
-import {checkPropPublishRows,propKeys,propRef,propTaskId} from './prop-generate-plan.mjs';
+import {checkPropPublishRows,propKeys,propRef,propTaskId,verifyPropScaleRefs} from './prop-generate-plan.mjs';
 const fail=()=>Error('PROP_PACKAGE_PROOF_INVALID');
 const need=x=>{if(!x)throw fail();};
 const positive=(n,max)=>Number.isSafeInteger(n)&&n>0&&n<=max;
@@ -90,6 +90,7 @@ function checkGeneralManifest(m){
 }
 function checkManifest(m,scope,members,prior){
  checkGeneralManifest(m);
+ need(verifyPropScaleRefs(m,members));
  need(['officialRequestId','projectId','propId','requestSha256'].every(key=>scope[key]===m[key]));
  if(!scope.operation||scope.operation==='regenerate')
   need(Object.hasOwn(m.media,'spirit')===propPresentationProfiles.includes(scope.presentationProfile));

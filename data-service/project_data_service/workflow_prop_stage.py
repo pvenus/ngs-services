@@ -10,7 +10,7 @@ from .prop_package_contract import sha,all_media
 from .prop_scale import derive
 from .prop_design_context import PropDesignContext
 from .prop_stage_claim import (
-    APPEND,BASE,DESIGN,DETAIL,GENERATE,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PIXEL_SOURCE,PIXEL_DETAIL,SPIRIT,PUBLISH,REGENERATE,SCALE,
+    APPEND,BASE,DESIGN,DETAIL,GENERATE,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PIXEL_SOURCE,PIXEL_DETAIL,SPIRIT,PUBLISH,REGENERATE,SCALE,SCALE_KEYS,
     PropClaimAuthority,ref_name,task_id,valid_ref,
 )
 from .prop_stage_store import PropStageStore,STAGES
@@ -120,6 +120,9 @@ class RealPropAuthority:
                     elif k==PIXEL and PIXEL_DETAIL in records:
                         need(line=={'source':source(PIXEL_DETAIL),'geometry':source(DETAIL)})
                     elif k in (DETAIL,PIXEL,SPIRIT):need(line=={'source':source(BASE if k==DETAIL else DETAIL)})
+                    elif k in SCALE_KEYS:
+                        need(line==({'package':p['source']} if kind==SCALE else
+                          {'pixel':source(PIXEL_DETAIL),'spirit':source(DETAIL)}))
                     elif k==MOTION:
                         need(line==({'package':p['source']} if kind==APPEND else {'source':source(BASE)}))
                     elif k in (MOTION_DETAIL,MOTION_PIXEL):
@@ -163,7 +166,7 @@ class RealPropAuthority:
             need(kind in (APPEND,SCALE) or kind in (GENERATE,REGENERATE) and p.get('motion','still')=='still')
             if kind==SCALE:
                 prior=self.current_source(p,kind)
-                variants,_,_=self.derive_scales(run,rows,p,prior)
+                variants,_,_=self.derive_scales(run,rows,p,prior,read_bytes=False)
                 return {**prior,'revision':prior['revision']+1,'officialRequestId':run['official_request_id'],
                         'requestSha256':run['payload_sha256'],'parentSha256':p['source']['sha256'],'scaleVariants':variants}
             if kind==APPEND:
@@ -197,12 +200,12 @@ class RealPropAuthority:
                 'parentSha256':p['source']['sha256'] if prior else None,'media':media,'animations':[],
                 'interaction':expected_interaction(design,media)}
             if 'scalePercents' in p:
-                variants,_,basis=self.derive_scales(run,rows,p)
+                variants,_,basis=self.derive_scales(run,rows,p,read_bytes=False)
                 out['scaleVariants']=variants
                 if basis:out['scaleSourcePixel']=basis
             return out
 
-    def derive_scales(self,run,rows,p,prior=None):
+    def scale_inputs(self,run,rows,p,prior):
         def staged(key):
             r=self.stored(run,rows,key)
             return (self.staging.bytes(run['official_request_id'],r['taskId'],key,r['resultRef']),r['artifact'])
@@ -221,8 +224,42 @@ class RealPropAuthority:
             pixel=staged(PIXEL_DETAIL if PIXEL_DETAIL in rows else PIXEL)
             spirit=staged(DETAIL)
             basis=pixel[1] if PIXEL_DETAIL in rows else None
-        variant,raw=derive(spirit[1],{'pixel':pixel,'spirit':spirit},p['scalePercents'])
-        if prior is None and basis:raw[basis['assetId']]=pixel[0]
+        return old,pixel,spirit,basis
+
+    def derive_scale_task(self,claim):
+        with self.planner.selected(claim,SCALE_KEYS) as (run,p,rows,key), save_handoff(self.planner.claim,claim):
+            self.require_mode(run,p)
+            kind=run['request_type'];prior=self.current_source(p,kind)
+            info=strict_json(rows[key]['task_input'].encode())
+            n=info['scalePercent']
+            _,pixel,spirit,_=self.scale_inputs(run,rows,p,prior)
+            [variant],assets=derive(spirit[1],{'pixel':pixel,'spirit':spirit},[n])
+            lineage={'package':p['source']} if prior is not None else {
+                'pixel':_source(self.stored(run,rows,PIXEL_DETAIL)),'spirit':_source(self.stored(run,rows,DETAIL))}
+            return self.staging.put(run['official_request_id'],claim['taskId'],key,variant,info,lineage=lineage,scale_assets=assets)
+
+    def derive_scales(self,run,rows,p,prior=None,*,read_bytes=True):
+        stage_keys=[k for k in rows if k in SCALE_KEYS]
+        if not stage_keys:
+            # Already queued/published runs continue to use their historical graph.
+            old,pixel,spirit,basis=self.scale_inputs(run,rows,p,prior)
+            variant,raw=derive(spirit[1],{'pixel':pixel,'spirit':spirit},p['scalePercents'])
+            if prior is None and basis:raw[basis['assetId']]=pixel[0]
+        else:
+            old=prior.get('scaleVariants',[]) if prior is not None else []
+            if any(v['scalePercent'] in p['scalePercents'] for v in old):raise Stale()
+            basis=prior.get('scaleSourcePixel') if prior is not None else self.stored(run,rows,PIXEL_DETAIL)['artifact']
+            oid=run['official_request_id'];variant=[];raw={}
+            for k in stage_keys:
+                a=self.stored(run,rows,k);desc=a['artifact']
+                need(k==f"prop_scale_{desc['scalePercent']:03d}")
+                variant.append(desc)
+                if read_bytes:
+                    for lane in ('pixel','spirit'):
+                        raw[desc[lane]['assetId']]=self.staging.bytes(oid,a['taskId'],k,a['resultRef'],lane)
+            if read_bytes and prior is None:
+                a=self.stored(run,rows,PIXEL_DETAIL)
+                raw[basis['assetId']]=self.staging.bytes(oid,a['taskId'],PIXEL_DETAIL,a['resultRef'])
         return sorted([*old,*variant],key=lambda r:r['scalePercent']),raw,basis
 
     def read_media(self,claim,c,m,prior):

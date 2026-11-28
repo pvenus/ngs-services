@@ -6,7 +6,7 @@ from .filex_read import canonical,digest
 from .media_validation import png
 from .prop_package_contract import sha,verify_media
 from .prop_stage_claim import (
-    BASE,DESIGN,DETAIL,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PIXEL_SOURCE,PIXEL_DETAIL,SPIRIT,OFFICIAL,TASK,HASH,ref_name,text,valid_ref,
+    BASE,DESIGN,DETAIL,MOTION,MOTION_DETAIL,MOTION_PIXEL,PIXEL,PIXEL_SOURCE,PIXEL_DETAIL,SPIRIT,SCALE_KEYS,OFFICIAL,TASK,HASH,ref_name,text,valid_ref,
 )
 from .workflow_motion_2d import strict_json
 from .workflow_prop_package import keys,match,need
@@ -116,9 +116,18 @@ class PropStageStore:
             st=parent.lstat()
             need(stat.S_ISDIR(st.st_mode) and st.st_uid==os.getuid() and stat.S_IMODE(st.st_mode)==0o700 and parent.resolve()==parent)
         return target
-    def put(self,oid,task,key,artifact,source,*,lineage=None,small=False):
-        need(key in STAGES)
-        if key==DESIGN:
+    def put(self,oid,task,key,artifact,source,*,lineage=None,small=False,scale_assets=None):
+        need(key in STAGES or key in SCALE_KEYS)
+        if key in SCALE_KEYS:
+            need(keys(artifact,('scalePercent','pixel','spirit')) and key==f"prop_scale_{artifact['scalePercent']:03d}")
+            need(type(scale_assets)is dict and set(scale_assets)=={artifact[l]['assetId'] for l in ('pixel','spirit')})
+            content=artifact;files={}
+            for lane in ('pixel','spirit'):
+                media=content[lane];raw=scale_assets[media['assetId']]
+                verify_media(raw,media,variant=True)
+                files[lane+'.png']=raw
+            ref=ref_name(key,digest(content))
+        elif key==DESIGN:
             content=design_artifact(artifact,source);files={};ref=ref_name(key,digest(content))
         elif key==MOTION:
             content,files=raw_artifact(artifact,{'officialRequestId':oid,'taskId':task,'propId':source['propId']})
@@ -155,17 +164,19 @@ class PropStageStore:
         # Previously completed base results may still use the original layout.
         return self._closed_path(oid,task)
     def get(self,oid,task,key,ref):
-        need(key in STAGES and valid_ref(key,ref))
+        need((key in STAGES or key in SCALE_KEYS) and valid_ref(key,ref))
         raw=_read(self._result_path(oid,task,key,ref)/'receipt.json',MAX_METADATA);v=strict_json(raw)
         need(raw==canonical(v) and keys(v,('officialRequestId','taskId','key','resultRef','artifact','lineage')) and
           (v['officialRequestId'],v['taskId'],v['key'],v['resultRef'])==(oid,task,key,ref))
         artifact=v['artifact']
-        sha_declared=digest(artifact) if key in (DESIGN,MOTION) else artifact['sha256']
+        sha_declared=digest(artifact) if key in (DESIGN,MOTION,*SCALE_KEYS) else artifact['sha256']
         need(ref_name(key,sha_declared)==ref)
         return v
     def bytes(self,oid,task,key,ref,index=None):
         r=self.get(oid,task,key,ref);d=r['artifact']
-        if key==MOTION:
+        if key in SCALE_KEYS:
+            need(index in ('pixel','spirit'));d=d[index];name=index+'.png'
+        elif key==MOTION:
             need(type(index)is int and 0<=index<len(d['frames']));d=d['frames'][index];name=f'{index:03d}.png'
         else:
             need(key!=DESIGN and index is None);name='asset.png'

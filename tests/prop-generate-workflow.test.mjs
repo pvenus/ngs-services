@@ -327,7 +327,7 @@ test('reference CREATE retains exact optional pin across official Local and Spac
   schemaVersion:'ngs.prop-regenerate.v1',source:{revision:1,sha256:'c'.repeat(64)}}}),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
 });
 
-test('official prop-scale intake is validated and independently plans one postprocess publish',async t=>{
+test('official scale intake plans independent postprocess tasks and one publish',async t=>{
  const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true});
  const advertised=(await rs.rpc('tools/list',{})).tools.find(tool=>tool.name==='request_submit');
  assert(advertised.inputSchema.properties.requestType.enum.includes('prop.scale.generate'));
@@ -338,13 +338,24 @@ test('official prop-scale intake is validated and independently plans one postpr
  const {officialRequestId}=await submit({...base,scalePercents:[100,5,20]},'add-prop-scales');
  const {requests}=await rs.call('request_workflow_list',{});
  const row=requests.find(r=>r.officialRequestId===officialRequestId);
- const [pkg,...rest]=buildPlan(row).tasks;
- assert.deepEqual(rest,[]);assert.equal(pkg.workerType,'postprocess');assert.equal(pkg.type,'prop.scale.generate.publish');
- assert.deepEqual(pkg.input,{propId:p.propId,source,scalePercents:[100,5,20],dependsOnTaskIds:[]});
+ const [first,second,third,pkg]=buildPlan(row).tasks;
+ assert.deepEqual([first,second,third].map(t=>[t.key,t.type,t.workerType,t.input.scalePercent,t.dependsOn]),
+  [[ 'prop_scale_005','prop.scale.derive','postprocess',5,null],
+   ['prop_scale_020','prop.scale.derive','postprocess',20,first.id],
+   ['prop_scale_100','prop.scale.derive','postprocess',100,second.id]]);
+ assert.equal(pkg.type,'prop.scale.generate.publish');
+ assert.equal(pkg.dependsOn,third.id);
+ assert.deepEqual(pkg.input,{propId:p.propId,source,scalePercents:[100,5,20],dependsOnTaskIds:[first.id,second.id,third.id]});
+ assert.deepEqual(buildPlan(row,{splitPropScales:false}).tasks.map(t=>t.key),[propKeys.publish]);
  const generating={...p,scalePercents:[40,5],presentationProfile:'spirit-v2'};
  const tasks=buildPlan(makeRow(generating)).tasks;
  assert.deepEqual(tasks.at(-1).input.scalePercents,[40,5]);
  assert.equal(tasks.filter(t=>t.workerType==='image').length,2);
+ const pair=tasks.filter(t=>t.type==='prop.scale.derive');
+ assert.deepEqual(pair.map(t=>t.input.scalePercent),[5,40]);
+ assert.equal(pair[0].dependsOn,tasks.find(t=>t.key===propKeys.pixelDetail).id);
+ assert.equal(pair[1].dependsOn,pair[0].id);
+ assert(tasks.at(-1).additionalDependencies.includes(pair[1].id));
  await assert.rejects(rs.call('request_submit',command({...p,scalePercents:[13]})),/NGS_PROP_GENERATE_PAYLOAD_INVALID/);
 });
 
@@ -357,17 +368,40 @@ test('append scale completion proof rejects changed old scales or unrelated meta
  const source={revision:1,sha256:sha(canonical(base))},officialRequestId='request.official.'+a,requestType='prop.scale.generate';
  const payload={schemaVersion:'ngs.prop-scale-generate.v1',projectId:'binari',propId:'lantern',source,scalePercents:[5]};
  const run={...makeRow(payload),officialRequestId,requestType,state:'planned',reason:null};
- const [task]=buildPlan({...makeRow(payload),officialRequestId,requestType}).tasks;
+ const [scale,task]=buildPlan({...makeRow(payload),officialRequestId,requestType}).tasks;
  const claim={officialRequestId,projectId:'binari',taskId:task.id,payloadSha256:run.payloadSha256,claimStamp:10};
- const rows=[{task_id:task.id,task_key:task.key,task_type:task.type,worker_type:task.workerType,depends_on_task_id:null,
-  task_input:canonical(task.input),official_request_id:officialRequestId,status:'running',result_ref:null,updated_at:10}];
  const pack={...base,officialRequestId,requestSha256:run.payloadSha256,revision:2,parentSha256:source.sha256,
   scaleVariants:[{scalePercent:5,pixel:asset(b,5),spirit:asset(c,5)},...base.scaleVariants]};
+ const rows=[scale,task].map((t,i)=>({task_id:t.id,task_key:t.key,task_type:t.type,worker_type:t.workerType,
+  depends_on_task_id:t.dependsOn,task_input:canonical(t.input),official_request_id:officialRequestId,status:i?'running':'completed',
+  result_ref:i?null:'prop.scale-pair.'+sha(canonical(pack.scaleVariants[0])),updated_at:i?10:9}));
  const proof=preparePropPublication(run,rows,claim,pack,{prior:base,head:source});
+ const wrongPair={...pack,scaleVariants:[{...pack.scaleVariants[0],pixel:asset(a,5)},pack.scaleVariants[1]]};
+ assert.throws(()=>preparePropPublication(run,rows,claim,wrongPair,{prior:base,head:source}),/PROP_PACKAGE_PROOF_INVALID/);
  const receipt={...proof,schemaVersion:'ngs.prop-package-publication-receipt.v1',authority:'filex',status:'committed'};
  assert(verifyPropPublicationProof(proof,{manifest:pack,receipt,prior:base}));
  assert.throws(()=>preparePropPublication(run,rows,claim,{...pack,title:'수정'}, {prior:base,head:source}),/PROP_PACKAGE_PROOF_INVALID/);
  const [next,old]=pack.scaleVariants;
  assert.throws(()=>preparePropPublication(run,rows,claim,{...pack,scaleVariants:[next,{...old,spirit:asset(a,20)}]},
   {prior:base,head:source}),/PROP_PACKAGE_PROOF_INVALID/);
+});
+
+test('retrying or exhausting a scale has the ordinary workflow status without publishing a partial prop',async t=>{
+ const temp=root(t),rs=await server(t,temp,{propGenerateEnabled:true,propMutationsEnabled:true});
+ const payload={schemaVersion:'ngs.prop-scale-generate.v1',projectId:'binari',propId:p.propId,source:sourcePin,scalePercents:[5,20,100]};
+ const {officialRequestId}=await rs.call('request_submit',{sourceId:'local',requestType:'prop.scale.generate',
+  idempotencyKey:'scale-stage-failure',payload});
+ const store=new PlannerStore(':memory:',{propGenerateEnabled:true,propMutationsEnabled:true,readPropPublication:async()=>assert.fail('no publish')});
+ t.after(()=>store.close());
+ assert.equal((await pollOnce(store,rs)).acknowledged,1);
+ const update=store.db.prepare(`UPDATE workflow_tasks SET status=?,retry_count=?,result_ref=?
+  WHERE official_request_id=? AND task_key=?`);
+ update.run('completed',0,propRef('prop_scale_005','a'.repeat(64)),officialRequestId,'prop_scale_005');
+ update.run('failed',1,null,officialRequestId,'prop_scale_020');
+ assert.equal((await pollOnce(store,rs)).failed,0);
+ assert.equal((await rs.call('request_list',{})).requests[0].status,'planned');
+ store.db.prepare(`UPDATE workflow_tasks SET retry_count=retry_limit WHERE official_request_id=? AND task_key='prop_scale_020'`)
+  .run(officialRequestId);
+ assert.equal((await pollOnce(store,rs)).failed,1);
+ assert.equal((await rs.call('request_list',{})).requests[0].status,'failed');
 });
