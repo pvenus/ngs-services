@@ -35,6 +35,8 @@ class Tests(unittest.TestCase):
         self.addCleanup(sterile.doCleanups);sterile.setUp()
         self.sterile=sterile
         self.writer,self.data,self.db,self.pds=(sterile.writer,sterile.data,sterile.db,sterile.pds)
+        with sqlite3.connect(self.db) as q:
+            q.execute("ALTER TABLE workflow_tasks ADD COLUMN save_started_at INTEGER CHECK(save_started_at IS NULL OR (status='running' AND result_ref IS NULL AND save_started_at>=updated_at))")
         self.canonical=self.data.parent/'canonical-files'
         self.root=self.canonical/'binari'/'audio';self.root.mkdir(parents=True)
         self.pds.project_folders=configured(self.canonical,'127.0.0.1')
@@ -76,9 +78,14 @@ class Tests(unittest.TestCase):
         with sqlite3.connect(self.db) as q:
             q.execute("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,1,'planned',1,NULL)",
                       (oid,'binari','audio.generate',p['schemaVersion'],encoded(p).decode(),digest(p)))
-            q.execute("INSERT INTO workflow_tasks VALUES(?,?,'audio_generate','audio.generate','audio',?,NULL,2,NULL,'running')",
+            q.execute("INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,result_ref,updated_at,depends_on_task_id,status) VALUES(?,?,'audio_generate','audio.generate','audio',?,NULL,2,NULL,'running')",
                       (tid,oid,encoded({'kind':kind,'conceptId':cid}).decode()))
         return {'officialRequestId':oid,'taskId':tid,'projectId':'binari','payloadSha256':digest(p),'claimStamp':2}
+
+    def stored_state(self,claim):
+        with sqlite3.connect(self.db) as q:
+            return q.execute("SELECT status,result_ref,save_started_at FROM workflow_tasks WHERE task_id=?",
+                             (claim['taskId'],)).fetchone()
 
     def body(self,claim,raw):
         status,d=self.call({'claim':claim},'/read')
@@ -87,7 +94,7 @@ class Tests(unittest.TestCase):
 
     def test_exact_filex_scope_and_replay_then_unrelated_edit(self):
         self.assertEqual(self.call(),(200,{'enabled':True,'schemaVersion':SCHEMA}))
-        claim=self.plan();before=self.db.read_bytes()
+        claim=self.plan()
         raw=wav();wire=self.body(claim,raw);wire['artifact']['bpm']=92
         _,source=self.call({'claim':claim},'/read')
         self.assertIn('한글',source['content']);self.assertNotIn(self.sterile.custom,source['content'])
@@ -96,7 +103,9 @@ class Tests(unittest.TestCase):
         self.writer.write(self.root_metadata,encoded(root))
         self.assertEqual(self.call({'claim':claim},'/read'),(200,source))
         ack={'ok':True,'resultRef':PREFIX+claim['officialRequestId']+'/metadata.json'}
-        self.assertEqual(self.call(wire),(200,ack));self.assertEqual(self.call(wire),(200,ack))
+        self.assertEqual(self.call(wire),(200,ack))
+        self.assertEqual(self.stored_state(claim),('completed',ack['resultRef'],None))
+        self.assertEqual(self.call(wire),(422,{'error':REJECTION}))
         d=self.root/claim['officialRequestId'];self.assertEqual(sorted(p.name for p in d.iterdir()),['audio.wav','metadata.json'])
         self.assertEqual((d/'audio.wav').read_bytes(),raw)
         recorded=json.loads((d/'metadata.json').read_bytes())
@@ -105,10 +114,25 @@ class Tests(unittest.TestCase):
         self.assertEqual(recorded['audio']['durationSeconds'],10)
         self.assertEqual((recorded['bpm'],recorded['bpmBasis']),(92,'model'))
         self.assertEqual(recorded['taskId'],claim['taskId']);self.assertNotIn('brief',recorded);self.assertNotIn('text',recorded)
-        self.assertEqual(self.call({**wire,'artifact':audio(wav(amplitude=1))})[0],409)
+        self.assertEqual(self.call({**wire,'artifact':audio(wav(amplitude=1))})[0],422)
         self.assertEqual((d/'audio.wav').read_bytes(),raw)
-        self.assertEqual(self.db.read_bytes(),before)
 
+
+    def test_storage_has_no_workflow_read_lock_and_observes_saving(self):
+        c=self.plan(); peer=self.plan(key='peer'); wire=self.body(c,wav())
+        original=FilexCASTransport.call
+        def observe(tx,method,path,body):
+            if path==WRITER_PATH:
+                status,ref,since=self.stored_state(c)
+                self.assertEqual((status,ref),('running',None))
+                self.assertIsNotNone(since)
+                with sqlite3.connect(self.db,timeout=0.1) as q:
+                    q.execute('UPDATE workflow_tasks SET updated_at=3 WHERE task_id=?',(peer['taskId'],))
+            return original(tx,method,path,body)
+        with patch.object(FilexCASTransport,'call',observe):
+            self.assertEqual(self.call(wire)[0],200)
+        self.assertEqual(self.stored_state(c),('completed',PREFIX+c['officialRequestId']+'/metadata.json',None))
+        self.assertEqual(self.stored_state(peer),('running',None,None))
 
     def test_direct_concept_is_derived_from_exact_claim_and_never_reads_filex_master(self):
         direct='직접 입력한 콘셉트\n가창은 짧게 🎵'
@@ -121,10 +145,13 @@ class Tests(unittest.TestCase):
             self.assertEqual(self.call({'claim':c,'conceptText':'spoofed'},'/read'),(422,{'error':REJECTION}))
             wire=self.body(c,wav())
             forged={**wire,'source':{**wire['source'],'sectionSha256':'f'*64}}
-            self.assertEqual(self.call(forged),(422,{'error':REJECTION}))
+            self.assertEqual(self.call(forged),(409,{'error':'WORKFLOW_AUDIO_OUTCOME_UNCONFIRMED'}))
+            self.assertEqual(self.stored_state(c),('failed',None,None))
             self.assertEqual(list(self.root.iterdir()),[])
+            c=self.plan(cid='direct',duration=None,key='valid-direct',extra={'conceptText':direct,'lyricsRequest':'별빛으로 짧게'})
+            wire=self.body(c,wav())
             self.assertEqual(self.call(wire)[0],200)
-            self.assertEqual(self.call(wire)[0],200)
+            self.assertEqual(self.call(wire)[0],422)
         recorded=json.loads((self.root/c['officialRequestId']/'metadata.json').read_bytes())
         self.assertEqual(recorded['source'],wire['source'])
         self.assertEqual(recorded['payloadSha256'],c['payloadSha256'])
@@ -152,8 +179,10 @@ class Tests(unittest.TestCase):
     def test_model_chosen_duration_false_before_write_and_actual_in_result(self):
         claim=self.plan(duration=None,text='[Humming]\n음—')
         wire=self.body(claim,wav(90,hz=48000,channels=2))
-        for bad in (wav(9),wav(121)):
-            self.assertEqual(self.call({**wire,'artifact':audio(bad)}),(422,{'error':REJECTION}))
+        for i,bad in enumerate((wav(9),wav(121))):
+            denied=self.plan(duration=None,key='bad-length'+str(i))
+            self.assertEqual(self.call(self.body(denied,bad))[0],409)
+            self.assertEqual(self.stored_state(denied),('failed',None,None))
         self.assertEqual(self.call(wire)[0],200)
         recorded=json.loads((self.root/claim['officialRequestId']/'metadata.json').read_bytes())
         self.assertIsNone(recorded['durationSeconds'])
@@ -176,17 +205,21 @@ class Tests(unittest.TestCase):
     def test_changed_selected_source_or_bad_wav_is_definite_before_write(self):
         c=self.plan(kind='bgm');w=self.body(c,wav(hz=48000,channels=2))
         a=w['artifact']
-        for bad in ({**a,'sha256':'f'*64},{**a,'bpm':301},{**a,'bpmBasis':'model'},audio(wav(9.8)),audio(wav()[:-2]),audio(b'RIFF'+b'\0'*80)):
-            self.assertEqual(self.call({**w,'artifact':bad}),(422,{'error':REJECTION}))
+        for i,bad in enumerate(({**a,'sha256':'f'*64},{**a,'bpm':301},{**a,'bpmBasis':'model'},audio(wav(9.8)),audio(wav()[:-2]),audio(b'RIFF'+b'\0'*80))):
+            denied=self.plan(key='invalid-wav'+str(i))
+            self.assertEqual(self.call({**self.body(denied,wav()),'artifact':bad})[0],409)
+            self.assertEqual(self.stored_state(denied),('failed',None,None))
         field=self.data/'sections'/self.section/'fields/fixture.json';value=json.loads(field.read_bytes());value['value']='edited active source'
         with self.writer.lock():self.writer.write(field,encoded(value))
-        self.assertEqual(self.call(w),(422,{'error':REJECTION}));self.assertEqual(list(self.root.iterdir()),[])
+        self.assertEqual(self.call(w)[0],409);self.assertEqual(list(self.root.iterdir()),[])
+        self.assertEqual(self.stored_state(c),('failed',None,None))
+        c=self.plan(key='current-source')
         current=self.body(c,wav(hz=48000,channels=2))
         self.assertEqual(self.call(current)[0],200)
         recorded=json.loads((self.root/c['officialRequestId']/'metadata.json').read_bytes())
         self.assertEqual((recorded['bpm'],recorded['bpmBasis']),(None,'unavailable'))
 
-    def test_rename_response_loss_exact_replay_and_raw_visibility(self):
+    def test_writer_response_loss_marks_failed_without_replaying(self):
         c=self.plan();w=self.body(c,wav(hz=24000));dest=self.root/c['officialRequestId']
         real=os.rename
         def lost(a,b,*args,**kwargs):
@@ -199,7 +232,8 @@ class Tests(unittest.TestCase):
         with patch('workflow_audio_store.os.rename',lost):
             self.assertIn(self.call(w)[0],(409,503))
         self.assertTrue((dest/'audio.wav').is_file());self.assertTrue((dest/'metadata.json').is_file())
-        self.assertEqual(self.call(w)[0],200)
+        self.assertEqual(self.stored_state(c),('failed',None,None))
+        self.assertEqual(self.call(w)[0],422)
         self.assertEqual(len(list(self.root.iterdir())),1)
 
     def test_migrated_exact_markdown_authority_is_used(self):
@@ -243,7 +277,7 @@ class Tests(unittest.TestCase):
         i={'officialRequestId':source,'target':{'type':'directory','path':AUDIO_ROOT+'/'+source}}
         with sqlite3.connect(self.db) as db:
             db.execute("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,1,'planned',1,NULL)",(oid,'binari','audio.delete',p['schemaVersion'],encoded(p).decode(),digest(p)))
-            db.execute("INSERT INTO workflow_tasks VALUES(?,?,'audio_delete','audio.delete','file',?,NULL,3,NULL,'running')",(tid,oid,encoded(i).decode()))
+            db.execute("INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,result_ref,updated_at,depends_on_task_id,status) VALUES(?,?,'audio_delete','audio.delete','file',?,NULL,3,NULL,'running')",(tid,oid,encoded(i).decode()))
         return {'claim':{'officialRequestId':oid,'taskId':tid,'projectId':'binari','payloadSha256':digest(p),'claimStamp':3,'sourceRequestId':source},
                 'target':{'root':AUDIO_ROOT,'path':source,'kind':'directory'}}
 
@@ -263,6 +297,8 @@ class Tests(unittest.TestCase):
         wire=self.delete_plan(first['officialRequestId'])
         endpoint=f'http://127.0.0.1:{self.pds.server_port}'+DELETE
         self.assertEqual(self.call(base=endpoint)[1]['roots'],[AUDIO_ROOT])
+        with sqlite3.connect(self.db) as db:
+            db.execute("UPDATE workflow_tasks SET status='running' WHERE task_id=?",(first['taskId'],))
         self.assertEqual(self.call(wire,base=endpoint)[0],403) # source is not yet completed.
         self.mark_result_completed(first)
         for bad in ({**wire,'target':{**wire['target'],'path':second['officialRequestId']}},
@@ -295,7 +331,7 @@ class Tests(unittest.TestCase):
         self.assertNotIn('.deleted',public);self.assertNotIn(first['officialRequestId'],public)
         self.assertIn(second['officialRequestId'],public)
 
-    def test_generated_at_stable_on_replay_and_legacy_metadata_stays_exact(self):
+    def test_completed_claim_cannot_replay_or_mutate_existing_metadata(self):
         c=self.plan();w=self.body(c,wav())
         before=time.time_ns()//1_000_000
         self.assertEqual(self.call(w)[0],200)
@@ -303,10 +339,10 @@ class Tests(unittest.TestCase):
         persisted=path.read_bytes();meta=json.loads(persisted)
         self.assertGreaterEqual(meta['generatedAt'],before)
         self.assertLessEqual(meta['generatedAt'],time.time_ns()//1_000_000)
-        self.assertEqual(self.call(w)[0],200);self.assertEqual(path.read_bytes(),persisted)
+        self.assertEqual(self.call(w)[0],422);self.assertEqual(path.read_bytes(),persisted)
         del meta['generatedAt'];path.write_bytes(encoded(meta))
         prior=path.read_bytes()
-        self.assertEqual(self.call(w)[0],200)
+        self.assertEqual(self.call(w)[0],422)
         self.assertEqual(path.read_bytes(),prior) # no silent backfill during replay.
 
     def test_default_scope_is_not_advertised_or_writable(self):

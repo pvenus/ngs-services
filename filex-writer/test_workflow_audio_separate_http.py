@@ -40,7 +40,7 @@ class Tests(unittest.TestCase):
         with sqlite3.connect(self.db) as q:
             q.execute("INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,1,'planned',1,NULL)",
                       (oid,'binari','audio.separate',PAYLOAD,encoded(p).decode(),digest(p)))
-            q.execute("INSERT INTO workflow_tasks VALUES(?,?,'audio_separate','audio.separate','audio',?,NULL,2,NULL,'running')",
+            q.execute("INSERT INTO workflow_tasks(task_id,official_request_id,task_key,task_type,worker_type,task_input,result_ref,updated_at,depends_on_task_id,status) VALUES(?,?,'audio_separate','audio.separate','audio',?,NULL,2,NULL,'running')",
                       (tid,oid,encoded(binding).decode()))
         self.output=self.root/oid
         return {'officialRequestId':oid,'taskId':tid,'projectId':'binari','payloadSha256':digest(p),'claimStamp':2}
@@ -54,7 +54,6 @@ class Tests(unittest.TestCase):
     def test_scope_binary_publish_and_exact_replay_without_touching_source(self):
         self.assertEqual(self.call(),(200,{'enabled':True,'schemaVersion':SCHEMA}))
         claim=self.plan()
-        db_before=self.db.read_bytes()
         before=self.source_files()
         code,view=self.call({'claim':claim},'/read')
         self.assertEqual(code,200)
@@ -74,9 +73,9 @@ class Tests(unittest.TestCase):
         body={'claim':claim,'artifact':fixture.audio(wave)}
         result={'ok':True,'resultRef':PREFIX+claim['officialRequestId']+'/metadata.json'}
         self.assertEqual(self.call(body),(200,result))
-        self.assertEqual(self.call(body),(200,result))
+        self.assertEqual(self.audio.stored_state(claim),('completed',result['resultRef'],None))
+        self.assertEqual(self.call(body)[0],422)
         self.assertEqual(self.source_files(),before)
-        self.assertEqual(self.db.read_bytes(),db_before)
         self.assertEqual({f.name for f in self.output.iterdir()},{'audio.wav','metadata.json'})
         self.assertEqual((self.output/'audio.wav').read_bytes(),wave)
         meta=json.loads((self.output/'metadata.json').read_bytes())
@@ -84,7 +83,7 @@ class Tests(unittest.TestCase):
                          (proof,claim['taskId'],'Official audio fixture (반주)','unavailable'))
         self.assertEqual(meta['source'],json.loads(before['metadata.json'])['source'])
         self.assertEqual(meta['audio']['durationSeconds'],9.8)
-        self.assertEqual(self.call({**body,'artifact':fixture.audio(fixture.wav(amplitude=7))})[0],409)
+        self.assertEqual(self.call({**body,'artifact':fixture.audio(fixture.wav(amplitude=7))})[0],422)
         self.assertEqual((self.output/'audio.wav').read_bytes(),wave)
 
     def test_missing_scope_wrong_stamp_wrong_sha_or_changed_original_prevents_new_output(self):
@@ -100,7 +99,8 @@ class Tests(unittest.TestCase):
         body={'claim':claim,'artifact':fixture.audio(fixture.wav(amplitude=11))}
         changed=self.root/self.source_id/'audio.wav'
         changed.write_bytes(fixture.wav(amplitude=1))
-        self.assertEqual(self.call(body),(422,{'error':REJECTION}))
+        self.assertEqual(self.call(body)[0],409)
+        self.assertEqual(self.audio.stored_state(claim),('failed',None,None))
         self.assertEqual(self.call({'claim':claim},'/asset'),(422,{'error':REJECTION}))
         changed.unlink()
         self.assertEqual(self.call(body),(422,{'error':REJECTION}))
@@ -113,8 +113,10 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.call({'claim':claim},'/read'),(422,{'error':REJECTION}))
         self.complete(self.original)
         snapshots=self.source_files()
-        for wave in (self.source_wave,fixture.wav(seconds=10.26,amplitude=7),b'RIFF'+bytes(100)):
-            self.assertEqual(self.call({'claim':claim,'artifact':fixture.audio(wave)}),(422,{'error':REJECTION}))
+        for i,wave in enumerate((self.source_wave,fixture.wav(seconds=10.26,amplitude=7),b'RIFF'+bytes(100))):
+            claim=self.plan('invalid-wave-'+str(i))
+            self.assertEqual(self.call({'claim':claim,'artifact':fixture.audio(wave)})[0],409)
+            self.assertEqual(self.audio.stored_state(claim),('failed',None,None))
         self.assertFalse(self.output.exists())
         self.assertEqual(self.source_files(),snapshots)
         self.assertFalse(any(p.name.startswith('.audio-stage-') for p in self.root.iterdir()))

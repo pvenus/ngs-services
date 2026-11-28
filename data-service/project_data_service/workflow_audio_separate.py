@@ -1,9 +1,9 @@
 """Scoped canonical-song read and derived instrumental publication."""
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 import json
 import sqlite3
 
-from .workflow_save_reservation import optionally_save
+from .workflow_save_reservation import save_handoff
 from .concept_filex import FilexConcept
 from .database import DataError
 from .filex_cas_transport import AudioPrewriteRejected
@@ -14,7 +14,7 @@ from .workflow_delete_claim import ClaimDenied, PrivatePlannerClaim
 
 PATH='/v1/audio/ownership/workflow-separate'
 WRITER_PATH='/v1/workflow/audio-separate'
-SCHEMA='workflow.audio-separate-write.v1'
+SCHEMA='workflow.audio-separate-write.v2'
 PAYLOAD='ngs.audio-separate.v1'
 TYPE='audio.separate'
 KEY='audio_separate'
@@ -89,9 +89,9 @@ class WorkflowAudioSeparate:
             need(type(a) is dict and set(a)=={'mimeType','sha256','bytes','base64'} and a['mimeType']=='audio/wav'
                  and match(a['sha256'],SHA) and type(a['bytes']) is int and 44<=a['bytes']<=MAX_WAV
                  and type(a['base64']) is str and len(a['base64'])==((a['bytes']+2)//3)*4)
-        # Same authenticated Planner read transaction as ordinary audio publication,
-        # fencing state changes for the short scoped Filex transaction, not model work.
-        with self.selected(body['claim']) as b, optionally_save(self.verifier,body['claim'],action=='publish'),self.writer_factory() as tx:
+        with self.selected(body['claim']) as b, (save_handoff(self.verifier,body['claim'],require_reservation=True) if action=='publish' else nullcontext()) as save, ExitStack() as stack:
+            if save is not None: started.append(True)
+            tx=stack.enter_context(self.writer_factory())
             self.writer(tx)
             if action=='asset':
                 return tx.audio_separate_asset(WRITER_PATH+'/asset',b,maximum=MAX_WAV)
@@ -103,10 +103,11 @@ class WorkflowAudioSeparate:
                     or not 44<=value['bytes']<=MAX_WAV):
                     raise ValueError('WORKFLOW_AUDIO_SEPARATE_SOURCE_RESPONSE')
                 return value
-            started.append(True)
             result=tx.call('POST',WRITER_PATH,{'binding':b,'artifact':a})
             if result!={'ok':True,'resultRef':PREFIX+b['officialRequestId']+'/metadata.json'}:
                 raise ValueError('WORKFLOW_AUDIO_SEPARATE_RESULT_UNCONFIRMED')
+            stack.close()
+            save.complete(result['resultRef'])
             return result
 
 
@@ -136,7 +137,7 @@ def serve(handler):
     except (Rejected,ClaimDenied,DataError):
         return handler.respond(409,{'error':'WORKFLOW_AUDIO_OUTCOME_UNCONFIRMED'}) if started else handler.respond(422,{'error':REJECTION})
     except AudioPrewriteRejected:
-        return handler.respond(422,{'error':REJECTION})
+        return handler.respond(409,{'error':'WORKFLOW_AUDIO_OUTCOME_UNCONFIRMED'}) if started else handler.respond(422,{'error':REJECTION})
     except (OSError,sqlite3.Error):
         return handler.respond(503,{'error':'WORKFLOW_AUDIO_OUTCOME_UNCONFIRMED'})
     except (ValueError,KeyError,TypeError):

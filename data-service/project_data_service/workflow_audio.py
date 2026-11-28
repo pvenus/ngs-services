@@ -1,6 +1,6 @@
 """Opt-in exact official audio workflow. No reservations, provider or file access."""
 import contextlib,hashlib,re,sqlite3,json
-from .workflow_save_reservation import optionally_save
+from .workflow_save_reservation import save_handoff
 from .concept_filex import FilexConcept
 from .database import DataError
 from .filex_read import canonical,digest
@@ -8,7 +8,7 @@ from .workflow_delete_claim import PrivatePlannerClaim,ClaimDenied
 
 PATH='/v1/audio/ownership/workflow-generate'
 WRITER_PATH='/v1/workflow/audio'
-SCHEMA='workflow.audio-generate-write.v1'
+SCHEMA='workflow.audio-generate-write.v2'
 PAYLOAD='ngs.audio-generate.v1'
 PREFIX='canonical-files/binari/audio/'
 MAX_WAV=24*1024*1024
@@ -96,7 +96,8 @@ class WorkflowAudio:
 
     def run(self,body,*,reading,started):
         need(type(body) is dict and set(body)==({'claim'} if reading else {'claim','source','artifact'}))
-        with self.selected(body['claim']) as (binding,concept_text), optionally_save(self.verifier,body['claim'],not reading),contextlib.ExitStack() as stack:
+        with self.selected(body['claim']) as (binding,concept_text), (save_handoff(self.verifier,body['claim'],require_reservation=True) if not reading else contextlib.nullcontext()) as save,contextlib.ExitStack() as stack:
+            if save is not None: started.append(True)
             direct_sha=hashlib.sha256(concept_text.encode('utf-8')).hexdigest() if concept_text is not None else None
             if reading:
                 if direct_sha is not None:
@@ -119,10 +120,11 @@ class WorkflowAudio:
             if direct_sha is not None:
                 binding['directConceptSha256']=direct_sha
             t=stack.enter_context(self.writer_factory())
-            started.append(True)
             result=t.call('POST',WRITER_PATH,{'binding':binding,'source':s,'artifact':a})
             if result!={'ok':True,'resultRef':PREFIX+binding['officialRequestId']+'/metadata.json'}:
                 raise ValueError('WORKFLOW_AUDIO_RESULT_UNCONFIRMED')
+            stack.close()
+            save.complete(result['resultRef'])
             return result
 
 def serve(handler):
@@ -149,5 +151,5 @@ def serve(handler):
         # pre-write rejection code. Unknown/delivery errors are never definite.
         from .filex_cas_transport import AudioPrewriteRejected
         if isinstance(exc,AudioPrewriteRejected):
-            return handler.respond(422,{'error':REJECTION})
+            return handler.respond(409,{'error':'WORKFLOW_AUDIO_OUTCOME_UNCONFIRMED'}) if started else handler.respond(422,{'error':REJECTION})
         return handler.respond(409,{'error':'WORKFLOW_AUDIO_OUTCOME_UNCONFIRMED'})

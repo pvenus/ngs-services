@@ -58,6 +58,19 @@ class SaveReservation:
         require(n==1)
         self.started=start
 
+    def complete(self, result_ref):
+        """Finalize only the exact reserved save, after storage returns its receipt."""
+        claim=self.claim
+        require(self.started is not None and isinstance(result_ref,str) and bool(result_ref))
+        require(self._change("""UPDATE workflow_tasks
+            SET status='completed',result_ref=?,save_started_at=NULL,updated_at=?
+            WHERE task_id=? AND official_request_id=? AND updated_at=? AND save_started_at=?
+            AND status='running' AND result_ref IS NULL
+            AND EXISTS(SELECT 1 FROM workflow_runs r WHERE r.official_request_id=workflow_tasks.official_request_id
+                AND r.state='planned' AND r.project_id='binari' AND r.payload_sha256=? AND r.reason IS NULL)""",
+            (result_ref,max(int(time.time()*1000),claim['claimStamp']+1),claim['taskId'],
+             claim['officialRequestId'],claim['claimStamp'],self.started,claim['payloadSha256']))==1)
+
     def finish(self):
         claim=self.claim
         require(self._change("""UPDATE workflow_tasks SET save_started_at=NULL
@@ -84,13 +97,13 @@ def publish_reserved(reservation, operation):
     # On success the worker records completion and clears the marker atomically.
 
 @contextmanager
-def save_handoff(verifier, claim, *, continuation=False):
+def save_handoff(verifier, claim, *, continuation=False, require_reservation=False):
     """Exact, persistent save ownership after proof, with no SQLite over I/O.
 
     Continuation is only for the serial frame-upload protocol. The in-process
     guard prevents two Filex calls for the same task during the same upload.
     """
-    if not getattr(verifier,'file_save_handoff',False):
+    if not getattr(verifier,'file_save_handoff',False) and not require_reservation:
         yield
         return
     task=claim['taskId']
@@ -99,7 +112,8 @@ def save_handoff(verifier, claim, *, continuation=False):
     try:
         reservation.enter(document=False,continuation=continuation)
         try:
-            yield
+            require(not require_reservation or reservation.started is not None)
+            yield reservation
         except Exception:
             if reservation.started is not None:
                 try:
