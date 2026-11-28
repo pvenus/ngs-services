@@ -156,3 +156,16 @@ test('staged background is a graph of shared operations: independent lanes with 
   assert.deepEqual(store.terminalFailures(),[{official_request_id:oid,request_type:type}]);
  }finally{store.close();}
 });
+
+test('cinematic still readback supports 2:1 and legacy; background remains 3:2',async()=>{
+ const {verifyExtraCinematicReadback}=await import('./cinematic-readback.mjs');
+ for(const background of [false,true]){
+  const prefix=background?'background':'cinematic';
+  const resultRef='binari/cinematics/'+(background?'backgrounds':'sources')+'/'+sourceSha256+'.json';
+  const candidate={family:prefix+'.source.generate',officialRequestId:oid,title:'Wide source',resultRef};
+  const manifest={schemaVersion:'ngs.'+prefix+'-source-result.v1',projectId:'binari',officialRequestId:oid,
+   title:candidate.title,sha256:sourceSha256,bytes:12000,width:1536,height:1024};
+  assert.equal(verifyExtraCinematicReadback(candidate,{ok:true,resultRef,manifest}),true);
+  assert.equal(verifyExtraCinematicReadback(candidate,{ok:true,resultRef,manifest:{...manifest,height:768}}),!background);
+ }
+});

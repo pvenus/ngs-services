@@ -85,7 +85,8 @@ def source_result(m,oid,title,mode=SOURCE):
     need(keys(m,('schemaVersion','projectId','officialRequestId','title','sha256','bytes','width','height')) and
          m['schemaVersion']==('ngs.background-source-result.v1' if (mode==BACKGROUND or mode in PIXEL_MODES) else 'ngs.cinematic-source-result.v1') and m['projectId']=='binari' and m['officialRequestId']==oid and
          m['title']==title and match(m['sha256'],HASH) and type(m['bytes'])is int and 0<m['bytes']<=8*1024*1024 and
-         type(m['width'])is int and type(m['height'])is int and m['width']==1536 and m['height']==1024)
+         type(m['width'])is int and type(m['height'])is int and m['width']==1536 and
+         m['height'] in ((1024,) if mode==BACKGROUND or mode in PIXEL_MODES else (768,1024)))
     return 'binari/cinematics/'+('backgrounds' if (mode==BACKGROUND or mode in PIXEL_MODES) else 'sources')+'/'+m['sha256']+'.json'
 
 

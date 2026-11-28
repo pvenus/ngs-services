@@ -171,6 +171,9 @@ console.log(payloadSha256);s.close();"""
         self.assertEqual(call('/read',{'claim':claim},base=base),
                          {k:v for k,v in payload.items() if k not in ('schemaVersion','projectId')})
         call('/read',{'claim':claim},403,base=PROJECT_ORIGIN+SOURCE)
+        wide=png(7,1536,768)
+        wrong={'sha256':sha(wide),'bytes':len(wide),'width':1536,'height':768,'base64':base64.b64encode(wide).decode()}
+        call('',{'claim':claim,'artifact':wrong},403,base=base)
         raw=png(1,1536,1024)
         artifact={'sha256':sha(raw),'bytes':len(raw),'width':1536,'height':1024,'base64':base64.b64encode(raw).decode()}
         ref='binari/cinematics/backgrounds/'+sha(raw)+'.json'
@@ -225,8 +228,8 @@ console.log(payloadSha256);s.close();"""
     def test_source_reconcile_fences_late_publish_and_preserves_already_stored_png(self):
         root,db,claim,call,_,_=self.sequence(source_job=True)
         base=PROJECT_ORIGIN+SOURCE
-        raw=png(1,1536,1024)
-        artifact={'sha256':sha(raw),'bytes':len(raw),'width':1536,'height':1024,'base64':base64.b64encode(raw).decode()}
+        raw=png(1,1536,768)
+        artifact={'sha256':sha(raw),'bytes':len(raw),'width':1536,'height':768,'base64':base64.b64encode(raw).decode()}
         offer={'claim':claim,'artifact':artifact}
         receipt=root/'.source-receipts'/(OID+'.json')
         path=root/'scenes'/artifact['sha256']/'source.png'

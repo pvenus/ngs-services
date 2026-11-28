@@ -483,7 +483,7 @@ def source_entry(m,background=False):
   m['schemaVersion']==(BACKGROUND_SCHEMA if background else SOURCE_SCHEMA) and m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
   cinematic_match(m['sha256'],CINEMATIC_DIGEST) and type(m['bytes'])is int and 0<m['bytes']<=CINEMATIC_MAX and
   type(m['title'])is str and 1<=len(m['title'])<=120 and m['title']==m['title'].strip() and
-  type(m['width'])is int and type(m['height'])is int and m['width']==1536 and m['height']==1024,'source metadata')
+  type(m['width'])is int and type(m['height'])is int and m['width']==1536 and m['height'] in ((1024,) if background else (768,1024)),'source metadata')
  return m
 
 def source_image(raw,m):

@@ -65,10 +65,13 @@ JSON file edited by the user is submitted via the same typed request rather
 than written directly to canonical storage.
 
 `cinematic.source.generate` is a separate official image-worker request that
-accepts a title and prompt, publishes a 1536×1024 PNG at
+accepts a title and prompt, composes a 2:1 frame and publishes a 1536×768 PNG at
 `cinematics/sources/<sha256>.png`, and publishes the title and provenance in a
 sibling JSON. It does not queue a cinematic sequence; the author selects a
-source explicitly when submitting the animation request.
+source explicitly when submitting the animation request. Existing 1536×1024
+cinematic sources remain readable. Map backgrounds retain their 1536×1024
+canvas. The native image provider can return a fixed 1536×1024 canvas; it is
+center-cropped without resampling in this cinematic lane only.
 
 `cinematic.sequences.remove` is a scoped file-worker request and accepts up to
 30 distinct committed sequence IDs. It updates the catalog exclusion index
