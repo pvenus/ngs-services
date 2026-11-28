@@ -87,13 +87,14 @@ export function verifyExtraCinematicReadback(candidate,value){
    (manual?m.origin==='manual'&&m.designSha256===null&&m.sha256===candidate.sha256:m.origin==='imagegen'&&h(m.designSha256));
  }
 
- if([cinematicSourceType,backgroundSourceType,backgroundPixelType].includes(candidate.family)){
+ if([cinematicSourceType,'cinematic.source.crop',backgroundSourceType,backgroundPixelType].includes(candidate.family)){
   const pixel=candidate.family===backgroundPixelType,background=pixel||candidate.family===backgroundSourceType;
   const m=value.manifest;
   return keys==='manifest,ok,resultRef'&&m&&
    Object.keys(m).sort().join(',')==='bytes,height,officialRequestId,projectId,schemaVersion,sha256,title,width'&&
    m.schemaVersion===(background?'ngs.background-source-result.v1':'ngs.cinematic-source-result.v1')&&m.projectId==='binari'&&m.officialRequestId===candidate.officialRequestId&&
-   (pixel?m.title===candidate.title+' · 픽셀 보정':m.title===candidate.title)&&m.width===1536&&(m.height===1024||!background&&m.height===768)&&Number.isInteger(m.bytes)&&m.bytes>0&&m.bytes<=8*1024*1024&&
+   (pixel?m.title===candidate.title+' · 픽셀 보정':m.title===candidate.title)&&(background?m.width===1536&&m.height===1024:[m.width,m.height].every(x=>Number.isInteger(x)&&x>=1&&x<=4096)&&m.width*m.height<=8388608)&&Number.isInteger(m.bytes)&&m.bytes>0&&m.bytes<=8*1024*1024&&
+   (candidate.family!=='cinematic.source.crop'||(m.width===candidate.right-candidate.left&&m.height===candidate.bottom-candidate.top&&m.sha256!==candidate.sourceSha256))&&
    typeof m.sha256==='string'&&m.sha256.length===64&&/^[a-f0-9]{64}$/u.test(m.sha256)&&
    candidate.resultRef==='binari/cinematics/'+(background?'backgrounds':'sources')+'/'+m.sha256+'.json';
  }

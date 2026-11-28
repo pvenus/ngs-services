@@ -18,7 +18,7 @@ from project_data_service.workflow_cinematic_sequence import WorkflowCinematicSe
 from project_data_service.workflow_delete_claim import PrivatePlannerClaim
 from project_data_service.workflow_cinematic_playback import WorkflowCinematicPlayback,PATH as PLAYBACK_PATH
 from test_scope_registry import UnifiedFixture
-from project_data_service.workflow_cinematic_project import WorkflowCinematicProject,ORIGIN as PROJECT_ORIGIN,SOURCE,BACKGROUND
+from project_data_service.workflow_cinematic_project import WorkflowCinematicProject,ORIGIN as PROJECT_ORIGIN,SOURCE,CROP,BACKGROUND
 
 REPO=Path(__file__).resolve().parents[1]
 OID='request.official.'+'4'*64
@@ -26,17 +26,22 @@ PLAYBACK={'durationFrames':132,'speedCurve':[{'frame':0,'rate':1/3},{'frame':90,
           'cameraCurve':[{'frame':0,'x':.5,'y':.5,'zoom':1},{'frame':110,'x':.2,'y':.4,'zoom':2}]}
 
 def sha(raw):return hashlib.sha256(raw).hexdigest()
-def png(i,width=128,height=128):
+def png(i,width=128,height=128,pattern=False):
     h=struct.pack('>IIBBBBB',width,height,8,2,0,0,0);frame=(b'\0'+bytes([30+i,180,70])*width)*height
+    if pattern:
+        frame=b''.join(bytes([0])+b''.join(bytes([x,y,70]) for x in range(width)) for y in range(height))
     def chunk(name,raw):return struct.pack('>I',len(raw))+name+raw+struct.pack('>I',zlib.crc32(name+raw))
     return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',h)+chunk(b'IDAT',zlib.compress(frame))+chunk(b'IEND',b'')
 
 class SequenceFixture(UnifiedFixture):
-    def sequence(self,source_job=False,background=False):
-        root=self.data/'cinematics';folder=root/'sources';folder.mkdir();still=png(0);source=sha(still)
+    def sequence(self,source_job=False,background=False,crop=False):
+        root=self.data/'cinematics';folder=root/'sources';folder.mkdir();still=png(0,pattern=crop);source=sha(still)
         (folder/(source+'.png')).write_bytes(still)
         payload={'schemaVersion':'ngs.cinematic-sequence-generate.v1','projectId':'binari','sourceSha256':source,
                  'motionPrompt':'저고리 주변의 먹 번짐', 'playback':PLAYBACK}
+        if crop:
+            payload={'schemaVersion':'ngs.cinematic-source-crop.v1','projectId':'binari','title':'정확한 자르기',
+                     'sourceSha256':source,'width':128,'height':128,'left':0,'top':64,'right':128,'bottom':128}
         if source_job:
             payload={'schemaVersion':'ngs.cinematic-source-generate.v1','projectId':'binari',
                      'title':'영적인 문','prompt':'밤의 종이문 틈으로 들어오는 그림자.'}
@@ -47,11 +52,11 @@ class SequenceFixture(UnifiedFixture):
 import {canonical,sha} from './workflow-planner/envelope.mjs';
 const [file,oid,raw]=process.argv.slice(1),payload=JSON.parse(raw),s=new PlannerStore(file,{cinematicEnabled:true});
 const payloadSha256=sha(canonical(payload));
-s.stage({officialRequestId:oid,projectId:'binari',requestType:payload.schemaVersion==='ngs.background-source-generate.v1'?'background.source.generate':payload.schemaVersion==='ngs.cinematic-source-generate.v1'?'cinematic.source.generate':'cinematic.sequence.generate',
+s.stage({officialRequestId:oid,projectId:'binari',requestType:payload.schemaVersion==='ngs.cinematic-source-crop.v1'?'cinematic.source.crop':payload.schemaVersion==='ngs.background-source-generate.v1'?'background.source.generate':payload.schemaVersion==='ngs.cinematic-source-generate.v1'?'cinematic.source.generate':'cinematic.sequence.generate',
  schemaVersion:payload.schemaVersion,payload,payloadSha256,registeredAt:1,status:'registered'});
 s.acknowledge(oid);
 const taskId=s.db.prepare('SELECT task_id FROM workflow_tasks').get().task_id;
-s.db.prepare('UPDATE workflow_tasks SET status=?,updated_at=?').run('running',5);
+if(payload.schemaVersion!=='ngs.cinematic-source-crop.v1')s.db.prepare('UPDATE workflow_tasks SET status=?,updated_at=?').run('running',5);
 console.log(JSON.stringify({officialRequestId:oid,projectId:'binari',taskId,payloadSha256,claimStamp:5}));
 s.close();"""
         claim=json.loads(subprocess.run(['node','--input-type=module','-e',js,str(db),OID,json.dumps(payload)],
@@ -67,6 +72,7 @@ s.close();"""
             planner,writer_factory=lambda:FilexCASTransport(writer),readiness=lambda:True)
         app.workflow_cinematic_playback=WorkflowCinematicPlayback(planner,writer_factory=lambda:FilexCASTransport(writer))
         app.workflow_cinematic_source=WorkflowCinematicProject(planner,SOURCE,writer_factory=lambda:FilexCASTransport(writer))
+        app.workflow_cinematic_source_crop=WorkflowCinematicProject(planner,CROP,writer_factory=lambda:FilexCASTransport(writer))
         app.workflow_cinematic_background=WorkflowCinematicProject(planner,BACKGROUND,writer_factory=lambda:FilexCASTransport(writer))
         from project_data_service.workflow_file_delete import BACKGROUND_ROOT,storage_provider
         from project_data_service.single_target_delete import SingleTargetDelete
@@ -83,7 +89,40 @@ s.close();"""
                     self.assertEqual(r.status,expected);return r.read() if binary else json.load(r)
             except HTTPError as e:
                 with e:self.assertEqual(e.code,expected);return json.load(e)
+        if crop:return root,db,claim,call,payload,still,app.server_port
         return root,db,claim,call,payload,still
+
+    def test_cinematic_crop_uses_existing_postprocess_worker_and_keeps_original(self):
+        import os
+        worker=os.environ.get('NGS_CROP_TEST_WORKER')
+        config=os.environ.get('NGS_CROP_TEST_CONFIG')
+        if not worker or not config:self.skipTest('external checked-out worker and Pillow required')
+        root,db,claim,call,payload,still,port=self.sequence(crop=True)
+        js="""import {createCinematicCropRenderer,runCinematicCrop,cinematicCropPorts} from 'file://WORKER';
+const [dbPath,configPath,officialRequestId,taskId,port]=process.argv.slice(1);
+const transport=async(path,{type,body})=>{
+ const response=await fetch('http://127.0.0.1:'+port+path,{...(body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{})});
+ if(!response.ok)throw Error('HTTP_'+response.status);
+ return Buffer.from(await response.arrayBuffer());
+};
+const render=await createCinematicCropRenderer({configPath});
+console.log(JSON.stringify(await runCinematicCrop({dbPath,pds:cinematicCropPorts({transport}),render,officialRequestId,taskId,signal:new AbortController().signal})));
+""".replace('WORKER',worker)
+        proc=subprocess.run(['node','--input-type=module','-e',js,str(db),config,OID,claim['taskId'],str(port)],capture_output=True,text=True,timeout=45)
+        self.assertEqual(proc.returncode,0,proc.stderr)
+        result=json.loads(proc.stdout)
+        self.assertEqual(result['state'],'completed',result)
+        digest=result['resultRef'].split('/')[-1].split('.')[0]
+        receipt=call('/result',{'officialRequestId':OID},base=PROJECT_ORIGIN+CROP)
+        self.assertEqual(receipt['resultRef'],result['resultRef'])
+        crop_path=root/'scenes'/digest/'source.png'
+        cropped=crop_path.read_bytes()
+        py=json.loads(Path(config).read_text())['FRAME_ALPHA_PYTHON']
+        subprocess.run([py,'-I','-B','-c',
+            'import sys; from PIL import Image; im=Image.open(sys.argv[1]); assert im.getpixel((0,0))==(0,64,70); assert im.getpixel((127,63))==(127,127,70)',
+            str(crop_path)],check=True)
+        self.assertEqual(struct.unpack_from('>II',cropped,16),(128,64))
+        self.assertEqual((root/'sources'/(payload['sourceSha256']+'.png')).read_bytes(),still)
 
     def test_upscale_uses_exact_published_input_and_commits_only_after_45_frames(self):
         from unittest.mock import patch

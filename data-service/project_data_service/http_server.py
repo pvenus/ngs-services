@@ -848,8 +848,9 @@ def serve(storage_root: Path, host: str, port: int):
         server.workflow_file_update=WorkflowFileUpdate(planner)
         from .workflow_assembly import WorkflowAssembly
         server.workflow_assembly=WorkflowAssembly(planner)
-        from .workflow_cinematic_project import WorkflowCinematicProject,SOURCE,BACKGROUND,CINE_BG,DRAFT,PIXEL,ARCHIVE
+        from .workflow_cinematic_project import WorkflowCinematicProject,SOURCE,CROP,BACKGROUND,CINE_BG,DRAFT,PIXEL,ARCHIVE
         server.workflow_cinematic_source=WorkflowCinematicProject(planner,SOURCE)
+        server.workflow_cinematic_source_crop=WorkflowCinematicProject(planner,CROP)
         server.workflow_cinematic_background=WorkflowCinematicProject(planner,BACKGROUND)
         server.workflow_cinematic_background_pixel=WorkflowCinematicProject(planner,PIXEL)
         server.workflow_cinematic_background_cinematic_source=WorkflowCinematicProject(planner,CINE_BG)

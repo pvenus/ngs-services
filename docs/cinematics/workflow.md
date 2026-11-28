@@ -70,10 +70,15 @@ accepts a title and prompt, composes a 2:1 frame and publishes a 1536×768 PNG a
 sibling JSON. It does not queue a cinematic sequence; the author selects a
 source explicitly when submitting the animation request. Existing 1536×1024
 cinematic sources remain readable. Map backgrounds retain their 1536×1024
-canvas. The worker publishes only native 1536×768 output for new
-cinematic stills. If the provider returns a different canvas, the worker
-records the dimensions and fails without cropping, resizing, or publishing
-the output.
+canvas. ImageGen is prompted for 1536×768. A valid result at another
+geometry is published unchanged so an author can preview it and choose a
+crop. NGS uses the pinned source dimensions to offer only the matching axis:
+top/bottom/both for a taller frame, left/right/both for a wider frame, no
+action at 2:1. The UI previews the cuts and sends an exact half-open pixel
+rectangle via `cinematic.source.crop`. The existing postprocess worker applies
+those coordinates without policy, model calls or scaling. Publication adds a
+new cinematic source and keeps the original. An odd width in a tall image
+shows the extra one-column trim required for exact integer 2:1.
 
 `cinematic.sequences.remove` is a scoped file-worker request and accepts up to
 30 distinct committed sequence IDs. It updates the catalog exclusion index

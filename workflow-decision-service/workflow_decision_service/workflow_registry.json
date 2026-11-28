@@ -1913,6 +1913,57 @@
     }
 ,
   {
+    "id": "cinematic.source.crop",
+    "workerId": "postprocess",
+    "candidateCount": 1,
+    "modelCalls": 0,
+    "dependsOn": [],
+    "description": "Apply the NGS-selected immutable half-open crop rectangle to one pinned PNG. No inferred direction, no resize or generation. Publish a new cinematic asset and preserve the original.",
+    "inputs": [
+      "sourceSha256",
+      "title",
+      "width",
+      "height",
+      "left",
+      "top",
+      "right",
+      "bottom"
+    ],
+    "outputs": [
+      "one cropped 2:1 PNG and its publication metadata"
+    ],
+    "requires": [],
+    "provides": [
+      "cinematic.source.cropped"
+    ],
+    "generationKind": "transformation",
+    "variations": [],
+    "requiredUserFields": [
+      "sourceSha256",
+      "left",
+      "top",
+      "right",
+      "bottom"
+    ],
+    "requestRequirements": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "ngs.cinematic-source-crop.v1"
+      },
+      "projectId": {
+        "type": "string",
+        "const": "binari"
+      }
+    },
+    "outputPolicy": {
+      "kind": "single-result",
+      "count": 1,
+      "selection": "none",
+      "apply": "authorized-mutation",
+      "authorization": "same-authorized-actor-target-and-action-or-fail"
+    }
+  },
+  {
     "id": "cinematic.sequence.upscale",
     "workerId": "animation",
     "candidateCount": 1,
@@ -2243,6 +2294,7 @@
     "map.generate":{"stageIds":["map.generate"],"eligibleStageIds":["map.generate"]},
     "file.update":{"stageIds":["file.update"],"eligibleStageIds":["file.update"]},
     "map.update":{"stageIds":["map.update"],"eligibleStageIds":["map.update"]},
+  "cinematic.source.crop": {"stageIds":["cinematic.source.crop"],"eligibleStageIds":["cinematic.source.crop"]},
   "cinematic.sequence.upscale": {"stageIds":["cinematic.sequence.upscale"],"eligibleStageIds":["cinematic.sequence.upscale"]},
   "background.animation.workflow": {
     "eligibleStageIds": [

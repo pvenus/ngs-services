@@ -57,7 +57,14 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
  validate_registry(registry)
  for action in registry['actions']:
   worker=action['workerId'];policy=action.get('outputPolicy',{})
-  if worker in ('image','postprocess'):
+  if worker=='postprocess' and action['id']=='cinematic.source.crop':
+   if (action.get('modelCalls')!=0 or action.get('dependsOn')!=[] or
+       registry['requestTypes'].get(action['id'],{}).get('stageIds')!=[action['id']] or
+       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.cinematic-source-crop.v1' or
+       policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
+       policy.get('apply')!='authorized-mutation'):
+    raise ValueError('LAYA_CINEMATIC_CROP_ADAPTER_CONTRACT')
+  elif worker in ('image','postprocess'):
    expected=BACKGROUND_QUEUE_ADAPTERS.get(action['id'])
    if (expected!=(worker,action.get('modelCalls')) or
        action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.background-pixel-workflow.v1' or

@@ -130,6 +130,12 @@ const uiSpec=(mode)=> {
   fields:['kind','title',gen?'prompt':'sha256'],
   valid:v=>['logo','button'].includes(v.kind)&&cleanText(v.title,120,480)&&(gen?cleanText(v.prompt,2000,4000):validHash(v.sha256))};
 };
+export const cinematicCropType='cinematic.source.crop',cinematicCropSchema='ngs.cinematic-source-crop.v1';
+const cropFields=['title','sourceSha256','width','height','left','top','right','bottom'];
+const cropCoord={type:'integer',minimum:0,maximum:4096};
+const validCrop=v=>validHash(v.sourceSha256)&&cleanText(v.title,120,480)&&
+ cropFields.slice(2).every(k=>integer(v[k],0,4096))&&v.width*v.height<=8388608&&
+ v.width!==v.height*2&&v.right<=v.width&&v.bottom<=v.height&&v.bottom>v.top&&v.right-v.left===2*(v.bottom-v.top);
 export const extraCinematicRequests=Object.freeze({
  [uiAssetGenerateType]:uiSpec('generate'),[uiAssetImportType]:uiSpec('import'),
  [cinematicUpscaleType]:{schema:cinematicUpscaleSchema,key:'cinematic_sequence_upscale',worker:'animation',route:'/v1/cinematics/ownership/workflow-sequence/upscale',
@@ -139,6 +145,10 @@ export const extraCinematicRequests=Object.freeze({
   fields:['sequenceId','sourceSha256','expectedRevision','playback'],valid:v=>typeof v.sequenceId==='string'&&v.sequenceId.length===81&&
    sequenceId.test(v.sequenceId)&&validHash(v.sourceSha256)&&integer(v.expectedRevision,0,Number.MAX_SAFE_INTEGER-1)&&validCinematicPlayback(v.playback)},
 
+ [cinematicCropType]:{schema:cinematicCropSchema,key:'cinematic_source_crop',worker:'postprocess',
+  route:'/v1/cinematics/ownership/workflow-source-crop',capability:'workflow.cinematic-source-crop.v1',
+  payload:req(cinematicCropSchema,{title:{type:'string',minLength:1,maxLength:120},sourceSha256:hashSchema,
+   ...Object.fromEntries(cropFields.slice(2).map(k=>[k,cropCoord]))}),fields:cropFields,valid:validCrop},
  [cinematicSourceType]:{schema:cinematicSourceRequestSchema,key:'cinematic_source_generate',worker:'image',route:'/v1/cinematics/ownership/workflow-source',
   capability:'workflow.cinematic-source-write.v1',
   payload:req(cinematicSourceRequestSchema,{title:{type:'string',minLength:1,maxLength:120},prompt:{type:'string',minLength:1,maxLength:2000}}),

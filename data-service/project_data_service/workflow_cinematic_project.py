@@ -1,7 +1,8 @@
 """Scoped source-image publication and non-destructive sequence removal."""
 import base64
+import struct
 from hashlib import sha256
-from .workflow_save_reservation import optionally_save
+from .workflow_save_reservation import optionally_save, save_handoff
 from .filex_read import digest
 from .workflow_cinematic import (WorkflowCinematic, BAD_TEXT, JS_ENDS, HASH, OFFICIAL, need, keys, match,
                                  serve as serve_cinematic)
@@ -10,12 +11,14 @@ from .workflow_cinematic_sequence import exact_claim, strict_json, sequence_grap
 ORIGIN='/v1/cinematics/ownership/workflow-'
 WRITER='/v1/workflow/cinematics-'
 SOURCE='source'
+CROP='source-crop'
+CROP_FIELDS=('title','sourceSha256','width','height','left','top','right','bottom')
 BACKGROUND='background'
 PIXEL='background-pixel'
 CINE_BG='background-cinematic-source'
 DRAFT='background-pixel-draft'
 PIXEL_MODES=(CINE_BG,DRAFT,PIXEL)
-SOURCE_MODES=(SOURCE,BACKGROUND,*PIXEL_MODES)
+SOURCE_MODES=(SOURCE,CROP,BACKGROUND,*PIXEL_MODES)
 PIXEL_FIELDS=('title','timeOfDay','season','mood','color','location','requirements','additionalNotes')
 PIXEL_SUFFIX={CINE_BG:' · 시네마틱 원본',DRAFT:' · 픽셀 생성본',PIXEL:' · 픽셀 보정'}
 ARCHIVE='sequence-remove'
@@ -23,6 +26,8 @@ CONFIG={
  SOURCE:{'type':'cinematic.source.generate','schema':'ngs.cinematic-source-generate.v1',
          'key':'cinematic_source_generate','worker':'image','input':('title','prompt'),
          'capability':'workflow.cinematic-source-write.v1','filex':'workflowCinematicSourceV1'},
+ CROP:{'type':'cinematic.source.crop','schema':'ngs.cinematic-source-crop.v1','key':'cinematic_source_crop','worker':'postprocess',
+       'input':CROP_FIELDS,'capability':'workflow.cinematic-source-crop.v1','filex':'workflowCinematicSourceV1'},
  BACKGROUND:{'type':'background.source.generate','schema':'ngs.background-source-generate.v1',
              'key':'background_source_generate','worker':'image','input':('title','timeOfDay','season','mood','color','location','requirements','additionalNotes'),
              'capability':'workflow.background-source-write.v1','filex':'workflowBackgroundSourceV1'},
@@ -36,6 +41,7 @@ CONFIG={
 }
 RESULT_ARCHIVE='binari/cinematics/sequence-archive.json'
 ROUTES=(ORIGIN+SOURCE,ORIGIN+SOURCE+'/read',ORIGIN+SOURCE+'/result',ORIGIN+SOURCE+'/reconcile',
+        *(ORIGIN+CROP+suffix for suffix in ('','/read','/asset','/result','/reconcile')),
         *(ORIGIN+BACKGROUND+suffix for suffix in ('','/read','/result','/reconcile')),
         *(ORIGIN+mode+suffix for mode in PIXEL_MODES for suffix in ('','/read','/asset','/result','/reconcile')),
         ORIGIN+ARCHIVE,ORIGIN+ARCHIVE+'/result')
@@ -49,6 +55,12 @@ def clean(v,chars,bytes_max):
 def validate_input(mode,v):
     need(keys(v,CONFIG[mode]['input']))
     if mode==SOURCE:need(clean(v['title'],120,480) and clean(v['prompt'],2000,4000))
+    elif mode==CROP:
+        need(clean(v['title'],120,480) and match(v['sourceSha256'],HASH) and
+             all(type(v[k])is int and 0<=v[k]<=4096 for k in CROP_FIELDS[2:]) and
+             v['width']*v['height']<=8388608 and v['width']!=2*v['height'] and
+             v['left']<v['right']<=v['width'] and v['top']<v['bottom']<=v['height'] and
+             v['right']-v['left']==2*(v['bottom']-v['top']))
     elif mode==BACKGROUND or mode in PIXEL_MODES:
         limits={'title':105 if mode in PIXEL_MODES else 120,'timeOfDay':80,'season':80,'mood':160,'color':120,'location':160,'requirements':900,'additionalNotes':900}
         need(all((k=='additionalNotes' and v[k]=='') or clean(v[k],n,n*4) for k,n in limits.items()))
@@ -85,8 +97,9 @@ def source_result(m,oid,title,mode=SOURCE):
     need(keys(m,('schemaVersion','projectId','officialRequestId','title','sha256','bytes','width','height')) and
          m['schemaVersion']==('ngs.background-source-result.v1' if (mode==BACKGROUND or mode in PIXEL_MODES) else 'ngs.cinematic-source-result.v1') and m['projectId']=='binari' and m['officialRequestId']==oid and
          m['title']==title and match(m['sha256'],HASH) and type(m['bytes'])is int and 0<m['bytes']<=8*1024*1024 and
-         type(m['width'])is int and type(m['height'])is int and m['width']==1536 and
-         m['height'] in ((1024,) if mode==BACKGROUND or mode in PIXEL_MODES else (768,1024)))
+         type(m['width'])is int and type(m['height'])is int and
+         ((m['width'],m['height'])==(1536,1024) if mode==BACKGROUND or mode in PIXEL_MODES else
+          1<=m['width']<=4096 and 1<=m['height']<=4096 and m['width']*m['height']<=8388608))
     return 'binari/cinematics/'+('backgrounds' if (mode==BACKGROUND or mode in PIXEL_MODES) else 'sources')+'/'+m['sha256']+'.json'
 
 
@@ -103,7 +116,7 @@ class WorkflowCinematicProject(WorkflowCinematic):
     def provider(self,endpoint,p,missing=False):
         need(endpoint in ('','/result','/reconcile'))
         with self.writer_factory() as tx:
-            r=tx.call('POST',WRITER+(BACKGROUND if self.mode in PIXEL_MODES else self.mode)+endpoint,p,missing=missing)
+            r=tx.call('POST',WRITER+(BACKGROUND if self.mode in PIXEL_MODES else SOURCE if self.mode==CROP else self.mode)+endpoint,p,missing=missing)
         if r is None:raise FileNotFoundError('cinematic project result not found')
         return r
     def graph(self,db,oid):return graph(self.mode,db,oid)
@@ -152,9 +165,12 @@ class WorkflowCinematicProject(WorkflowCinematic):
         return {'ok':True,'resultRef':ref,**out}
     def operate(self,op,p):
         if op=='result':return self.result(p)
-        need((op in ('read','asset','publish','reconcile') if self.mode in (DRAFT,PIXEL) else ('read','publish','reconcile') if self.mode in SOURCE_MODES else op=='publish') and
+        need((op in ('read','asset','publish','reconcile') if self.mode in (DRAFT,PIXEL,CROP) else ('read','publish','reconcile') if self.mode in SOURCE_MODES else op=='publish') and
              keys(p,('claim','artifact') if self.mode in SOURCE_MODES and op=='publish' else ('claim',)))
-        with exact_claim(self.planner,p['claim'],self.graph) as (oid,inp), optionally_save(self.planner,p['claim'],op=='publish'):
+        saving=op=='publish'
+        reservation_context=(save_handoff(self.planner,p['claim'],require_reservation=True)
+                             if saving and self.mode==CROP else optionally_save(self.planner,p['claim'],saving))
+        with exact_claim(self.planner,p['claim'],self.graph) as (oid,inp), reservation_context as reservation:
             if op=='read':
                 if self.mode not in (DRAFT,PIXEL):return inp
                 previous=self.predecessor(oid,inp)
@@ -162,6 +178,15 @@ class WorkflowCinematicProject(WorkflowCinematic):
                 if self.mode==DRAFT:out['base64']=base64.b64encode(self.pixel_source(previous,True)).decode('ascii')
                 return out
             source=self.predecessor(oid,inp) if self.mode in (DRAFT,PIXEL) and op in ('asset','publish') else None
+            if self.mode==CROP and op=='asset':
+                with self.writer_factory() as tx:
+                    row=tx.call('POST','/v1/workflow/cinematics/asset',{'sourceSha256':inp['sourceSha256']},missing=True)
+                if row is None:raise FileNotFoundError('cinematic crop source not found')
+                need(keys(row,('sourceSha256','base64')) and row['sourceSha256']==inp['sourceSha256'])
+                raw=base64.b64decode(row['base64'],validate=True)
+                need(33<=len(raw)<=8*1024*1024 and sha256(raw).hexdigest()==inp['sourceSha256'] and
+                     struct.unpack_from('>II',raw,16)==(inp['width'],inp['height']))
+                return raw
             if op=='asset':return self.pixel_source(source,include_bytes=True)
             save_id=self.publication_id(oid,self.mode)
             title=None if self.mode==ARCHIVE else inp['title']+PIXEL_SUFFIX.get(self.mode,'')
@@ -178,8 +203,11 @@ class WorkflowCinematicProject(WorkflowCinematic):
                 m={**{k:v for k,v in a.items() if k!='base64'},'schemaVersion':('ngs.background-source-result.v1' if (self.mode==BACKGROUND or self.mode in PIXEL_MODES) else 'ngs.cinematic-source-result.v1'),
                    'projectId':'binari','officialRequestId':save_id,'title':title}
                 if source is not None:need(m['sha256']!=source)
+                if self.mode==CROP:need(m['sha256']!=inp['sourceSha256'] and
+                    (m['width'],m['height'])==(inp['right']-inp['left'],inp['bottom']-inp['top']))
                 ref=source_result(m,save_id,title,self.mode)
                 need(self.provider('',{'manifest':m,'base64':a['base64'],'claimStamp':p['claim']['claimStamp']})==m)
+                if self.mode==CROP:reservation.complete(ref)
             else:
                 with self.planner.snapshot() as db:
                     for i in inp['sequenceIds']:
