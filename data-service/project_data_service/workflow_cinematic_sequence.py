@@ -102,6 +102,9 @@ def verify_manifest(m,oid,inp,group=None,original=None):
     need((not upscale or group is not None or original is not None) and (not compact or upscale) and (original is None or upscale))
     fields=MANIFEST if group is None else MANIFEST|{'group'}
     if upscale:fields=fields|{'upscale'}
+    title=(original if original is not None else inp).get('title')
+    if title is not None:fields=fields|{'title'}
+    need(title is None or valid_title(title) and m.get('title')==title)
     if original is not None:
         u=m['upscale']
         need(keys(u,('model','scale','sourceWidth','sourceHeight','sourceSequenceId')) and
@@ -135,23 +138,36 @@ def upscale_graph(db,oid):
     return r,t,inp
 
 
+NAMED_SCHEMA='ngs.cinematic-sequence-generate.v2'
+NATIVE_PLAYBACK={'durationFrames':45,'speedCurve':[{'frame':0,'rate':1}],
+                 'cameraCurve':[{'frame':0,'zoom':1,'x':.5,'y':.5}]}
+
+def valid_title(t):
+    return (type(t)is str and 1<=len(t)<=120 and len(t.encode('utf-8'))<=480 and
+            t.strip(JS_ENDS)==t and BAD_TEXT.search(t) is None and all(ord(c)>=32 and ord(c)!=127 for c in t))
+
 def sequence_graph(db,oid):
     need(match(oid,OFFICIAL))
     r=db.execute('SELECT * FROM workflow_runs WHERE official_request_id=?',(oid,)).fetchone()
-    need(r is not None and r['request_type']==TYPE and r['schema_version']==SCHEMA and r['project_id']=='binari' and
+    need(r is not None and r['request_type']==TYPE and r['schema_version'] in (SCHEMA,NAMED_SCHEMA) and r['project_id']=='binari' and
          r['state']=='planned' and r['reason'] in (None,'RS_COMPLETED'))
     payload=r['payload'].encode('utf-8')
     # Bind the exact Planner bytes. Python and JS spell some IEEE doubles
     # differently (e.g. small exponent values); validate semantics separately.
     p=strict_json(payload)
-    need(keys(p,('schemaVersion','projectId','sourceSha256','motionPrompt','playback')) and p['schemaVersion']==SCHEMA and
+    named=r['schema_version']==NAMED_SCHEMA
+    need(keys(p,('schemaVersion','projectId','sourceSha256','motionPrompt','title' if named else 'playback')) and p['schemaVersion']==r['schema_version'] and
          p['projectId']=='binari' and match(p['sourceSha256'],HASH) and sha256(payload).hexdigest()==r['payload_sha256'])
-    validate_input(p)
-    inp={k:p[k] for k in ('sourceSha256','motionPrompt','playback')}
+    inp={k:p[k] for k in ('sourceSha256','motionPrompt')}
+    inp['playback']=NATIVE_PLAYBACK if named else p['playback']
+    if named:
+        need(valid_title(p['title']))
+        inp['title']=p['title']
+    validate_input(inp)
     rows=db.execute('SELECT * FROM workflow_tasks WHERE official_request_id=? LIMIT 2',(oid,)).fetchall()
     need(len(rows)==1);t=rows[0]
     actual=strict_json(t['task_input'].encode('utf-8'))
-    need(keys(actual,('sourceSha256','motionPrompt','playback')) and validate_input(actual)==actual)
+    need(keys(actual,tuple(inp)) and validate_input(actual)==actual)
     need(t['task_id']=='workflow.task.'+digest([oid,RENDER]) and t['task_key']==RENDER and t['task_type']==RENDER_TYPE and
          t['worker_type']=='animation' and t['depends_on_task_id'] is None and actual==inp)
     return r,t,inp
@@ -295,7 +311,7 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         source=self.seq_call('/upscale-input',{'sequenceId':inp['sequenceId'],'expectedRevision':inp['expectedRevision']},missing=True)
         need(keys(source,('manifest','playback')) and source['playback']==inp['playback'])
         m=source['manifest']
-        verify_manifest(m,inp['sequenceId'],{'sourceSha256':inp['sourceSha256'],'playback':m['playback']})
+        verify_manifest(m,inp['sequenceId'],{'sourceSha256':inp['sourceSha256'],'playback':m['playback'],**({'title':m['title']} if 'title' in m else {})})
         return m
 
     def upscale_operate(self,op,packet):
@@ -393,7 +409,8 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         # The original was verified at publication. Do not invalidate an already
         # published derivative if the user edits the original's playback later.
         u=m.get('upscale',{})
-        original={'officialRequestId':inp['sequenceId'],'width':u.get('sourceWidth'),'height':u.get('sourceHeight')} if derived else None
+        original={'officialRequestId':inp['sequenceId'],'width':u.get('sourceWidth'),'height':u.get('sourceHeight'),
+                  **({'title':m['title']} if 'title' in m else {})} if derived else None
         verify_manifest(m,oid,inp,original=original)
         return {'ok':True,'resultRef':ref(oid),'manifest':m}
 

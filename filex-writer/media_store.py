@@ -237,12 +237,16 @@ def seq_frame_meta(value,index=None):
  return value
 
 def seq_manifest(m):
- require(type(m)is dict and set(m) in (SEQUENCE_KEYS,SEQUENCE_KEYS|{'group'},SEQUENCE_KEYS|{'group','upscale'},SEQUENCE_KEYS|{'upscale'}) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
+ require(type(m)is dict and set(m)-{'title'} in (SEQUENCE_KEYS,SEQUENCE_KEYS|{'group'},SEQUENCE_KEYS|{'group','upscale'},SEQUENCE_KEYS|{'upscale'}) and m['schemaVersion']=='ngs.cinematic-sequence-result.v1' and
   m['projectId']=='binari' and cinematic_match(m['officialRequestId'],CINEMATIC_ID) and
   cinematic_match(m['sourceSha256'],CINEMATIC_DIGEST) and type(m['masterFps'])is int and m['masterFps']==24 and
   type(m['frameCount'])is int and
   all(type(m[k])is int for k in ('width','height')) and
   type(m['frames'])is list,'sequence manifest')
+ if 'title' in m:
+  title=m['title']
+  require('group' not in m and type(title)is str and 1<=len(title)<=120 and len(title.encode('utf-8'))<=480 and
+    title.strip()==title and not any(ord(c)<32 or ord(c)==127 for c in title),'sequence title')
  playback=sequence_playback(m['playback'])
  compact='group' in m and playback['durationFrames']==84 and len(playback['speedCurve'])==1 and playback['speedCurve'][0]['rate']==1/6
  count=8 if compact else SEQUENCE_FRAME_COUNT
@@ -467,6 +471,7 @@ class CinematicPlaybackStore(CinematicSequenceStore):
    type(packet['expectedRevision'])is int and 0<=packet['expectedRevision']<MAX_SAFE_INTEGER,'playback target')
   with self.lock():
    folder,m=self._playback_base(packet['sequenceId'])
+   if 'title' in m:raise Conflict('named sequence playback is fixed')
    current=self._playback_current(folder,m)
    if current['revision']!=packet['expectedRevision']:raise Conflict('playback target moved')
    return {'ok':True,'sequenceId':packet['sequenceId'],'revision':current['revision']}
@@ -474,6 +479,7 @@ class CinematicPlaybackStore(CinematicSequenceStore):
   edit=playback_edit(packet)
   with self.lock():
    folder,m=self._playback_base(edit['sequenceId'])
+   if 'title' in m:raise Conflict('named sequence playback is fixed')
    current=self._playback_current(folder,m)
    state,entry,receipt=self._playback_plan(edit,folder);frozen=wire(receipt)
    # Freeze the winning update before advancing the public state. A competing

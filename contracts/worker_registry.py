@@ -90,6 +90,14 @@ def validate_active_registry(registry, *, require_knowledge_management=True):
        policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
        policy.get('apply')!='authorized-mutation'):
     raise ValueError('LAYA_FILE_METADATA_ADAPTER_CONTRACT')
+  elif worker=='animation' and action['id']=='cinematic.sequence.generate':
+   ident=action['id']
+   if (action.get('modelCalls')!=1 or action.get('dependsOn')!=[] or
+       action.get('requestRequirements',{}).get('schemaVersion',{}).get('const')!='ngs.cinematic-sequence-generate.v2' or
+       registry['requestTypes'].get(ident,{}).get('stageIds')!=[ident] or
+       policy.get('count')!=1 or policy.get('kind')!='single-result' or policy.get('selection')!='none' or
+       policy.get('apply')!='authorized-mutation'):
+    raise ValueError('LAYA_NAMED_CINEMATIC_ADAPTER_CONTRACT')
   elif worker=='animation' and action['id']=='cinematic.sequence.upscale':
    ident=action['id']
    expected=[{'id':'upscale','operation':'media.frames.upscale','dependsOn':[]},

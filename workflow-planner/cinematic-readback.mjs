@@ -1,6 +1,6 @@
 import {fileUpdateType,fileUpdatePds} from './file-update-envelope.mjs';
 import {assemblyTypes,assemblyPds} from './assembly-contract.mjs';
-import {validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType,uiAssetTypes,uiAssetImportType} from './cinematic-envelope.mjs';
+import {validCinematicSequenceTitle,validCinematicPlayback,extraCinematicRequests,cinematicSourceType,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType,uiAssetTypes,uiAssetImportType} from './cinematic-envelope.mjs';
 import {mapTypes,mapPds} from './map-contract.mjs';
 import {canonical} from './envelope.mjs';
 
@@ -54,7 +54,9 @@ export function verifyCinematicSequenceReadback(candidate,value){
     (reduced&&c.downscale!==2)||c.method!=='reference-palette-v1'||typeof h!=='string'||h.length!==64||!/^[a-f0-9]{64}$/u.test(h))return false;
   }else if(reduced)return false;
  }
- const keys=Object.keys(m??{}).filter(k=>k!=='upscale').sort().join(',');
+ const keys=Object.keys(m??{}).filter(k=>k!=='upscale'&&k!=='title').sort().join(',');
+ if(candidate.group&&Object.hasOwn(m??{},'title')||candidate.title!==undefined&&m?.title!==candidate.title||
+    Object.hasOwn(m??{},'title')&&(!validCinematicSequenceTitle(m.title)||!candidate.sequenceId&&candidate.title===undefined))return false;
  return m&&keys===(candidate.group?'frameCount,frames,group,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width':'frameCount,frames,height,masterFps,officialRequestId,playback,projectId,schemaVersion,sourceSha256,width')&&
   (!candidate.group||canonical(candidate.group)===canonical(m.group))&&
   m.schemaVersion==='ngs.cinematic-sequence-result.v1'&&m.projectId==='binari'&&m.officialRequestId===candidate.officialRequestId&&

@@ -25,6 +25,9 @@ export const cinematicResultRef=id=>'binari/cinematics/results/'+id+'.json';
 
 
 export const cinematicSequenceType='cinematic.sequence.generate',cinematicSequenceSchema='ngs.cinematic-sequence-generate.v1';
+export const cinematicSequenceNamedSchema='ngs.cinematic-sequence-generate.v2';
+export const nativeCinematicPlayback=()=>({durationFrames:45,speedCurve:[{frame:0,rate:1}],cameraCurve:[{frame:0,zoom:1,x:.5,y:.5}]});
+export const validCinematicSequenceTitle=v=>cleanText(v,120,480)&&!/[\x00-\x1f\x7f]/u.test(v);
 export const cinematicSequenceTask='cinematic_sequence_render',cinematicSequenceTaskType='cinematic.sequence.generate.render';
 const exact=(o,k)=>o!==null&&typeof o==='object'&&!Array.isArray(o)&&
  Object.keys(o).length===k.length&&k.every(x=>Object.hasOwn(o,x));
@@ -42,9 +45,13 @@ export const cinematicPlaybackSchema={type:'object',additionalProperties:false,r
  speedCurve:curveSchema({frame,rate:numeric(0,4)}),
  cameraCurve:curveSchema({frame,zoom:numeric(1,3),x:numeric(0,1),y:numeric(0,1)}),
 }};
-export const cinematicSequencePayloadSchema={...cinematicPayloadSchema,required:sequenceKeys,properties:{
+const legacyCinematicSequencePayloadSchema={...cinematicPayloadSchema,required:sequenceKeys,properties:{
  ...cinematicPayloadSchema.properties,schemaVersion:{const:cinematicSequenceSchema},playback:cinematicPlaybackSchema}};
 
+const namedSequenceKeys=[...keys,'title'].sort();
+export const cinematicSequencePayloadSchema={oneOf:[legacyCinematicSequencePayloadSchema,
+ {...cinematicPayloadSchema,required:namedSequenceKeys,properties:{...cinematicPayloadSchema.properties,
+ schemaVersion:{const:cinematicSequenceNamedSchema},title:{type:'string',minLength:1,maxLength:120}}}]};
 export function validCinematicPlayback(v){
  if(!exact(v,playbackKeys)||!integer(v.durationFrames,1,1440))return false;
  const points=(rows,fields,check)=>Array.isArray(rows)&&rows.length>=1&&rows.length<=128&&
@@ -59,9 +66,11 @@ function sortValue(v){
  return v;
 }
 export function validateCinematicSequence(p,projectId){
- if(!exact(p,sequenceKeys)||p.schemaVersion!==cinematicSequenceSchema||!validCinematicPlayback(p.playback))
+ const named=p?.schemaVersion===cinematicSequenceNamedSchema;
+ if(named?(!exact(p,namedSequenceKeys)||!validCinematicSequenceTitle(p.title)):
+   (!exact(p,sequenceKeys)||p.schemaVersion!==cinematicSequenceSchema||!validCinematicPlayback(p.playback)))
   throw Error(cinematicInvalid);
- const {playback,schemaVersion,...rest}=p;
+ const {playback,title,schemaVersion,...rest}=p;
  validateCinematic({...rest,schemaVersion:cinematicSchema},projectId);
  return JSON.stringify(sortValue(p));
 }

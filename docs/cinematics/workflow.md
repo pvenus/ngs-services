@@ -143,3 +143,7 @@ Activate `WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE=1` on PDS only after the
 derivative-aware replica readers and Filex writer have been deployed. Local
 browser intake checks the PDS capability. The worker also checks the scoped
 PDS capability and verifies SeedVR2 readiness before reading the frames.
+
+### Named native animation
+
+New requests use `ngs.cinematic-sequence-generate.v2`: one source hash, title, and motion brief. The editor sends no timeline. The worker publishes the title and 45 native PNG frames, which NGS plays in native 24 fps order without speed or camera edits. Legacy timelines and MP4s are preserved for existing consumers and do not drive this preview. A 2× derivative inherits the title; the UI identifies it with a separate badge.

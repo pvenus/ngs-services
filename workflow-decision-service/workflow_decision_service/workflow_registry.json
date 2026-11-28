@@ -1964,6 +1964,50 @@
     }
   },
   {
+    "id": "cinematic.sequence.generate",
+    "workerId": "animation",
+    "candidateCount": 1,
+    "modelCalls": 1,
+    "dependsOn": [],
+    "description": "Generate one named cinematic animation from a pinned still and a motion brief, using native 512x256 PNG frames in their original order. Request has no timeline input.",
+    "inputs": [
+      "sourceSha256",
+      "title",
+      "motionPrompt"
+    ],
+    "outputs": [
+      "one named native PNG sequence"
+    ],
+    "requires": [],
+    "provides": [
+      "cinematic.sequence.native"
+    ],
+    "generationKind": "generative",
+    "variations": [],
+    "requiredUserFields": [
+      "title",
+      "sourceSha256",
+      "motionPrompt"
+    ],
+    "requestRequirements": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "ngs.cinematic-sequence-generate.v2"
+      },
+      "projectId": {
+        "type": "string",
+        "const": "binari"
+      }
+    },
+    "outputPolicy": {
+      "kind": "single-result",
+      "count": 1,
+      "selection": "none",
+      "apply": "authorized-mutation",
+      "authorization": "same-authorized-actor-target-and-action-or-fail"
+    }
+  },
+  {
     "id": "cinematic.sequence.upscale",
     "workerId": "animation",
     "candidateCount": 1,
@@ -2295,6 +2339,7 @@
     "file.update":{"stageIds":["file.update"],"eligibleStageIds":["file.update"]},
     "map.update":{"stageIds":["map.update"],"eligibleStageIds":["map.update"]},
   "cinematic.source.crop": {"stageIds":["cinematic.source.crop"],"eligibleStageIds":["cinematic.source.crop"]},
+  "cinematic.sequence.generate": {"stageIds":["cinematic.sequence.generate"],"eligibleStageIds":["cinematic.sequence.generate"]},
   "cinematic.sequence.upscale": {"stageIds":["cinematic.sequence.upscale"],"eligibleStageIds":["cinematic.sequence.upscale"]},
   "background.animation.workflow": {
     "eligibleStageIds": [

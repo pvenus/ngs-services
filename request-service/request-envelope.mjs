@@ -20,7 +20,7 @@ import {npcAnimationRegenerateType,npcAnimationRegenerateSchemas,validateNpcAnim
 import {propGenerateType,propGenerateSchema,validatePropGenerate,propRegenerateType,propRegenerateRetired,propRegenerateSchema,validatePropRegenerate,propAnimationType,propAnimationSchema,validatePropAnimation,propScaleType,propScaleSchema,validatePropScale} from './prop-generate-envelope.mjs';
 import {propImageType,propImageSchema,validatePropImage} from './prop-image-envelope.mjs';
 
-import {cinematicType,cinematicSchema,validateCinematic,cinematicSequenceType,cinematicSequenceSchema,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackRequestSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,backgroundAnimationStageSchema,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicSchema,validateCinematic,cinematicSequenceType,cinematicSequenceSchema,cinematicSequenceNamedSchema,validateCinematicSequence,cinematicPlaybackType,cinematicPlaybackRequestSchema,validateCinematicPlaybackUpdate,backgroundAnimationType,backgroundAnimationStageSchema,extraCinematicTypes,extraCinematicRequests,validateExtraCinematic} from './cinematic-envelope.mjs';
 
 const fields=['sourceId','requestType','idempotencyKey','payload'];
 const workflowFamilies=new Map([
@@ -32,7 +32,7 @@ const workflowFamilies=new Map([
   validate:(payload,project)=>validateExtraCinematic(payload,project,type)}]),
  [cinematicPlaybackType,{schemas:[cinematicPlaybackRequestSchema],validate:validateCinematicPlaybackUpdate}],
  [cinematicType,{schemas:[cinematicSchema],validate:validateCinematic}],
- [cinematicSequenceType,{schemas:[cinematicSequenceSchema],validate:validateCinematicSequence}],
+ [cinematicSequenceType,{schemas:[cinematicSequenceSchema,cinematicSequenceNamedSchema],validate:validateCinematicSequence}],
  [propRegenerateType,{schemas:[propRegenerateSchema],validate:validatePropRegenerate}],
  [propScaleType,{schemas:[propScaleSchema],validate:validatePropScale}],
  [propAnimationType,{schemas:[propAnimationSchema],validate:validatePropAnimation}],
