@@ -382,7 +382,7 @@ export async function requestMcp(req,res,inbox,{readSpaceRequest,propImageEnable
     throw Error(cinematicUnavailable);
    if(type===backgroundAnimationType){
     if(!validBackgroundAnimationLoop(payload))throw Error(cinematicInvalid);
-    if(site||typeof backgroundAnimationReferencesReadiness!=='function')throw Error(cinematicUnavailable);
+    if(typeof backgroundAnimationReferencesReadiness!=='function')throw Error(cinematicUnavailable);
     const pin=await backgroundAnimationReferencesReadiness(payload);
     if(pin!==true)throw Error(pin===null?cinematicSourceMissing:cinematicUnavailable);
    }

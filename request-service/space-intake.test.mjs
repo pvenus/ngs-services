@@ -273,11 +273,12 @@ test('owner-refetched Space map and assembly tickets use exact Local contracts a
  const backgroundDelete={...deletion('canonical-files/binari/cinematics/backgrounds','b'.repeat(64)+'.png',{sourceRequestId:mapId})};
  backgroundDelete.target.kind='file';
  const records=[['map.generate',mapGeneration],['map.update',mapUpdate],['assembly.generate',assemblyGeneration],
-  ['assembly.update',assemblyUpdate],['assembly.generate',assemblyV1],['file.delete',mapDelete],['file.delete',assemblyDelete],['file.delete',npcDelete],['file.delete',propDelete],['file.delete',backgroundDelete]];
+  ['assembly.update',assemblyUpdate],['assembly.generate',assemblyV1],['file.delete',mapDelete],['file.delete',assemblyDelete],['file.delete',npcDelete],['file.delete',propDelete],['file.delete',backgroundDelete],
+  ['file.delete',deletion('canonical-files/binari/cinematics','sequences/'+assemblyId,{sourceSha256:'a'.repeat(64)})]];
  const snapshots=new Map(records.map(([type,payload],i)=>['space-parity-'+i,spaceQueue('space-parity-'+i,type,payload)]));
  let ready=false,reads=0,probed=[];
  const {call}=await fixture(t,async id=>{reads++;return snapshots.get(id);},{fileDeleteReadiness:async root=>{
-  probed.push(root);return ready; // intentionally serve true even for other roots; the hosted gate must still deny them.
+  probed.push(root);return ready; // The shared typed validator still rejects malformed and unknown roots.
  }});
  const submit=queueId=>call(toolSubmit,{queueId});
  assert.equal((await call('request_submit',{sourceId:'space',requestType:'map.generate',idempotencyKey:'spoof',payload:mapGeneration})).status,400);
@@ -298,7 +299,6 @@ test('owner-refetched Space map and assembly tickets use exact Local contracts a
   ['bad-delete','file.delete',deletion(assemblyRoot,'../'+assemblyId)],
   ['no-pin','file.delete',deletion(mapRoot,mapId,{revision:1})],
   ['stale-shape','file.delete',deletion('canonical-files/binari/npcs','character.fixture',{creationTaskId:'missing'})],
-  ['cinematic-delete','file.delete',deletion('canonical-files/binari/cinematics','sequences/'+assemblyId,{sourceSha256:'a'.repeat(64)})],
  ]) {
   snapshots.set(id,spaceQueue(id,t,p));assert.equal((await submit(id)).status,400,id);
  }

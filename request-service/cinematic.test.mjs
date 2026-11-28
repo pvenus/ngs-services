@@ -43,7 +43,7 @@ test('MCP advertises scoped cinematic only when ready and rejects missing digest
 
 });
 
-test('one locally submitted background animation request pins both references before registration',async t=>{
+test('local and independently verified Space background animations share exact reference checks',async t=>{
  const {backgroundAnimationType:type,backgroundAnimationStageSchema:schema}=await import('./cinematic-envelope.mjs');
  const parent=await mkdtemp(join(await realpath(tmpdir()),'background-animation-rs-'));t.after(()=>rm(parent,{recursive:true,force:true}));
  const pixel='b'.repeat(64),refs={pixel,cinematic:'a'.repeat(64)};
@@ -52,7 +52,8 @@ test('one locally submitted background animation request pins both references be
  let supported=false,exists=false;
  const server=createRequestService({directory:join(parent,'inbox'),cinematicEnabled:true,
   cinematicOperationReadiness:ty=>ty===type&&supported,
-  backgroundAnimationReferencesReadiness:p=>{assert.deepEqual(p.references,refs);return exists?true:null;}});
+  backgroundAnimationReferencesReadiness:p=>{assert.deepEqual(p.references,refs);return exists?true:null;},
+  readSpaceRequest:async id=>({queueId:id,idempotencyKey:id,requestType:type,payload})});
  await new Promise(done=>server.listen(0,host,done));t.after(()=>new Promise(done=>server.close(done)));
  const call=async(name,args)=>{
   const r=await fetch('http://'+host+':'+server.address().port+'/mcp',{method:'POST',
@@ -65,7 +66,10 @@ test('one locally submitted background animation request pins both references be
  supported=true;
  assert.equal((await call('request_submit',{...packet,payload:{...payload,motionPrompt:'A leaf stops.'}})).structuredContent.error,'NGS_CINEMATIC_PAYLOAD_INVALID');
  assert.equal((await call('request_submit',packet)).structuredContent.error,cinematicSourceMissing);
+ const submitSpace=()=>call('request_submit_space',{queueId:'fixture-space-background'});
+ assert.equal((await submitSpace()).structuredContent.error,cinematicSourceMissing);
  exists=true;
  assert.equal((await call('request_submit',packet)).structuredContent.status,'registered');
- assert.deepEqual((await call('request_workflow_list',{limit:8})).structuredContent.requests.map(x=>x.payload),[payload]);
+ assert.equal((await submitSpace()).structuredContent.status,'registered');
+ assert.deepEqual((await call('request_workflow_list',{limit:8})).structuredContent.requests.map(x=>x.payload),[payload,payload]);
 });
