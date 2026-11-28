@@ -190,10 +190,10 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     if url.path==WRITER+'/read':return self.reply(200,workflow_props.read(body))
                     if not keys(body,('pin','assetId')):raise ValueError('prop asset input')
                     return self.reply(200,workflow_props.read(body['pin'],body['assetId']))
-                if url.path in ('/v1/workflow/audio','/v1/workflow/audio/read',
+                if url.path in ('/v1/workflow/audio','/v1/workflow/audio/read','/v1/workflow/audio-import',
                                 '/v1/workflow/audio-separate','/v1/workflow/audio-separate/read',
                                 '/v1/workflow/audio-separate/asset'):
-                    from workflow_audio_store import AudioResult,Rejected,MAX_BODY,SEPARATE_PATH
+                    from workflow_audio_store import AudioResult,Rejected,MAX_BODY,SEPARATE_PATH,IMPORT_PATH
                     if not isinstance(workflow_audio,AudioResult) or workflow_audio.store is not store:
                         return self.reply(404,{'error':'NOT_FOUND'})
                     if (self.command!='POST' or url.query or self.headers.get('Origin') is not None or
@@ -208,7 +208,8 @@ def handler(store, token, *, workflow_delete=False, workflow_preset=False, workf
                     if len(raw)!=int(n):raise ValueError('workflow audio incomplete')
                     try:
                         value=json.loads(raw)
-                        if url.path.startswith(SEPARATE_PATH):
+                        if url.path==IMPORT_PATH:result=workflow_audio.import_publish(value)
+                        elif url.path.startswith(SEPARATE_PATH):
                             result=(workflow_audio.separation_read(value,asset=asset) if reading or asset
                                     else workflow_audio.separation_publish(value))
                         else:result=(workflow_audio.read if reading else workflow_audio.publish)(value)

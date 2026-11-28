@@ -40,7 +40,7 @@ _NPC_POST={'/v1/asset','/v1/batch','/v1/cas','/v1/create-character','/v1/restore
  '/v1/workflow/plan-current','/v1/workflow/plan-idle','/v1/workflow/plan-representative',
  '/v1/workflow/portrait-representative','/v1/workflow/portrait-idle-reference','/v1/workflow/portrait-direction',
  '/v1/workflow/portrait-combat-direction','/v1/workflow/portrait-combat-reference'}
-_AUDIO_POST={'/v1/workflow/audio','/v1/workflow/audio/read','/v1/workflow/audio-separate',
+_AUDIO_POST={'/v1/workflow/audio-import','/v1/workflow/audio','/v1/workflow/audio/read','/v1/workflow/audio-separate',
  '/v1/workflow/audio-separate/read','/v1/workflow/audio-separate/asset','/v1/storage/delete-target'}
 _PROPS_POST={'/v1/workflow/props','/v1/workflow/props/read','/v1/workflow/props/head','/v1/workflow/props/asset','/v1/workflow/props/assembly-bindings','/v1/storage/delete-target'}
 _EXACT=frozenset()

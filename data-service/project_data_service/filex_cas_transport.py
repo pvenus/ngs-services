@@ -36,7 +36,7 @@ class FilexCASTransport:
     raw=r.read()if asset_read else r.read(limit+1)
   except urllib.error.HTTPError as e:
    if missing and e.code==404:return None
-   if e.code==422 and method=='POST' and path in ('/v1/workflow/audio','/v1/workflow/audio/read',
+   if e.code==422 and method=='POST' and path in ('/v1/workflow/audio','/v1/workflow/audio/read','/v1/workflow/audio-import',
           '/v1/workflow/audio-separate','/v1/workflow/audio-separate/read','/v1/workflow/audio-separate/asset'):
     try:failure=json.loads(e.read(4097))
     except (ValueError,OSError):failure=None

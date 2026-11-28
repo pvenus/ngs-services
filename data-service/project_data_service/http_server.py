@@ -96,6 +96,9 @@ class Handler(DomainHandler):
         from .workflow_prop_image import ROUTES as prop_image_paths,serve as workflow_prop_image
         if media_path in prop_image_paths:return workflow_prop_image(self)
 
+        from .manual_audio_import import PATH as audio_import_path,serve as audio_import
+        if media_path==audio_import_path:return audio_import(self)
+
         from .workflow_audio_separate import PATH as separate_path,serve as audio_separate
         if media_path in (separate_path,separate_path+'/read',separate_path+'/asset'):return audio_separate(self)
 
@@ -635,6 +638,9 @@ def serve(storage_root: Path, host: str, port: int):
     server = ThreadingHTTPServer((host, port), Handler)
     server.app = app
     server.filex_writer_binding_sha256=writer_binding_sha256
+    from .manual_audio_import import configured as configure_audio_import
+    from .filex_writer_binding import writer as audio_import_writer
+    configure_audio_import(server,host,os.environ.get('PDS_MANUAL_AUDIO_IMPORT_TOKEN_FILE'),lambda:audio_import_writer('audio'))
     claim_keys=('PDS_WORKFLOW_DELETE_PLANNER_DB','PDS_WORKFLOW_DELETE_PLANNER_DEV','PDS_WORKFLOW_DELETE_PLANNER_INODE')
     if any(key in os.environ for key in claim_keys):
         from .workflow_delete import WorkflowDelete,PrivatePlannerClaim

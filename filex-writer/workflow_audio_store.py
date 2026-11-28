@@ -11,6 +11,9 @@ MAX_WAV=24*1024*1024
 MAX_SOURCE=256*1024
 DIRECT='direct'
 SEPARATE_PATH='/v1/workflow/audio-separate'
+IMPORT_PATH='/v1/workflow/audio-import'
+IMPORT_SCHEMA='ngs.audio-import.v1'
+IMPORT_RESULT='ngs.audio-import-result.v1'
 SEPARATION_KEYS={'sourceOfficialRequestId','sourceSha256'}
 MAX_BODY=((MAX_WAV+2)//3)*4+16384
 CID=re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
@@ -274,6 +277,33 @@ class AudioResult:
             self.verify_removable_result(archive,oid)
             return ack
 
+    def import_publish(self,value):
+        require(type(value) is dict and set(value)=={'schemaVersion','projectId','title','source','artifact'}
+                and value['schemaVersion']==IMPORT_SCHEMA and value['projectId']=='binari')
+        title=value['title']; source=value['source']; artifact=value['artifact']
+        require(type(title) is str and 1<=len(title)<=120 and title.strip()==title
+                and not re.search(r'[\x00-\x1f\x7f-\x9f\ud800-\udfff\u2028\u2029]',title)
+                and (source is None or type(source) is dict and set(source)==SEPARATION_KEYS
+                     and match(source['sourceOfficialRequestId'],OFFICIAL) and match(source['sourceSha256'],SHA))
+                and type(artifact) is dict and set(artifact)=={'mimeType','sha256','bytes','base64'})
+        # Container, channels, count and SHA are checked without transcoding.
+        raw,info=wav_artifact(artifact,None)
+        require(source is None or source['sourceSha256']!=info['sha256'])
+        rid='audio.import.'+digest([IMPORT_SCHEMA,'binari',title,source,info['sha256']])
+        meta={'schemaVersion':IMPORT_RESULT,'id':rid,'projectId':'binari','kind':'bgm','title':title,
+              'provenance':{'mode':'owner-manual','source':source},'audio':{'path':'audio.wav',**info}}
+        path=self.root/rid
+        with self.store.lock():
+            self.check_root()
+            if path.exists() or path.is_symlink():return self.existing(path,meta,raw)
+            if source is not None:
+                try:original,_=self.read_published_result(self.root/source['sourceOfficialRequestId'],
+                                                         source['sourceOfficialRequestId'],original_only=True)
+                except (FileNotFoundError,Conflict,ValueError,TypeError,KeyError) as exc:
+                    raise Rejected('manual audio source unavailable') from exc
+                require(original['audio']['sha256']==source['sourceSha256'])
+            return self.publish_locked(path,meta,raw)
+
     def existing(self,path,meta,raw):
         if path.is_symlink() or not path.is_dir() or {p.name for p in path.iterdir()}!={'metadata.json','audio.wav'}:
             raise Conflict('audio existing result shape')
@@ -281,14 +311,16 @@ class AudioResult:
         previous=json.loads(persisted)
         if type(previous) is not dict or persisted!=encoded(previous):
             raise Conflict('audio result metadata invalid')
-        if 'generatedAt' in previous and (type(previous['generatedAt']) is not int or not 0<=previous['generatedAt']<=2**53-1):
+        time_key='publishedAt' if meta.get('schemaVersion')==IMPORT_RESULT else 'generatedAt'
+        if (time_key in previous and (type(previous[time_key]) is not int or not 0<=previous[time_key]<=2**53-1)
+            or time_key=='publishedAt' and time_key not in previous):
             raise Conflict('audio result timestamp invalid')
-        if (('generatedAt' in meta and previous.get('generatedAt')!=meta['generatedAt'])
-            or {k:v for k,v in previous.items() if k!='generatedAt'}!={k:v for k,v in meta.items() if k!='generatedAt'}
+        if ((time_key in meta and previous.get(time_key)!=meta[time_key])
+            or {k:v for k,v in previous.items() if k!=time_key}!={k:v for k,v in meta.items() if k!=time_key}
             or bytes_of(path/'audio.wav',MAX_WAV)!=raw):
             raise Conflict('audio result identity reused')
         fsync_dir(path);fsync_dir(self.root)
-        return {'ok':True,'resultRef':PREFIX+meta['officialRequestId']+'/metadata.json'}
+        return {'ok':True,'resultRef':PREFIX+(meta['id'] if time_key=='publishedAt' else meta['officialRequestId'])+'/metadata.json'}
 
     def publish(self,value):
         require(type(value) is dict and set(value)=={'binding','source','artifact'})
@@ -318,7 +350,7 @@ class AudioResult:
             return self.publish_locked(path,meta,raw)
 
     def publish_locked(self,path,meta,raw):
-        meta['generatedAt']=time.time_ns()//1_000_000
+        meta['publishedAt' if meta.get('schemaVersion')==IMPORT_RESULT else 'generatedAt']=time.time_ns()//1_000_000
         stage=Path(tempfile.mkdtemp(prefix='.audio-stage-',dir=self.root))
         try:
             for name,data in (('audio.wav',raw),('metadata.json',encoded(meta))):
