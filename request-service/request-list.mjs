@@ -16,7 +16,7 @@ import {audioSeparateType} from './audio-separate-envelope.mjs';
 import {allowedWorkflowSourceSql} from './space-intake.mjs';
 import {createPendingRetirement,unsupportedReason} from './pending-unsupported.mjs';
 import {propTypes,propGenerateType,propRegenerateType,propScaleType,propAnimationType} from './prop-generate-envelope.mjs';
-import {cinematicType,cinematicSequenceType,cinematicPlaybackType,allCinematicTypes,cinematicSourceType,uiAssetTypes,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
+import {cinematicType,cinematicSequenceType,cinematicPlaybackType,allCinematicTypes,cinematicSourceType,cinematicCropType,cinematicUpscaleType,uiAssetTypes,backgroundSourceType,backgroundPixelType,backgroundAnimationType,cinematicArchiveType,propAnimationRemoveType} from './cinematic-envelope.mjs';
 import {propImageType} from './prop-image-envelope.mjs';
 export const listTool='request_list',workflowListTool='request_workflow_list';
 export const statuses=Object.freeze(['registered',...workflowStatuses,'cancelled']);
@@ -53,6 +53,8 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${propAnimationType}' THEN json_extract(payload_json,'$.propId')
    WHEN '${cinematicType}' THEN official_request_id
    WHEN '${cinematicSequenceType}' THEN official_request_id
+   WHEN '${cinematicUpscaleType}' THEN json_extract(payload_json,'$.sequenceId')
+   WHEN '${cinematicCropType}' THEN json_extract(payload_json,'$.sourceSha256')
    WHEN '${cinematicPlaybackType}' THEN json_extract(payload_json,'$.sequenceId')
    ${uiAssetTypes.map(t=>"WHEN '"+t+"' THEN official_request_id").join(' ')}
    WHEN '${cinematicSourceType}' THEN official_request_id
@@ -92,8 +94,8 @@ const operatorFields=`${basic}, source_id AS sourceId, ${terminalReason} AS fail
    WHEN '${propScaleType}' THEN '프랍 배율 생성'
    WHEN '${propAnimationType}' THEN '프랍 애니메이션 추가'
    WHEN '${cinematicType}' THEN '시네마틱 영상 생성'
-   WHEN 'cinematic.source.crop' THEN '시네마틱 원본 자르기'
-   WHEN 'cinematic.sequence.upscale' THEN '시네마틱 업스케일링'
+   WHEN '${cinematicCropType}' THEN '시네마틱 원본 자르기'
+   WHEN '${cinematicUpscaleType}' THEN '시네마틱 업스케일링'
    WHEN '${cinematicSequenceType}' THEN '시네마틱 프레임 생성'
    WHEN '${cinematicPlaybackType}' THEN '시네마틱 재생 수정'
    ${uiAssetTypes.map(t=>"WHEN '"+t+"' THEN json_extract(payload_json,'$.title')").join(' ')}

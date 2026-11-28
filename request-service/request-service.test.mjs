@@ -334,6 +334,25 @@ test('request_list returns only the nine summary fields, reads both states, and 
  assert.deepEqual(read(files.path,"SELECT type,name,sql FROM sqlite_schema ORDER BY name"),schema);
 });
 
+test('upscale and crop rows do not break an unfiltered operator request page',async t=>{
+ const {directory}=folder(t);
+ const inbox=openOfficialInbox(directory,{cinematicEnabled:true});
+ const sequenceId='request.official.'+'a'.repeat(64),sourceSha256='b'.repeat(64);
+ try{
+  const base={projectId:'binari',sourceSha256};
+  inbox.register({sourceId:'local',requestType:'cinematic.sequence.upscale',idempotencyKey:'upscale-ops-list',payload:{
+   ...base,schemaVersion:'ngs.cinematic-sequence-upscale.v1',sequenceId,expectedRevision:0,
+   playback:{durationFrames:45,speedCurve:[{frame:0,rate:1}],cameraCurve:[{frame:0,zoom:1,x:.5,y:.5}]}}});
+  inbox.register({sourceId:'local',requestType:'cinematic.source.crop',idempotencyKey:'crop-ops-list',payload:{
+   ...base,schemaVersion:'ngs.cinematic-source-crop.v1',title:'한옥',width:512,height:512,left:0,top:0,right:512,bottom:256}});
+ }finally{inbox.close();}
+ const {list}=await listener(t,directory);
+ const result=(await list({limit:10})).result;
+ assert.equal(result.isError,false);
+ const rows=Object.fromEntries(result.structuredContent.requests.map(r=>[r.requestType,r.targetNpcId]));
+ assert.deepEqual(rows,{'cinematic.sequence.upscale':sequenceId,'cinematic.source.crop':sourceSha256});
+});
+
 test('request_list keyset order stays stable across ties and excludes inserts after the first page',async t=>{
  const {directory,path}=folder(t);
  const targets=Array.from({length:53},(_,i)=>({
