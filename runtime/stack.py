@@ -114,7 +114,7 @@ def child_environment(env, name, root):
         if len(extra) != 2 or any(not p or not Path(p).is_absolute() or not Path(p).is_dir() or str(Path(p).resolve()) != p for p in extra):
             raise ValueError('direct PDS requires two fixed absolute source roots')
         paths.extend(extra)
-    scoped = env if name == 'data' else {k: v for k, v in env.items() if k not in ('PDS_PROJECT_FOLDERS_CANONICAL_ROOT','PDS_FILEX_WRITER_CONFIG') and not k.startswith('PDS_WORKFLOW_DELETE_') and k not in ('PDS_WORKFLOW_PRESET','PDS_WORKFLOW_PLAN_REPRESENTATIVE','PDS_WORKFLOW_PLAN_IDLE','PDS_WORKFLOW_PLAN_SHARED','PDS_WORKFLOW_NATIVE_MEDIA','PDS_WORKFLOW_PORTRAIT_REPRESENTATIVE','PDS_WORKFLOW_PORTRAIT_IDLE_REFERENCE','PDS_WORKFLOW_PORTRAIT_DIRECTION')}
+    scoped = env if name == 'data' else {k: v for k, v in env.items() if k not in ('PDS_PROJECT_FOLDERS_CANONICAL_ROOT','PDS_FILEX_WRITER_CONFIG','PDS_MANUAL_AUDIO_IMPORT_TOKEN_FILE') and not k.startswith('PDS_WORKFLOW_DELETE_') and k not in ('PDS_WORKFLOW_PRESET','PDS_WORKFLOW_PLAN_REPRESENTATIVE','PDS_WORKFLOW_PLAN_IDLE','PDS_WORKFLOW_PLAN_SHARED','PDS_WORKFLOW_NATIVE_MEDIA','PDS_WORKFLOW_PORTRAIT_REPRESENTATIVE','PDS_WORKFLOW_PORTRAIT_IDLE_REFERENCE','PDS_WORKFLOW_PORTRAIT_DIRECTION')}
     return {**scoped, 'PYTHONPATH': os.pathsep.join(paths)}
 
 

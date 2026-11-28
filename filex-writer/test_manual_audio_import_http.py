@@ -3,7 +3,7 @@ import json
 import sqlite3
 
 from test_workflow_audio_http import Tests as AudioTests, audio, wav
-from project_data_service.manual_audio_import import PATH, configured
+from project_data_service.manual_audio_import import MARKER, PATH, configured, resolve_token_file
 
 
 class ManualAudioTests(AudioTests):
@@ -12,7 +12,9 @@ class ManualAudioTests(AudioTests):
         base=wav()
         self.assertEqual(self.call(self.body(claim,base))[0],200)
         token='X'*48
-        secret=self.data.parent/'owner-manual-token'
+        owner_state=self.data.parent/'owner-state'
+        owner_state.mkdir(mode=0o700)
+        secret=owner_state/MARKER
         secret.write_text(token)
         secret.chmod(0o600)
         endpoint=f'http://127.0.0.1:{self.pds.server_port}'+PATH
@@ -24,7 +26,7 @@ class ManualAudioTests(AudioTests):
               'source':{'sourceOfficialRequestId':claim['officialRequestId'],
                         'sourceSha256':audio(base)['sha256']},'artifact':audio(manual)}
         self.assertEqual(self.call({},base=endpoint)[0],404)
-        configured(self.pds,'127.0.0.1',secret,self.source.factory)
+        configured(self.pds,'127.0.0.1',resolve_token_file(owner_state,None),self.source.factory)
         self.assertEqual(self.call({},base=endpoint)[0],401)
         headers={'Authorization':'Bearer '+token}
         self.assertEqual(self.call({},base=endpoint,headers={**headers,'Origin':'http://127.0.0.1'})[0],403)

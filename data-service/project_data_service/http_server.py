@@ -638,9 +638,10 @@ def serve(storage_root: Path, host: str, port: int):
     server = ThreadingHTTPServer((host, port), Handler)
     server.app = app
     server.filex_writer_binding_sha256=writer_binding_sha256
-    from .manual_audio_import import configured as configure_audio_import
+    from .manual_audio_import import TOKEN_ENV,configured as configure_audio_import,resolve_token_file
     from .filex_writer_binding import writer as audio_import_writer
-    configure_audio_import(server,host,os.environ.get('PDS_MANUAL_AUDIO_IMPORT_TOKEN_FILE'),lambda:audio_import_writer('audio'))
+    configure_audio_import(server,host,resolve_token_file(storage_root,os.environ.get(TOKEN_ENV)),
+                           lambda:audio_import_writer('audio'))
     claim_keys=('PDS_WORKFLOW_DELETE_PLANNER_DB','PDS_WORKFLOW_DELETE_PLANNER_DEV','PDS_WORKFLOW_DELETE_PLANNER_INODE')
     if any(key in os.environ for key in claim_keys):
         from .workflow_delete import WorkflowDelete,PrivatePlannerClaim

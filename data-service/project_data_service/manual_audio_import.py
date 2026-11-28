@@ -2,10 +2,13 @@
 import hashlib
 import hmac
 import json
+import os
 import re
+import stat
+from pathlib import Path
 
 from .filex_cas_transport import AudioPrewriteRejected
-from .filex_read import digest, private_read
+from .filex_read import digest
 from .workflow_audio import MAX_BODY
 
 PATH='/v1/audio/manual-import'
@@ -13,12 +16,43 @@ WRITER='/v1/workflow/audio-import'
 SCHEMA='ngs.audio-import.v1'
 TOKEN=re.compile(r'[A-Za-z0-9_-]{43,128}')
 SHA=re.compile(r'[a-f0-9]{64}')
+MARKER='.manual-audio-import-token'
+TOKEN_ENV='PDS_MANUAL_AUDIO_IMPORT_TOKEN_FILE'
+
+
+def resolve_token_file(storage_root,override):
+    if override:return Path(override)
+    root=Path(storage_root)
+    candidate=root/MARKER
+    if not os.path.lexists(candidate):return None
+    if not root.is_absolute() or root.resolve(strict=True)!=root:
+        raise ValueError('MANUAL_AUDIO_IMPORT_STORAGE_PATH')
+    st=root.lstat()
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid!=os.getuid() or stat.S_IMODE(st.st_mode)!=0o700:
+        raise ValueError('MANUAL_AUDIO_IMPORT_STORAGE_PRIVATE')
+    return candidate
+
+
+def owner_token(token_file):
+    path=Path(token_file)
+    if not path.is_absolute() or path.resolve(strict=True)!=path:
+        raise ValueError('MANUAL_AUDIO_IMPORT_TOKEN_PATH')
+    with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as stream:
+        st=os.fstat(stream.fileno())
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid!=os.getuid() or st.st_nlink!=1
+            or stat.S_IMODE(st.st_mode)!=0o600 or not 43<=st.st_size<=129):
+            raise ValueError('MANUAL_AUDIO_IMPORT_TOKEN_PRIVATE')
+        raw=stream.read(130)
+    if len(raw)!=st.st_size:raise ValueError('MANUAL_AUDIO_IMPORT_TOKEN_INVALID')
+    token=raw.decode('ascii').removesuffix('\n')
+    if not TOKEN.fullmatch(token):raise ValueError('MANUAL_AUDIO_IMPORT_OWNER_TOKEN_INVALID')
+    return token
+
 
 def configured(server,host,token_file,writer_factory):
     if not token_file:return
     if host!='127.0.0.1':raise ValueError('MANUAL_AUDIO_IMPORT_LOCAL_ONLY')
-    token=private_read(token_file).decode('ascii').strip()
-    if not TOKEN.fullmatch(token):raise ValueError('MANUAL_AUDIO_IMPORT_OWNER_TOKEN_INVALID')
+    token=owner_token(token_file)
     server.manual_audio_import=(hashlib.sha256(token.encode()).digest(),writer_factory)
 
 def _json(handler):
