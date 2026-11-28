@@ -69,7 +69,8 @@ s.close();"""
                 'endpoint':self.origin,'tokenFile':str(self.secret/'media'/'writer_token'),'writerScope':'cinematics'}
         planner=PrivatePlannerClaim(str(db),st.st_dev,st.st_ino)
         app.workflow_cinematic_sequence=WorkflowCinematicSequence(
-            planner,writer_factory=lambda:FilexCASTransport(writer),readiness=lambda:True)
+            planner,writer_factory=lambda:FilexCASTransport(writer),readiness=lambda:True,
+            upscale_readiness=lambda:__import__('os').environ.get('TEST_SEEDVR2_READY')=='1')
         app.workflow_cinematic_playback=WorkflowCinematicPlayback(planner,writer_factory=lambda:FilexCASTransport(writer))
         app.workflow_cinematic_source=WorkflowCinematicProject(planner,SOURCE,writer_factory=lambda:FilexCASTransport(writer))
         app.workflow_cinematic_source_crop=WorkflowCinematicProject(planner,CROP,writer_factory=lambda:FilexCASTransport(writer))
@@ -159,8 +160,10 @@ console.log(JSON.stringify(await runCinematicCrop({dbPath,pds:cinematicCropPorts
             with sqlite3.connect(db) as q:
                 return q.execute('SELECT status,save_started_at,result_ref FROM workflow_tasks WHERE task_id=?',(c['taskId'],)).fetchone()
         call('/upscale',None,503)
-        with patch.dict('os.environ',{'WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE':'1'}):
+        with patch.dict('os.environ',{'TEST_SEEDVR2_READY':'1'}):
             self.assertEqual(call('/upscale',None)['schemaVersion'],'workflow.cinematic-sequence-upscale.v1')
+            with patch.dict('os.environ',{'WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE':'0'}):
+                call('/upscale',None,503)
             self.assertEqual(call('/read',{'claim':c}),{'input':inp,'original':orig})
             self.assertEqual(base64.b64decode(call('/upscale-input-frame',{'claim':c,'index':7})['base64']),png(7))
             call('/upscale-input-frame',{'claim':c,'index':45},403)

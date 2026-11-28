@@ -39,6 +39,9 @@ BACKGROUND_KEYS={variant:'background_animation_'+variant for variant in ('cinema
 BACKGROUND_WRITER='/v1/workflow/cinematics-background'
 
 READY_FILE=OLD_READY_FILE.with_name('cinematic-sequence-animation-ready.json')
+UPSCALE_READY_FILE=READY_FILE.with_name('cinematic-sequence-upscale-animation-ready.json')
+UPSCALE_READY_SCHEMA='workflow.cinematic-sequence-upscale-renderer-ready.v1'
+UPSCALE_PROVIDER='seedvr2-7b-fp16'
 READY_SCHEMA='workflow.cinematic-sequence-animation-renderer-ready.v1'
 MAX_FRAME=4*1024*1024
 MAX_TOTAL=64*1024*1024
@@ -262,9 +265,12 @@ def exact_claim(planner,claim,graph):
 
 
 class WorkflowCinematicSequence(WorkflowCinematic):
-    def __init__(self,planner,*,writer_factory=None,readiness=None):
+    def __init__(self,planner,*,writer_factory=None,readiness=None,upscale_readiness=None):
         super().__init__(planner,writer_factory=writer_factory,readiness=readiness or (lambda:renderer_ready(
             os.environ.get('WORKFLOW_CINEMATIC_SEQUENCE_ANIMATION_READY_FILE',READY_FILE),schema=READY_SCHEMA)))
+        self.upscale_readiness=upscale_readiness or (lambda:renderer_ready(
+            os.environ.get('WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE_READY_FILE',UPSCALE_READY_FILE),
+            schema=UPSCALE_READY_SCHEMA,provider=UPSCALE_PROVIDER))
     def capabilities(self):
         with self.writer_factory() as tx:
             caps=tx.capabilities()
@@ -327,7 +333,7 @@ class WorkflowCinematicSequence(WorkflowCinematic):
 
     def upscale_ready(self):
         # Shared replicas must support derivative manifests before allowing writes.
-        if os.environ.get('WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE')!='1' or not self.ready():return False
+        if os.environ.get('WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE')=='0' or self.upscale_readiness() is not True or not self.ready():return False
         with self.writer_factory() as tx:return tx.capabilities().get('workflowCinematicUpscaleV1') is True
 
     def upscale_source(self,inp):
@@ -338,7 +344,7 @@ class WorkflowCinematicSequence(WorkflowCinematic):
         return m
 
     def upscale_operate(self,op,packet):
-        need(os.environ.get('WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE')=='1' and op in ('read','upscale-input-frame','frame','publish') and
+        need(os.environ.get('WORKFLOW_CINEMATIC_SEQUENCE_UPSCALE')!='0' and op in ('read','upscale-input-frame','frame','publish') and
              keys(packet,('claim','index') if op=='upscale-input-frame' else ('claim','frame') if op=='frame'
                   else ('claim','manifest') if op=='publish' else ('claim',)))
         c=packet['claim']

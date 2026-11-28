@@ -11,7 +11,7 @@ SCHEMA='workflow.prop-animation-renderer-ready.v1'
 # Never accept the old 5B worker marker on an A14B-only release.
 PROVIDER='wan-i2v-a14b-q4_k_m'
 
-def renderer_ready(path=READY_FILE,*,now=None,schema=SCHEMA):
+def renderer_ready(path=READY_FILE,*,now=None,schema=SCHEMA,provider=PROVIDER):
     try:
         p=Path(path)
         if not p.is_absolute() or p.resolve()!=p:return False
@@ -29,7 +29,7 @@ def renderer_ready(path=READY_FILE,*,now=None,schema=SCHEMA):
             if len(raw)!=s.st_size or os.fstat(f.fileno()).st_mtime_ns!=s.st_mtime_ns:return False
         v=json.loads(raw,object_pairs_hook=pairs)
         if type(v) is not dict or set(v)!= {'schemaVersion','provider','checkedAt'} or \
-           v['schemaVersion']!=schema or v['provider']!=PROVIDER or type(v['checkedAt']) is not int:return False
+           v['schemaVersion']!=schema or v['provider']!=provider or type(v['checkedAt']) is not int:return False
         clock=time.time_ns()//1_000_000 if now is None else now
         return 0<=clock-v['checkedAt']<=MAX_AGE_MS
     except (OSError,ValueError,RuntimeError):return False
